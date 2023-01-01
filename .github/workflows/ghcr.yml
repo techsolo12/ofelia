@@ -4,29 +4,31 @@ on:
     types:
       - created
   push:
-    branches:
-      - master
+#     branches:
+#       - master
 jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout code
       uses: actions/checkout@v2
-
-    - name: Build image
-      uses: mr-smithers-excellent/docker-build-push@v2
+      
+    - name: Login to the ghcr.io 
+      uses: docker/login-action@v2
       with:
-        image: mcuadros/ofelia
         registry: ghcr.io
-        username: mcuadros
-        password: ${{ secrets.GHCR_TOKEN }}
-
-    - name: Tag image
-      if: github.event_name == 'release'
-      uses: mr-smithers-excellent/docker-build-push@v2
-      with:
-        image: mcuadros/ofelia
-        registry: ghcr.io
-        tag: latest
-        username: mcuadros
-        password: ${{ secrets.GHCR_TOKEN }}
+        username: ${{github.actor}}
+        password: ${{secrets.GITHUB_TOKEN}}
+        
+#     - name: Build and push
+#       uses: docker/build-push-action@v3
+#       with:
+#         push: true
+#         tags: mcuadros/ofelia:${{ github.sha }}
+        
+#     - name: Build and push
+#       uses: docker/build-push-action@v3
+#       if: github.event_name == 'release'
+#       with:
+#         push: true
+#         tags: mcuadros/ofelia:latest
