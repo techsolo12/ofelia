@@ -50,12 +50,11 @@ command = touch /tmp/example
 schedule = @hourly
 command = touch /tmp/example
 
-
 [job-service-run "service-executed-on-new-container"]
-schedule = 0,20,40 * * * *
+schedule = 0,20,40 * * *
 image = ubuntu
 network = swarm_network
-command =  touch /tmp/example
+command = touch /tmp/example
 ```
 
 #### Docker labels configurations
@@ -76,7 +75,7 @@ This type of configuration supports all the capabilities provided by INI files.
 Also, it is possible to configure `job-exec` by setting labels configurations on the target container. To do that, additional label `ofelia.enabled=true` need to be present on the target container.
 
 For example, we want `ofelia` to execute `uname -a` command in the existing container called `my_nginx`.
-To do that, we need to we need to start `my_nginx` container with next configurations:
+To do that, we need to we need to start `nginx` container with next configurations:
 
 ```sh
 docker run -it --rm \
