@@ -434,6 +434,49 @@ func TestEnableJob_DisabledJobExists(t *testing.T) {
 	}
 }
 
+// --- Test EnableJob idempotency: calling EnableJob on an already-enabled job ---
+// EnableJob should be idempotent: if the job exists and is already active
+// (not in disabledNames), return nil instead of ErrJobNotFound.
+func TestEnableJob_Idempotent(t *testing.T) {
+	t.Parallel()
+
+	sc := NewScheduler(newDiscardLogger())
+
+	job := &TestJob{}
+	job.Name = "already-enabled"
+	job.Schedule = "@daily"
+	if err := sc.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	// Job is active (not disabled). EnableJob should be a no-op, not an error.
+	err := sc.EnableJob("already-enabled")
+	if err != nil {
+		t.Fatalf("EnableJob on already-enabled job should return nil, got: %v", err)
+	}
+
+	// Verify the job is still active and unchanged
+	found := sc.GetJob("already-enabled")
+	if found == nil {
+		t.Error("Job should still be active after idempotent EnableJob")
+	}
+	if found != nil && found.GetName() != "already-enabled" {
+		t.Errorf("Job name should still be 'already-enabled', got %q", found.GetName())
+	}
+
+	// Calling EnableJob multiple times should remain idempotent
+	err = sc.EnableJob("already-enabled")
+	if err != nil {
+		t.Fatalf("Second EnableJob on already-enabled job should return nil, got: %v", err)
+	}
+
+	// EnableJob for a truly non-existent job should still return ErrJobNotFound
+	err = sc.EnableJob("does-not-exist")
+	if err == nil {
+		t.Error("EnableJob for non-existent job should return error")
+	}
+}
+
 // --- CONDITIONALS_NEGATION at line 651: s.cron == nil ---
 // IsJobRunning returns false when cron is nil.
 func TestIsJobRunning_NilCron(t *testing.T) {

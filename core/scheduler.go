@@ -695,6 +695,11 @@ func (s *Scheduler) EnableJob(name string) error {
 	defer s.mu.Unlock()
 
 	if _, disabled := s.disabledNames[name]; !disabled {
+		// Job is not in the disabled list. Check if it's an active job
+		// (already enabled) — if so, this is an idempotent no-op.
+		if _, active := s.jobsByName[name]; active {
+			return nil
+		}
 		return fmt.Errorf("%w: %q", ErrJobNotFound, name)
 	}
 
