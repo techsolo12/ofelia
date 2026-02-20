@@ -700,3 +700,172 @@ func TestDefaultMetricsIncludesWorkflowMetrics(t *testing.T) {
 
 	t.Log("Default metrics includes workflow metrics test passed")
 }
+
+// ============================================================================
+// Tests for RecordJobStart/Complete/Scheduled (Finding 2: IMPORTANT - 0% coverage)
+// ============================================================================
+
+func TestRecordJobStart(t *testing.T) {
+	mc := NewCollector()
+	mc.InitDefaultMetrics()
+
+	// Initial state
+	if mc.metrics["ofelia_cron_jobs_started_total"].Value != 0 {
+		t.Errorf("Expected initial started counter to be 0, got %f",
+			mc.metrics["ofelia_cron_jobs_started_total"].Value)
+	}
+	if mc.getGaugeValue("ofelia_jobs_running") != 0 {
+		t.Errorf("Expected initial running gauge to be 0, got %f",
+			mc.getGaugeValue("ofelia_jobs_running"))
+	}
+
+	// Record a job start
+	mc.RecordJobStart("test-job")
+
+	// Verify counter incremented
+	if mc.metrics["ofelia_cron_jobs_started_total"].Value != 1 {
+		t.Errorf("Expected started counter to be 1, got %f",
+			mc.metrics["ofelia_cron_jobs_started_total"].Value)
+	}
+
+	// Verify running gauge increased
+	if mc.getGaugeValue("ofelia_jobs_running") != 1 {
+		t.Errorf("Expected running gauge to be 1, got %f",
+			mc.getGaugeValue("ofelia_jobs_running"))
+	}
+
+	// Record another job start
+	mc.RecordJobStart("another-job")
+
+	if mc.metrics["ofelia_cron_jobs_started_total"].Value != 2 {
+		t.Errorf("Expected started counter to be 2, got %f",
+			mc.metrics["ofelia_cron_jobs_started_total"].Value)
+	}
+	if mc.getGaugeValue("ofelia_jobs_running") != 2 {
+		t.Errorf("Expected running gauge to be 2, got %f",
+			mc.getGaugeValue("ofelia_jobs_running"))
+	}
+}
+
+func TestRecordJobComplete(t *testing.T) {
+	mc := NewCollector()
+	mc.InitDefaultMetrics()
+
+	// Simulate a running job first
+	mc.RecordJobStart("test-job")
+	if mc.getGaugeValue("ofelia_jobs_running") != 1 {
+		t.Fatalf("Expected running gauge to be 1 after start, got %f",
+			mc.getGaugeValue("ofelia_jobs_running"))
+	}
+
+	// Complete the job (not panicked)
+	mc.RecordJobComplete("test-job", 1.5, false)
+
+	// Verify completed counter incremented
+	if mc.metrics["ofelia_cron_jobs_completed_total"].Value != 1 {
+		t.Errorf("Expected completed counter to be 1, got %f",
+			mc.metrics["ofelia_cron_jobs_completed_total"].Value)
+	}
+
+	// Verify duration histogram recorded
+	hist := mc.metrics["ofelia_job_duration_seconds"].Histogram
+	if hist.Count != 1 {
+		t.Errorf("Expected 1 histogram observation, got %d", hist.Count)
+	}
+	if hist.Sum != 1.5 {
+		t.Errorf("Expected histogram sum of 1.5, got %f", hist.Sum)
+	}
+
+	// Verify running gauge decreased
+	if mc.getGaugeValue("ofelia_jobs_running") != 0 {
+		t.Errorf("Expected running gauge to be 0 after complete, got %f",
+			mc.getGaugeValue("ofelia_jobs_running"))
+	}
+
+	// Verify panicked counter NOT incremented
+	if mc.metrics["ofelia_cron_jobs_panicked_total"].Value != 0 {
+		t.Errorf("Expected panicked counter to be 0 for non-panicked job, got %f",
+			mc.metrics["ofelia_cron_jobs_panicked_total"].Value)
+	}
+}
+
+func TestRecordJobComplete_Panicked(t *testing.T) {
+	mc := NewCollector()
+	mc.InitDefaultMetrics()
+
+	mc.RecordJobStart("panicked-job")
+
+	// Complete the job with panicked=true
+	mc.RecordJobComplete("panicked-job", 0.5, true)
+
+	// Verify panicked counter IS incremented
+	if mc.metrics["ofelia_cron_jobs_panicked_total"].Value != 1 {
+		t.Errorf("Expected panicked counter to be 1, got %f",
+			mc.metrics["ofelia_cron_jobs_panicked_total"].Value)
+	}
+
+	// Verify completed counter also incremented
+	if mc.metrics["ofelia_cron_jobs_completed_total"].Value != 1 {
+		t.Errorf("Expected completed counter to be 1, got %f",
+			mc.metrics["ofelia_cron_jobs_completed_total"].Value)
+	}
+
+	// Verify running gauge decreased
+	if mc.getGaugeValue("ofelia_jobs_running") != 0 {
+		t.Errorf("Expected running gauge to be 0 after complete, got %f",
+			mc.getGaugeValue("ofelia_jobs_running"))
+	}
+}
+
+func TestRecordJobScheduled(t *testing.T) {
+	mc := NewCollector()
+	mc.InitDefaultMetrics()
+
+	// Initial state
+	if mc.metrics["ofelia_cron_jobs_scheduled_total"].Value != 0 {
+		t.Errorf("Expected initial scheduled counter to be 0, got %f",
+			mc.metrics["ofelia_cron_jobs_scheduled_total"].Value)
+	}
+
+	// Record a job scheduled
+	mc.RecordJobScheduled("test-job")
+
+	if mc.metrics["ofelia_cron_jobs_scheduled_total"].Value != 1 {
+		t.Errorf("Expected scheduled counter to be 1, got %f",
+			mc.metrics["ofelia_cron_jobs_scheduled_total"].Value)
+	}
+
+	// Record another scheduling event
+	mc.RecordJobScheduled("another-job")
+
+	if mc.metrics["ofelia_cron_jobs_scheduled_total"].Value != 2 {
+		t.Errorf("Expected scheduled counter to be 2, got %f",
+			mc.metrics["ofelia_cron_jobs_scheduled_total"].Value)
+	}
+}
+
+func TestRecordJobStartCompleteLifecycle(t *testing.T) {
+	mc := NewCollector()
+	mc.InitDefaultMetrics()
+
+	// Simulate a full job lifecycle: schedule -> start -> complete
+	mc.RecordJobScheduled("lifecycle-job")
+	mc.RecordJobStart("lifecycle-job")
+	mc.RecordJobComplete("lifecycle-job", 2.0, false)
+
+	// Verify all counters
+	if mc.metrics["ofelia_cron_jobs_scheduled_total"].Value != 1 {
+		t.Errorf("Expected 1 scheduled, got %f", mc.metrics["ofelia_cron_jobs_scheduled_total"].Value)
+	}
+	if mc.metrics["ofelia_cron_jobs_started_total"].Value != 1 {
+		t.Errorf("Expected 1 started, got %f", mc.metrics["ofelia_cron_jobs_started_total"].Value)
+	}
+	if mc.metrics["ofelia_cron_jobs_completed_total"].Value != 1 {
+		t.Errorf("Expected 1 completed, got %f", mc.metrics["ofelia_cron_jobs_completed_total"].Value)
+	}
+
+	// Running gauge should be back to 0
+	if mc.getGaugeValue("ofelia_jobs_running") != 0 {
+		t.Errorf("Expected 0 running, got %f", mc.getGaugeValue("ofelia_jobs_running"))
+	}
+}
