@@ -61,6 +61,8 @@ type apiJob struct {
 }
 
 func TestHistoryEndpoint(t *testing.T) {
+	t.Parallel()
+
 	job := &testJob{}
 	job.Name = "job1"
 	const (
@@ -102,6 +104,8 @@ func TestHistoryEndpoint(t *testing.T) {
 }
 
 func TestJobsEndpointWithRuntimeData(t *testing.T) {
+	t.Parallel()
+
 	// Create test job with execution output
 	job := &testJob{}
 	job.Name = "test-job"
@@ -180,6 +184,8 @@ func TestJobsEndpointWithRuntimeData(t *testing.T) {
 }
 
 func TestJobsEndpointAfterBufferCleanup(t *testing.T) {
+	t.Parallel()
+
 	// Create test job with execution output
 	job := &testJob{}
 	job.Name = "cleaned-job"
@@ -255,6 +261,8 @@ func TestJobsEndpointAfterBufferCleanup(t *testing.T) {
 }
 
 func TestHistoryEndpointWithCapturedOutput(t *testing.T) {
+	t.Parallel()
+
 	job := &testJob{}
 	job.Name = "history-job"
 	job.Schedule = schedDaily
@@ -325,6 +333,8 @@ func TestHistoryEndpointWithCapturedOutput(t *testing.T) {
 }
 
 func TestJobsHandlerIncludesOutput(t *testing.T) {
+	t.Parallel()
+
 	job := &testJob{}
 	job.Name = "job1"
 	job.Schedule = schedDaily
@@ -358,6 +368,8 @@ func TestJobsHandlerIncludesOutput(t *testing.T) {
 }
 
 func TestJobsHandlerOrigin(t *testing.T) {
+	t.Parallel()
+
 	jobIni := &testJob{}
 	jobIni.Name = nameJobINI
 	jobIni.Schedule = schedDaily
@@ -410,6 +422,8 @@ func TestJobsHandlerOrigin(t *testing.T) {
 }
 
 func TestRemovedJobsHandlerOrigin(t *testing.T) {
+	t.Parallel()
+
 	jobIni := &testJob{}
 	jobIni.Name = nameJobINI
 	jobIni.Schedule = schedDaily
@@ -463,6 +477,8 @@ func TestRemovedJobsHandlerOrigin(t *testing.T) {
 }
 
 func TestDisabledJobsHandlerOrigin(t *testing.T) {
+	t.Parallel()
+
 	jobIni := &testJob{}
 	jobIni.Name = nameJobINI
 	jobIni.Schedule = schedDaily
@@ -516,6 +532,8 @@ func TestDisabledJobsHandlerOrigin(t *testing.T) {
 }
 
 func TestCreateJobTypes(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 	srv := webpkg.NewServer("", sched, nil, nil)
 	httpSrv := srv.HTTPServer()
@@ -553,6 +571,8 @@ func TestCreateJobTypes(t *testing.T) {
 // New tests for missing coverage
 
 func TestRunJobHandler(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 	job := &testJob{}
 	job.Name = "test-run-job"
@@ -602,6 +622,8 @@ func TestRunJobHandler(t *testing.T) {
 }
 
 func TestDisableJobHandler(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 	job := &testJob{}
 	job.Name = "test-disable-job"
@@ -656,6 +678,8 @@ func TestDisableJobHandler(t *testing.T) {
 }
 
 func TestEnableJobHandler(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 	job := &testJob{}
 	job.Name = "test-enable-job"
@@ -710,6 +734,8 @@ func TestEnableJobHandler(t *testing.T) {
 }
 
 func TestHistoryHandler_NotFound(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 	srv := webpkg.NewServer("", sched, nil, nil)
 	httpSrv := srv.HTTPServer()
@@ -736,6 +762,8 @@ func TestHistoryHandler_NotFound(t *testing.T) {
 }
 
 func TestShutdown(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 	srv := webpkg.NewServer(":0", sched, nil, nil)
 
@@ -759,6 +787,8 @@ func TestShutdown(t *testing.T) {
 }
 
 func TestRegisterHealthEndpoints(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 	srv := webpkg.NewServer("", sched, nil, nil)
 
@@ -827,6 +857,8 @@ func TestRegisterHealthEndpoints(t *testing.T) {
 }
 
 func TestJobFromRequest_EdgeCases(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 	srv := webpkg.NewServer("", sched, nil, nil)
 	httpSrv := srv.HTTPServer()
@@ -889,6 +921,8 @@ func TestJobFromRequest_EdgeCases(t *testing.T) {
 }
 
 func TestGetHTTPServer(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 	srv := webpkg.NewServer("", sched, nil, nil)
 
@@ -904,6 +938,8 @@ func TestGetHTTPServer(t *testing.T) {
 }
 
 func TestJobsEndpointNextPrevRuns(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 
 	// Add a job with a real cron schedule so NextN/PrevN return results
@@ -966,6 +1002,8 @@ func TestJobsEndpointNextPrevRuns(t *testing.T) {
 }
 
 func TestJobsEndpointTriggeredJobEmptyRuns(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 
 	// Add a triggered-only job (no cron schedule)
@@ -1012,6 +1050,8 @@ func TestJobsEndpointTriggeredJobEmptyRuns(t *testing.T) {
 }
 
 func TestDisabledJobsEndpointEmptyRuns(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 
 	job := &testJob{}
@@ -1050,6 +1090,8 @@ func TestDisabledJobsEndpointEmptyRuns(t *testing.T) {
 }
 
 func TestRemovedJobsEndpointEmptyRuns(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 
 	job := &testJob{}
@@ -1088,6 +1130,8 @@ func TestRemovedJobsEndpointEmptyRuns(t *testing.T) {
 }
 
 func TestJobsEndpointNextPrevRunsJSONFormat(t *testing.T) {
+	t.Parallel()
+
 	sched := core.NewScheduler(stubDiscardLogger())
 
 	job := &testJob{}

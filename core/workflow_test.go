@@ -375,3 +375,97 @@ func TestCollectDependencyEdges_TriggeredJobInOnSuccessFailure(t *testing.T) {
 		t.Error("Expected on-failure edge: parent->failure-triggered (OnFailure)")
 	}
 }
+
+// TestCollectDependencyEdges_NonBareJobSkipped tests that non-BareJob types are
+// gracefully skipped by collectDependencyEdges (no edges collected, no panic).
+func TestCollectDependencyEdges_NonBareJobSkipped(t *testing.T) {
+	t.Parallel()
+
+	// nonBareTestJob embeds BareJob indirectly via TestJob, but is *not* a *BareJob.
+	// collectDependencyEdges uses a type assertion for *BareJob, so this should be skipped.
+	nonBareJob := &TestJob{}
+	nonBareJob.Name = "non-bare-job"
+	nonBareJob.Schedule = "@daily"
+	nonBareJob.Command = "echo test"
+	nonBareJob.Dependencies = []string{"some-parent"}
+
+	jobs := []Job{nonBareJob}
+
+	edges := collectDependencyEdges(jobs, newDiscardLogger())
+
+	// Non-BareJob jobs should be skipped entirely: no edges, no panic
+	if len(edges) != 0 {
+		t.Errorf("Expected 0 edges for non-BareJob types, got %d", len(edges))
+	}
+}
+
+// TestCollectDependencyEdges_MixedJobTypes tests that a mix of *BareJob and
+// non-*BareJob types correctly collects edges only from *BareJob instances.
+func TestCollectDependencyEdges_MixedJobTypes(t *testing.T) {
+	t.Parallel()
+
+	bareJob := &BareJob{
+		Name:         "bare-child",
+		Schedule:     "@daily",
+		Command:      "echo bare",
+		Dependencies: []string{"parent"},
+	}
+	nonBareJob := &TestJob{}
+	nonBareJob.Name = "non-bare-child"
+	nonBareJob.Schedule = "@daily"
+	nonBareJob.Command = "echo non-bare"
+	nonBareJob.Dependencies = []string{"parent"}
+
+	parentJob := &BareJob{
+		Name:     "parent",
+		Schedule: "@daily",
+		Command:  "echo parent",
+	}
+
+	jobs := []Job{bareJob, nonBareJob, parentJob}
+
+	edges := collectDependencyEdges(jobs, newDiscardLogger())
+
+	// Only the *BareJob should produce an edge; TestJob (non-*BareJob) should be skipped
+	if len(edges) != 1 {
+		t.Fatalf("Expected 1 edge (from BareJob only), got %d", len(edges))
+	}
+	if edges[0].child != "bare-child" || edges[0].parent != "parent" {
+		t.Errorf("Unexpected edge: %s -> %s", edges[0].parent, edges[0].child)
+	}
+}
+
+// TestWireEdges_NonCycleError tests that wireEdges properly returns
+// ErrWorkflowInvalid (not ErrCircularDependency) when AddDependencyByName
+// fails for non-cycle reasons such as an entry not found in cron.
+func TestWireEdges_NonCycleError(t *testing.T) {
+	t.Parallel()
+
+	// Create a cron instance with only one job registered
+	c := cron.New(cron.WithParser(cron.FullParser()))
+	_, _ = c.AddFunc("@daily", func() {}, cron.WithName("existing-job"))
+
+	// Create an edge referencing a job that exists in cron and one that does not
+	edges := []dependencyEdge{
+		{
+			child:     "ghost-job", // not registered in cron
+			parent:    "existing-job",
+			condition: cron.OnSuccess,
+		},
+	}
+
+	err := wireEdges(c, edges, newDiscardLogger())
+
+	// wireEdges should return an error because "ghost-job" is not in cron
+	if err == nil {
+		t.Fatal("wireEdges should return an error when child entry is not found in cron")
+	}
+
+	// The error should be ErrWorkflowInvalid, NOT ErrCircularDependency
+	if !errors.Is(err, ErrWorkflowInvalid) {
+		t.Errorf("Expected ErrWorkflowInvalid, got: %v", err)
+	}
+	if errors.Is(err, ErrCircularDependency) {
+		t.Error("Error should NOT be ErrCircularDependency for missing entry")
+	}
+}

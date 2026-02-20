@@ -330,16 +330,15 @@ func TestSchedulerStart_TriggeredJobStartup(t *testing.T) {
 	_ = sc.AddJob(triggeredNoStartup)
 	_ = sc.AddJob(regularStartup)
 
-	completedJobs := make(map[string]bool)
-	var completedMu atomic.Int32
-	sc.SetOnJobComplete(func(name string, _ bool) {
-		completedMu.Add(1)
-		// Use a simple approach since we can't safely use a map from multiple goroutines
+	// Track completed jobs by name with proper synchronization
+	completedCount := atomic.Int32{}
+	sc.SetOnJobComplete(func(_ string, _ bool) {
+		completedCount.Add(1)
 	})
 
 	_ = sc.Start()
 
-	// Wait for jobs to complete
+	// Wait for startup jobs to complete
 	time.Sleep(200 * time.Millisecond)
 
 	_ = sc.Stop()
@@ -354,8 +353,15 @@ func TestSchedulerStart_TriggeredJobStartup(t *testing.T) {
 		t.Error("Triggered job with RunOnStartup=false should NOT have run on scheduler start")
 	}
 
-	// Check completedJobs is not referenced (we used atomic counter)
-	_ = completedJobs
+	// regular-startup should have run (RunOnStartup=true with @every schedule)
+	if regularStartup.Called() == 0 {
+		t.Error("Regular job with RunOnStartup=true should have run on scheduler start")
+	}
+
+	// At least the 2 startup jobs should have completed via the callback
+	if completedCount.Load() < 2 {
+		t.Errorf("Expected at least 2 job completions from startup, got %d", completedCount.Load())
+	}
 }
 
 // TestBuildWorkflowDependencies_CircularDetection tests that circular dependencies
@@ -618,31 +624,45 @@ func TestStopWithTimeout_Timeout(t *testing.T) {
 
 	sc := NewSchedulerWithOptions(newDiscardLogger(), nil, 10*time.Millisecond)
 
-	slowJob := &SlowTestJob{duration: 500 * time.Millisecond}
+	// Use a job that takes much longer than our timeout to ensure timeout fires
+	slowJob := &SlowTestJob{duration: 2 * time.Second}
 	slowJob.Name = "very-slow-job"
 	slowJob.Schedule = "@every 1h"
 	slowJob.RunOnStartup = true
 
 	_ = sc.AddJob(slowJob)
 
-	completed := make(chan struct{}, 1)
-	sc.SetOnJobComplete(func(_ string, _ bool) {
-		select {
-		case completed <- struct{}{}:
-		default:
-		}
-	})
-
 	_ = sc.Start()
 
-	// Give time for the startup job to begin
-	time.Sleep(50 * time.Millisecond)
+	// Give time for the startup job to begin executing
+	time.Sleep(100 * time.Millisecond)
 
-	// Stop with very short timeout - should time out
-	err := sc.StopWithTimeout(1 * time.Millisecond)
-	// Note: this may or may not time out depending on timing
-	// The important thing is that the function completes
-	_ = err
+	// Verify the job has started
+	if slowJob.called.Load() == 0 {
+		t.Fatal("Slow job should have started by now")
+	}
+
+	// Stop with a very short timeout - the job takes 2s but we only wait 1ms
+	timeout := 1 * time.Millisecond
+	start := time.Now()
+	err := sc.StopWithTimeout(timeout)
+	elapsed := time.Since(start)
+
+	// StopWithTimeout should return an error because the job is still running
+	if err == nil {
+		t.Error("StopWithTimeout should return an error when timeout is exceeded")
+	}
+
+	// Verify the function returned promptly (within a generous upper bound)
+	// and did not block for the full job duration
+	if elapsed > 1*time.Second {
+		t.Errorf("StopWithTimeout should return near the timeout duration, but took %v", elapsed)
+	}
+
+	// The scheduler should no longer be accepting new jobs (cron stopped)
+	if sc.IsRunning() {
+		t.Error("Scheduler should not be running after StopWithTimeout")
+	}
 }
 
 // --- Test UpdateJob ---
@@ -741,6 +761,56 @@ func TestEnableJob_TriggeredJob(t *testing.T) {
 	// Verify the job is back in active jobs
 	if sc.GetJob("triggered-enable") == nil {
 		t.Error("Triggered job should be active after re-enable")
+	}
+}
+
+// --- Test DisableJob idempotency: calling DisableJob twice should not fail ---
+func TestDisableJob_Idempotent(t *testing.T) {
+	t.Parallel()
+
+	sc := NewScheduler(newDiscardLogger())
+
+	job := &TestJob{}
+	job.Name = "idempotent-disable"
+	job.Schedule = "@daily"
+	_ = sc.AddJob(job)
+
+	// First disable should succeed
+	err := sc.DisableJob("idempotent-disable")
+	if err != nil {
+		t.Fatalf("First DisableJob should succeed: %v", err)
+	}
+
+	// Verify job is disabled
+	if sc.GetJob("idempotent-disable") != nil {
+		t.Error("Job should not be active after first disable")
+	}
+	if sc.GetDisabledJob("idempotent-disable") == nil {
+		t.Error("Job should be in disabled list after first disable")
+	}
+
+	// Second disable should also succeed (idempotent - no error)
+	err = sc.DisableJob("idempotent-disable")
+	if err != nil {
+		t.Fatalf("Second DisableJob should succeed (idempotent): %v", err)
+	}
+
+	// Job should still be disabled (not double-disabled or corrupted)
+	disabled := sc.GetDisabledJobs()
+	if len(disabled) != 1 {
+		t.Errorf("Expected exactly 1 disabled job after double-disable, got %d", len(disabled))
+	}
+	if disabled[0].GetName() != "idempotent-disable" {
+		t.Errorf("Expected disabled job name 'idempotent-disable', got %q", disabled[0].GetName())
+	}
+
+	// Verify the job can still be re-enabled after double disable
+	err = sc.EnableJob("idempotent-disable")
+	if err != nil {
+		t.Fatalf("EnableJob should succeed after double disable: %v", err)
+	}
+	if sc.GetJob("idempotent-disable") == nil {
+		t.Error("Job should be active again after re-enable")
 	}
 }
 
