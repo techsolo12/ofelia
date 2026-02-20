@@ -70,6 +70,15 @@ func newConcurrencySemaphore(n int) *concurrencySemaphore {
 	}
 }
 
+// resize replaces the semaphore channel with a new one of capacity n.
+//
+// Concurrency note: the write lock prevents concurrent getChan calls from
+// observing the channel swap, but goroutines that already obtained the old
+// channel reference will continue using it until they release their slot.
+// During the transition window, up to old_cap + new_cap goroutines could
+// theoretically run concurrently. This is acceptable because resize is
+// intended to be called before Start() (see SetMaxConcurrentJobs doc).
+// Calling it on a running scheduler logs a warning and is best-effort.
 func (cs *concurrencySemaphore) resize(n int) {
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
@@ -425,6 +434,10 @@ func (s *Scheduler) Start() error {
 
 	// Wire dependency edges into go-cron using native DAG engine.
 	// This must happen after all jobs are added to cron but before Start().
+	//
+	// BuildWorkflowDependencies errors are non-fatal: jobs without dependencies
+	// continue to run on their cron schedule even if DAG wiring fails.
+	// This prevents a misconfigured dependency from taking down all scheduling.
 	if err := BuildWorkflowDependencies(s.cron, s.Jobs, s.Logger); err != nil {
 		s.Logger.Error(fmt.Sprintf("Failed to build workflow dependencies: %v. "+
 			"Jobs without dependencies will still run, but workflows may not execute as expected", err))
@@ -646,6 +659,12 @@ func (s *Scheduler) UpdateJob(name string, newSchedule string, newJob Job) error
 // DisableJob pauses the job so it won't be scheduled or triggered, but keeps it
 // for later enabling. Uses go-cron's native PauseEntryByName for all job types
 // including triggered schedules (which now all have cron entries).
+//
+// Holding s.mu while calling go-cron's PauseEntryByName is safe from deadlock:
+// go-cron's setPausedState acquires c.runningMu and sends a request to the run
+// loop, which sets a boolean flag without calling back into ofelia's Scheduler.
+// Job execution happens in separate goroutines that do not hold c.runningMu,
+// and runWithCtx only acquires s.mu.RLock (compatible with the Lock held here).
 func (s *Scheduler) DisableJob(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -669,6 +688,8 @@ func (s *Scheduler) DisableJob(name string) error {
 
 // EnableJob resumes a previously disabled/paused job. Uses go-cron's native
 // ResumeEntryByName for all job types including triggered schedules.
+//
+// Lock safety: same as DisableJob -- see its doc comment for rationale.
 func (s *Scheduler) EnableJob(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -823,6 +844,14 @@ func (w *jobWrapper) runWithCtx(ctx context.Context) {
 		return
 	}
 
+	// Snapshot the callback under the read lock so that a concurrent
+	// SetOnJobComplete call does not race with the nil check + invocation
+	// below. SetOnJobComplete writes under s.mu, so reading under RLock
+	// establishes a happens-before relationship.
+	w.s.mu.RLock()
+	onComplete := w.s.onJobComplete
+	w.s.mu.RUnlock()
+
 	e, err := NewExecution()
 	if err != nil {
 		w.s.Logger.Error(fmt.Sprintf("failed to create execution: %v", err))
@@ -843,9 +872,9 @@ func (w *jobWrapper) runWithCtx(ctx context.Context) {
 
 	w.stop(jctx, err)
 
-	if w.s.onJobComplete != nil {
+	if onComplete != nil {
 		success := err == nil && !jctx.Execution.Failed
-		w.s.onJobComplete(w.j.GetName(), success)
+		onComplete(w.j.GetName(), success)
 	}
 }
 
