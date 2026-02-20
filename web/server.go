@@ -34,6 +34,7 @@ type Server struct {
 	authConfig   *SecureAuthConfig
 	tokenManager *SecureTokenManager
 	loginLimiter *RateLimiter
+	rl           *rateLimiter
 }
 
 // HTTPServer returns the underlying http.Server used by the web interface. It
@@ -78,7 +79,7 @@ func NewServerWithAuth(addr string, s *core.Scheduler, cfg any, provider core.Do
 
 	mux := http.NewServeMux()
 
-	rl := newRateLimiter(100, time.Minute)
+	server.rl = newRateLimiter(100, time.Minute)
 
 	if server.authConfig != nil && server.authConfig.Enabled {
 		loginHandler := NewSecureLoginHandler(server.authConfig, server.tokenManager, server.loginLimiter)
@@ -109,7 +110,7 @@ func NewServerWithAuth(addr string, s *core.Scheduler, cfg any, provider core.Do
 
 	var handler http.Handler = mux
 	handler = securityHeaders(handler)
-	handler = rl.middleware(handler)
+	handler = server.rl.middleware(handler)
 
 	if server.authConfig != nil && server.authConfig.Enabled {
 		handler = server.authMiddleware(handler)
@@ -128,6 +129,9 @@ func NewServerWithAuth(addr string, s *core.Scheduler, cfg any, provider core.Do
 func (s *Server) Start() error { go func() { _ = s.srv.ListenAndServe() }(); return nil }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.rl != nil {
+		s.rl.close()
+	}
 	if err := s.srv.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shutdown http server: %w", err)
 	}
@@ -171,10 +175,13 @@ func (s *Server) RegisterHealthEndpoints(hc *HealthChecker) {
 		mux.Handle("/", http.FileServer(http.FS(uiFS)))
 	}
 
-	rl := newRateLimiter(100, time.Minute)
+	if s.rl != nil {
+		s.rl.close()
+	}
+	s.rl = newRateLimiter(100, time.Minute)
 	var handler http.Handler = mux
 	handler = securityHeaders(handler)
-	handler = rl.middleware(handler)
+	handler = s.rl.middleware(handler)
 
 	if s.authConfig != nil && s.authConfig.Enabled {
 		handler = s.authMiddleware(handler)
@@ -380,6 +387,10 @@ func validateJobName(name string) error {
 }
 
 func (s *Server) runJobHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -402,6 +413,10 @@ func (s *Server) runJobHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) disableJobHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -424,6 +439,10 @@ func (s *Server) disableJobHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) enableJobHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -446,6 +465,10 @@ func (s *Server) enableJobHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createJobHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -476,6 +499,10 @@ func (s *Server) createJobHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateJobHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -590,6 +617,10 @@ func (s *Server) jobFromRequest(req *jobRequest) (core.Job, error) {
 }
 
 func (s *Server) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -733,10 +764,14 @@ func (s *Server) authStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data, valid := s.tokenManager.ValidateToken(token)
+	username := ""
+	if data != nil {
+		username = data.Username
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"authEnabled":   true,
 		"authenticated": valid,
-		"username":      data.Username,
+		"username":      username,
 	})
 }
 

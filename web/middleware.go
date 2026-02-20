@@ -38,6 +38,7 @@ type rateLimiter struct {
 	mu       sync.RWMutex
 	limit    int
 	window   time.Duration
+	done     chan struct{}
 }
 
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
@@ -45,19 +46,27 @@ func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 		requests: make(map[string][]time.Time),
 		limit:    limit,
 		window:   window,
+		done:     make(chan struct{}),
 	}
 
 	// Clean up old entries periodically
 	go func() {
 		ticker := time.NewTicker(window)
 		defer ticker.Stop()
-		for range ticker.C {
-			rl.cleanup()
+		for {
+			select {
+			case <-ticker.C:
+				rl.cleanup()
+			case <-rl.done:
+				return
+			}
 		}
 	}()
 
 	return rl
 }
+
+func (rl *rateLimiter) close() { close(rl.done) }
 
 func (rl *rateLimiter) cleanup() {
 	rl.mu.Lock()
