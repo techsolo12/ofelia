@@ -195,8 +195,7 @@ func (mc *Collector) RecordDockerError(operation string) {
 // RecordJobStart records a job starting (from go-cron ObservabilityHooks)
 func (mc *Collector) RecordJobStart(jobName string) {
 	mc.IncrementCounter("ofelia_cron_jobs_started_total", 1)
-	mc.SetGauge("ofelia_jobs_running",
-		mc.getGaugeValue("ofelia_jobs_running")+1)
+	mc.adjustGauge("ofelia_jobs_running", 1)
 }
 
 // RecordJobComplete records a job completing (from go-cron ObservabilityHooks)
@@ -208,8 +207,7 @@ func (mc *Collector) RecordJobComplete(jobName string, durationSeconds float64, 
 		mc.IncrementCounter("ofelia_cron_jobs_panicked_total", 1)
 	}
 
-	mc.SetGauge("ofelia_jobs_running",
-		mc.getGaugeValue("ofelia_jobs_running")-1)
+	mc.adjustGauge("ofelia_jobs_running", -1)
 }
 
 // RecordJobScheduled records when a job's next run is scheduled (from go-cron ObservabilityHooks)
@@ -345,8 +343,7 @@ func (jm *JobMetrics) JobStarted(jobID string) {
 	jm.mu.Unlock()
 
 	jm.collector.IncrementCounter("ofelia_jobs_total", 1)
-	jm.collector.SetGauge("ofelia_jobs_running",
-		jm.collector.getGaugeValue("ofelia_jobs_running")+1)
+	jm.collector.adjustGauge("ofelia_jobs_running", 1)
 }
 
 // JobCompleted records job completion
@@ -364,8 +361,18 @@ func (jm *JobMetrics) JobCompleted(jobID string, success bool) {
 		jm.collector.IncrementCounter("ofelia_jobs_failed_total", 1)
 	}
 
-	jm.collector.SetGauge("ofelia_jobs_running",
-		jm.collector.getGaugeValue("ofelia_jobs_running")-1)
+	jm.collector.adjustGauge("ofelia_jobs_running", -1)
+}
+
+// adjustGauge atomically adjusts a gauge metric by the given delta.
+// This avoids the TOCTOU race of separate getGaugeValue + SetGauge calls.
+func (mc *Collector) adjustGauge(name string, delta float64) {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	if m, exists := mc.metrics[name]; exists && m.Type == MetricTypeGauge {
+		m.Value += delta
+		m.LastUpdated = time.Now()
+	}
 }
 
 // Helper method to get gauge value

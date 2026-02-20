@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gobs/args"
@@ -28,6 +29,7 @@ type Server struct {
 	config       any
 	srv          *http.Server
 	origins      map[string]string
+	originsMu    sync.RWMutex
 	provider     core.DockerProvider
 	authConfig   *SecureAuthConfig
 	tokenManager *SecureTokenManager
@@ -235,7 +237,10 @@ func jobOrigin(cfg any, name string) string {
 }
 
 func (s *Server) jobOrigin(name string) string {
-	if o, ok := s.origins[name]; ok {
+	s.originsMu.RLock()
+	o, ok := s.origins[name]
+	s.originsMu.RUnlock()
+	if ok {
 		return o
 	}
 	return jobOrigin(s.config, name)
@@ -446,6 +451,10 @@ func (s *Server) createJobHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
+	if err := validateJobName(req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	job, err := s.jobFromRequest(&req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -460,7 +469,9 @@ func (s *Server) createJobHandler(w http.ResponseWriter, r *http.Request) {
 	if origin == "" {
 		origin = "api"
 	}
+	s.originsMu.Lock()
 	s.origins[req.Name] = origin
+	s.originsMu.Unlock()
 	w.WriteHeader(http.StatusCreated)
 }
 
@@ -504,7 +515,9 @@ func (s *Server) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 	if origin == "" {
 		origin = "api"
 	}
+	s.originsMu.Lock()
 	s.origins[req.Name] = origin
+	s.originsMu.Unlock()
 	w.WriteHeader(status)
 }
 
@@ -592,7 +605,9 @@ func (s *Server) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.scheduler.RemoveJob(j)
+	s.originsMu.Lock()
 	delete(s.origins, req.Name)
+	s.originsMu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
