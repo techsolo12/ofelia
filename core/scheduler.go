@@ -41,7 +41,6 @@ type Scheduler struct {
 
 	middlewareContainer
 	cron              *cron.Cron
-	wg                sync.WaitGroup
 	mu                sync.RWMutex
 	maxConcurrentJobs int
 	concurrencySem    *concurrencySemaphore // go-cron middleware semaphore
@@ -470,8 +469,6 @@ func (s *Scheduler) StopWithTimeout(timeout time.Duration) error {
 	// Use go-cron's StopWithTimeout for graceful shutdown
 	completed := s.cron.StopWithTimeout(timeout)
 
-	s.wg.Wait() // Wait for any remaining wrapper goroutines
-
 	if !completed {
 		s.Logger.Warn(fmt.Sprintf("Scheduler stop timed out after %v - some jobs may still be running", timeout))
 		return fmt.Errorf("%w after %v", ErrSchedulerTimeout, timeout)
@@ -483,8 +480,6 @@ func (s *Scheduler) StopWithTimeout(timeout time.Duration) error {
 // StopAndWait stops the scheduler and waits indefinitely for all jobs to complete.
 func (s *Scheduler) StopAndWait() {
 	s.cron.StopAndWait()
-
-	s.wg.Wait()
 	s.Logger.Debug("Scheduler stopped and all jobs completed")
 }
 
@@ -801,6 +796,9 @@ func workflowStatus(results map[cron.EntryID]cron.JobResult) string {
 // IsRunning returns true if the scheduler is active.
 // Delegates to go-cron's IsRunning() which is the authoritative source.
 func (s *Scheduler) IsRunning() bool {
+	if s.cron == nil {
+		return false
+	}
 	return s.cron.IsRunning()
 }
 

@@ -409,12 +409,22 @@ func (pm *PerformanceMetrics) GetDockerMetrics() map[string]any {
 		errorRate = float64(totalErrors) / float64(totalOps) * 100
 	}
 
+	// Return copies of the maps to avoid races after the RLock is released
+	ops := make(map[string]int64, len(pm.dockerOpsCount))
+	for k, v := range pm.dockerOpsCount {
+		ops[k] = v
+	}
+	errs := make(map[string]int64, len(pm.dockerErrorsCount))
+	for k, v := range pm.dockerErrorsCount {
+		errs[k] = v
+	}
+
 	return map[string]any{
 		"total_operations":   totalOps,
 		"total_errors":       totalErrors,
 		"error_rate_percent": errorRate,
-		"operations_by_type": pm.dockerOpsCount,
-		"errors_by_type":     pm.dockerErrorsCount,
+		"operations_by_type": ops,
+		"errors_by_type":     errs,
 		"latencies":          latencyStats,
 	}
 }
