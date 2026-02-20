@@ -595,8 +595,8 @@ func TestRunJobHandler(t *testing.T) {
 		w := httptest.NewRecorder()
 		httpSrv.Handler.ServeHTTP(w, req)
 
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("expected status 400, got %d", w.Code)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("expected status 404, got %d", w.Code)
 		}
 	})
 }
@@ -649,8 +649,8 @@ func TestDisableJobHandler(t *testing.T) {
 		w := httptest.NewRecorder()
 		httpSrv.Handler.ServeHTTP(w, req)
 
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("expected status 400, got %d", w.Code)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("expected status 404, got %d", w.Code)
 		}
 	})
 }
@@ -703,8 +703,8 @@ func TestEnableJobHandler(t *testing.T) {
 		w := httptest.NewRecorder()
 		httpSrv.Handler.ServeHTTP(w, req)
 
-		if w.Code != http.StatusBadRequest {
-			t.Errorf("expected status 400, got %d", w.Code)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("expected status 404, got %d", w.Code)
 		}
 	})
 }
