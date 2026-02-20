@@ -132,6 +132,9 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.rl != nil {
 		s.rl.close()
 	}
+	if s.tokenManager != nil {
+		s.tokenManager.Close()
+	}
 	if err := s.srv.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shutdown http server: %w", err)
 	}

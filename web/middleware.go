@@ -34,11 +34,12 @@ func securityHeaders(next http.Handler) http.Handler {
 
 // rateLimiter provides basic rate limiting per IP
 type rateLimiter struct {
-	requests map[string][]time.Time
-	mu       sync.RWMutex
-	limit    int
-	window   time.Duration
-	done     chan struct{}
+	requests  map[string][]time.Time
+	mu        sync.RWMutex
+	limit     int
+	window    time.Duration
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
@@ -66,7 +67,7 @@ func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 	return rl
 }
 
-func (rl *rateLimiter) close() { close(rl.done) }
+func (rl *rateLimiter) close() { rl.closeOnce.Do(func() { close(rl.done) }) }
 
 func (rl *rateLimiter) cleanup() {
 	rl.mu.Lock()

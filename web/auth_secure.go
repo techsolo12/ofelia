@@ -88,6 +88,8 @@ type SecureTokenManager struct {
 	tokenExpiry time.Duration
 	csrfTokens  map[string]time.Time // CSRF token storage
 	csrfMu      sync.RWMutex
+	done        chan struct{}
+	closeOnce   sync.Once
 }
 
 func NewSecureTokenManager(secretKey string, expiryHours int) (*SecureTokenManager, error) {
@@ -105,6 +107,7 @@ func NewSecureTokenManager(secretKey string, expiryHours int) (*SecureTokenManag
 		tokens:      make(map[string]*TokenData),
 		tokenExpiry: time.Duration(expiryHours) * time.Hour,
 		csrfTokens:  make(map[string]time.Time),
+		done:        make(chan struct{}),
 	}
 
 	// Start cleanup routine
@@ -131,8 +134,8 @@ func (tm *SecureTokenManager) GenerateCSRFToken() (string, error) {
 
 // ValidateCSRFToken checks if a CSRF token is valid
 func (tm *SecureTokenManager) ValidateCSRFToken(token string) bool {
-	tm.csrfMu.RLock()
-	defer tm.csrfMu.RUnlock()
+	tm.csrfMu.Lock()
+	defer tm.csrfMu.Unlock()
 
 	expiry, exists := tm.csrfTokens[token]
 	if !exists {
@@ -140,6 +143,7 @@ func (tm *SecureTokenManager) ValidateCSRFToken(token string) bool {
 	}
 
 	if time.Now().After(expiry) {
+		delete(tm.csrfTokens, token)
 		return false
 	}
 
@@ -207,12 +211,23 @@ func (tm *SecureTokenManager) cleanupExpiredTokens() {
 	}
 }
 
+// Close stops the cleanup goroutine. It is safe to call multiple times.
+func (tm *SecureTokenManager) Close() {
+	tm.closeOnce.Do(func() { close(tm.done) })
+}
+
 // cleanupRoutine periodically cleans up expired tokens and CSRF tokens
 func (tm *SecureTokenManager) cleanupRoutine() {
 	ticker := time.NewTicker(1 * time.Hour)
-	for range ticker.C {
-		tm.cleanupExpiredTokens()
-		tm.cleanupExpiredCSRFTokens()
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			tm.cleanupExpiredTokens()
+			tm.cleanupExpiredCSRFTokens()
+		case <-tm.done:
+			return
+		}
 	}
 }
 
