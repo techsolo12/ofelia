@@ -661,3 +661,67 @@ func TestValidator2IsValidLogLevelMethod(t *testing.T) {
 		})
 	}
 }
+
+func TestValidator2ValidateSliceField(t *testing.T) {
+	t.Parallel()
+
+	t.Run("string_slice", func(t *testing.T) {
+		t.Parallel()
+
+		type SliceConfig struct {
+			Tags []string `mapstructure:"tags"`
+		}
+
+		cfg := SliceConfig{Tags: []string{"web", "production"}}
+		cv := NewConfigValidator(cfg)
+		err := cv.Validate()
+		if err != nil {
+			t.Errorf("valid string slice should not produce error: %v", err)
+		}
+	})
+
+	t.Run("empty_slice", func(t *testing.T) {
+		t.Parallel()
+
+		type SliceConfig struct {
+			Tags []string `mapstructure:"tags"`
+		}
+
+		cfg := SliceConfig{Tags: []string{}}
+		cv := NewConfigValidator(cfg)
+		err := cv.Validate()
+		if err != nil {
+			t.Errorf("empty slice should not produce error: %v", err)
+		}
+	})
+
+	t.Run("nil_slice", func(t *testing.T) {
+		t.Parallel()
+
+		type SliceConfig struct {
+			Tags []string `mapstructure:"tags"`
+		}
+
+		cfg := SliceConfig{Tags: nil}
+		cv := NewConfigValidator(cfg)
+		err := cv.Validate()
+		if err != nil {
+			t.Errorf("nil slice should not produce error: %v", err)
+		}
+	})
+
+	t.Run("int_slice", func(t *testing.T) {
+		t.Parallel()
+
+		type SliceConfig struct {
+			Ports []int `mapstructure:"ports"`
+		}
+
+		cfg := SliceConfig{Ports: []int{8080, 9090}}
+		cv := NewConfigValidator(cfg)
+		err := cv.Validate()
+		if err != nil {
+			t.Errorf("int slice should not produce error: %v", err)
+		}
+	})
+}
