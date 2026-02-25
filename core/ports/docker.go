@@ -1,3 +1,6 @@
+// Copyright (c) 2025-2026 Netresearch DTT GmbH
+// SPDX-License-Identifier: MIT
+
 // Package ports defines the port interfaces for Docker operations.
 // These interfaces abstract the Docker client implementation, enabling
 // easy testing with mocks and future SDK migrations.

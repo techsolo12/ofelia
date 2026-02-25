@@ -1,3 +1,6 @@
+// Copyright (c) 2025-2026 Netresearch DTT GmbH
+// SPDX-License-Identifier: MIT
+
 // Package domain contains SDK-agnostic domain models for Docker operations.
 // These types are designed to be independent of any specific Docker client implementation.
 package domain

@@ -1,6 +1,8 @@
 //go:build e2e
 // +build e2e
 
+// Copyright (c) 2025-2026 Netresearch DTT GmbH
+// SPDX-License-Identifier: MIT
 package e2e
 
 import (

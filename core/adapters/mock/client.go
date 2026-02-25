@@ -1,3 +1,6 @@
+// Copyright (c) 2025-2026 Netresearch DTT GmbH
+// SPDX-License-Identifier: MIT
+
 // Package mock provides mock implementations of the ports interfaces for testing.
 package mock
 
