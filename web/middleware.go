@@ -34,10 +34,12 @@ func securityHeaders(next http.Handler) http.Handler {
 
 // rateLimiter provides basic rate limiting per IP
 type rateLimiter struct {
-	requests map[string][]time.Time
-	mu       sync.RWMutex
-	limit    int
-	window   time.Duration
+	requests  map[string][]time.Time
+	mu        sync.RWMutex
+	limit     int
+	window    time.Duration
+	done      chan struct{}
+	closeOnce sync.Once
 }
 
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
@@ -45,19 +47,27 @@ func newRateLimiter(limit int, window time.Duration) *rateLimiter {
 		requests: make(map[string][]time.Time),
 		limit:    limit,
 		window:   window,
+		done:     make(chan struct{}),
 	}
 
 	// Clean up old entries periodically
 	go func() {
 		ticker := time.NewTicker(window)
 		defer ticker.Stop()
-		for range ticker.C {
-			rl.cleanup()
+		for {
+			select {
+			case <-ticker.C:
+				rl.cleanup()
+			case <-rl.done:
+				return
+			}
 		}
 	}()
 
 	return rl
 }
+
+func (rl *rateLimiter) close() { rl.closeOnce.Do(func() { close(rl.done) }) }
 
 func (rl *rateLimiter) cleanup() {
 	rl.mu.Lock()
@@ -80,6 +90,11 @@ func (rl *rateLimiter) cleanup() {
 	}
 }
 
+// middleware wraps an http.Handler with per-IP rate limiting. The client IP
+// is determined from the X-Forwarded-For header when present, falling back to
+// r.RemoteAddr. Because X-Forwarded-For can be spoofed by the client, this
+// rate limiter should only be deployed behind a trusted reverse proxy that
+// overwrites or sanitizes the header before forwarding requests.
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := r.RemoteAddr

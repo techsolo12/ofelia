@@ -79,7 +79,7 @@ func TestRunJobHandler_OK_and_NotFound(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPost, "/api/jobs/run", bytes.NewReader(body))
 	w = httptest.NewRecorder()
 	httpSrv.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusBadRequest {
+	if w.Code != http.StatusNotFound {
 		t.Fatalf("run notfound: unexpected status %d", w.Code)
 	}
 }
@@ -131,13 +131,13 @@ func TestCreateUpdateDeleteHandlers_Local(t *testing.T) {
 		t.Fatalf("create: job missing")
 	}
 
-	// update local
+	// update local (existing job returns 200 OK, not 201 Created)
 	body = []byte(`{"name":"loc1","type":"local","schedule":"@hourly","command":"echo hi"}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/jobs/update", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w = httptest.NewRecorder()
 	httpSrv.Handler.ServeHTTP(w, req)
-	if w.Code != http.StatusCreated {
+	if w.Code != http.StatusOK {
 		t.Fatalf("update: unexpected %d", w.Code)
 	}
 

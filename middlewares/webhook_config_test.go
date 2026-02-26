@@ -213,3 +213,78 @@ func TestWebhookData_Construction(t *testing.T) {
 	assert.Equal(t, "test-job", data.Job.Name)
 	assert.Equal(t, "success", data.Execution.Status)
 }
+
+// Phase 8: Additional coverage tests for webhook_config.go
+
+func TestWebhookConfig_Validate_NegativeTimeout(t *testing.T) {
+	t.Parallel()
+
+	config := &WebhookConfig{Name: "test", Preset: "slack", Timeout: -1 * time.Second}
+	err := config.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "timeout cannot be negative")
+}
+
+func TestWebhookConfig_Validate_NegativeRetryCount(t *testing.T) {
+	t.Parallel()
+
+	config := &WebhookConfig{Name: "test", Preset: "slack", RetryCount: -1}
+	err := config.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "retry-count cannot be negative")
+}
+
+func TestWebhookConfig_Validate_NegativeRetryDelay(t *testing.T) {
+	t.Parallel()
+
+	config := &WebhookConfig{Name: "test", Preset: "slack", RetryDelay: -1 * time.Second}
+	err := config.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "retry-delay cannot be negative")
+}
+
+func TestWebhookConfig_Validate_URLWithoutPreset(t *testing.T) {
+	t.Parallel()
+
+	config := &WebhookConfig{Name: "test", URL: "https://example.com/webhook"}
+	err := config.Validate()
+	require.NoError(t, err, "URL without preset should be valid")
+}
+
+func TestWebhookConfig_Validate_AllValidTriggers(t *testing.T) {
+	t.Parallel()
+
+	triggers := []TriggerType{TriggerAlways, TriggerError, TriggerSuccess, TriggerSkipped, ""}
+	for _, trigger := range triggers {
+		t.Run(string(trigger), func(t *testing.T) {
+			t.Parallel()
+			config := &WebhookConfig{Name: "test", Preset: "slack", Trigger: trigger}
+			err := config.Validate()
+			require.NoError(t, err, "trigger %q should be valid", trigger)
+		})
+	}
+}
+
+func TestWebhookConfig_ApplyDefaults_PreservesExistingValues(t *testing.T) {
+	t.Parallel()
+
+	config := &WebhookConfig{
+		Name: "test", Preset: "slack",
+		Trigger: TriggerAlways, Timeout: 30 * time.Second,
+		RetryCount: 5, RetryDelay: 10 * time.Second,
+	}
+	config.ApplyDefaults()
+
+	assert.Equal(t, TriggerAlways, config.Trigger)
+	assert.Equal(t, 30*time.Second, config.Timeout)
+	assert.Equal(t, 5, config.RetryCount)
+	assert.Equal(t, 10*time.Second, config.RetryDelay)
+}
+
+func TestWebhookConfig_ShouldNotify_DefaultTrigger(t *testing.T) {
+	t.Parallel()
+
+	config := &WebhookConfig{Trigger: ""}
+	assert.True(t, config.ShouldNotify(true, false), "default trigger should notify on failure")
+	assert.False(t, config.ShouldNotify(false, false), "default trigger should not notify on success")
+}

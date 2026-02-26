@@ -321,6 +321,9 @@ func randomID() (string, error) {
 
 const HashmeTagName = "hash"
 
+// hashmeTagEnabled is the struct tag value that enables hashing for a field.
+const hashmeTagEnabled = "true"
+
 func GetHash(t reflect.Type, v reflect.Value, hash *string) error {
 	for field := range t.Fields() {
 		fieldv := v.FieldByIndex(field.Index)
@@ -334,7 +337,7 @@ func GetHash(t reflect.Type, v reflect.Value, hash *string) error {
 		}
 
 		hashmeTag := field.Tag.Get(HashmeTagName)
-		if hashmeTag != "true" {
+		if hashmeTag != hashmeTagEnabled {
 			continue
 		}
 

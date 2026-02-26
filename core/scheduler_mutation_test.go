@@ -330,16 +330,15 @@ func TestSchedulerStart_TriggeredJobStartup(t *testing.T) {
 	_ = sc.AddJob(triggeredNoStartup)
 	_ = sc.AddJob(regularStartup)
 
-	completedJobs := make(map[string]bool)
-	var completedMu atomic.Int32
-	sc.SetOnJobComplete(func(name string, _ bool) {
-		completedMu.Add(1)
-		// Use a simple approach since we can't safely use a map from multiple goroutines
+	// Track completed jobs by name with proper synchronization
+	completedCount := atomic.Int32{}
+	sc.SetOnJobComplete(func(_ string, _ bool) {
+		completedCount.Add(1)
 	})
 
 	_ = sc.Start()
 
-	// Wait for jobs to complete
+	// Wait for startup jobs to complete
 	time.Sleep(200 * time.Millisecond)
 
 	_ = sc.Stop()
@@ -354,8 +353,15 @@ func TestSchedulerStart_TriggeredJobStartup(t *testing.T) {
 		t.Error("Triggered job with RunOnStartup=false should NOT have run on scheduler start")
 	}
 
-	// Check completedJobs is not referenced (we used atomic counter)
-	_ = completedJobs
+	// regular-startup should have run (RunOnStartup=true with @every schedule)
+	if regularStartup.Called() == 0 {
+		t.Error("Regular job with RunOnStartup=true should have run on scheduler start")
+	}
+
+	// At least the 2 startup jobs should have completed via the callback
+	if completedCount.Load() < 2 {
+		t.Errorf("Expected at least 2 job completions from startup, got %d", completedCount.Load())
+	}
 }
 
 // TestBuildWorkflowDependencies_CircularDetection tests that circular dependencies
@@ -425,6 +431,49 @@ func TestEnableJob_DisabledJobExists(t *testing.T) {
 	err = sc.EnableJob("never-existed")
 	if err == nil {
 		t.Error("EnableJob should fail for non-existent job")
+	}
+}
+
+// --- Test EnableJob idempotency: calling EnableJob on an already-enabled job ---
+// EnableJob should be idempotent: if the job exists and is already active
+// (not in disabledNames), return nil instead of ErrJobNotFound.
+func TestEnableJob_Idempotent(t *testing.T) {
+	t.Parallel()
+
+	sc := NewScheduler(newDiscardLogger())
+
+	job := &TestJob{}
+	job.Name = "already-enabled"
+	job.Schedule = "@daily"
+	if err := sc.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	// Job is active (not disabled). EnableJob should be a no-op, not an error.
+	err := sc.EnableJob("already-enabled")
+	if err != nil {
+		t.Fatalf("EnableJob on already-enabled job should return nil, got: %v", err)
+	}
+
+	// Verify the job is still active and unchanged
+	found := sc.GetJob("already-enabled")
+	if found == nil {
+		t.Error("Job should still be active after idempotent EnableJob")
+	}
+	if found != nil && found.GetName() != "already-enabled" {
+		t.Errorf("Job name should still be 'already-enabled', got %q", found.GetName())
+	}
+
+	// Calling EnableJob multiple times should remain idempotent
+	err = sc.EnableJob("already-enabled")
+	if err != nil {
+		t.Fatalf("Second EnableJob on already-enabled job should return nil, got: %v", err)
+	}
+
+	// EnableJob for a truly non-existent job should still return ErrJobNotFound
+	err = sc.EnableJob("does-not-exist")
+	if err == nil {
+		t.Error("EnableJob for non-existent job should return error")
 	}
 }
 
@@ -618,31 +667,45 @@ func TestStopWithTimeout_Timeout(t *testing.T) {
 
 	sc := NewSchedulerWithOptions(newDiscardLogger(), nil, 10*time.Millisecond)
 
-	slowJob := &SlowTestJob{duration: 500 * time.Millisecond}
+	// Use a job that takes much longer than our timeout to ensure timeout fires
+	slowJob := &SlowTestJob{duration: 2 * time.Second}
 	slowJob.Name = "very-slow-job"
 	slowJob.Schedule = "@every 1h"
 	slowJob.RunOnStartup = true
 
 	_ = sc.AddJob(slowJob)
 
-	completed := make(chan struct{}, 1)
-	sc.SetOnJobComplete(func(_ string, _ bool) {
-		select {
-		case completed <- struct{}{}:
-		default:
-		}
-	})
-
 	_ = sc.Start()
 
-	// Give time for the startup job to begin
-	time.Sleep(50 * time.Millisecond)
+	// Give time for the startup job to begin executing
+	time.Sleep(100 * time.Millisecond)
 
-	// Stop with very short timeout - should time out
-	err := sc.StopWithTimeout(1 * time.Millisecond)
-	// Note: this may or may not time out depending on timing
-	// The important thing is that the function completes
-	_ = err
+	// Verify the job has started
+	if slowJob.called.Load() == 0 {
+		t.Fatal("Slow job should have started by now")
+	}
+
+	// Stop with a very short timeout - the job takes 2s but we only wait 1ms
+	timeout := 1 * time.Millisecond
+	start := time.Now()
+	err := sc.StopWithTimeout(timeout)
+	elapsed := time.Since(start)
+
+	// StopWithTimeout should return an error because the job is still running
+	if err == nil {
+		t.Error("StopWithTimeout should return an error when timeout is exceeded")
+	}
+
+	// Verify the function returned promptly (within a generous upper bound)
+	// and did not block for the full job duration
+	if elapsed > 1*time.Second {
+		t.Errorf("StopWithTimeout should return near the timeout duration, but took %v", elapsed)
+	}
+
+	// The scheduler should no longer be accepting new jobs (cron stopped)
+	if sc.IsRunning() {
+		t.Error("Scheduler should not be running after StopWithTimeout")
+	}
 }
 
 // --- Test UpdateJob ---
@@ -741,6 +804,56 @@ func TestEnableJob_TriggeredJob(t *testing.T) {
 	// Verify the job is back in active jobs
 	if sc.GetJob("triggered-enable") == nil {
 		t.Error("Triggered job should be active after re-enable")
+	}
+}
+
+// --- Test DisableJob idempotency: calling DisableJob twice should not fail ---
+func TestDisableJob_Idempotent(t *testing.T) {
+	t.Parallel()
+
+	sc := NewScheduler(newDiscardLogger())
+
+	job := &TestJob{}
+	job.Name = "idempotent-disable"
+	job.Schedule = "@daily"
+	_ = sc.AddJob(job)
+
+	// First disable should succeed
+	err := sc.DisableJob("idempotent-disable")
+	if err != nil {
+		t.Fatalf("First DisableJob should succeed: %v", err)
+	}
+
+	// Verify job is disabled
+	if sc.GetJob("idempotent-disable") != nil {
+		t.Error("Job should not be active after first disable")
+	}
+	if sc.GetDisabledJob("idempotent-disable") == nil {
+		t.Error("Job should be in disabled list after first disable")
+	}
+
+	// Second disable should also succeed (idempotent - no error)
+	err = sc.DisableJob("idempotent-disable")
+	if err != nil {
+		t.Fatalf("Second DisableJob should succeed (idempotent): %v", err)
+	}
+
+	// Job should still be disabled (not double-disabled or corrupted)
+	disabled := sc.GetDisabledJobs()
+	if len(disabled) != 1 {
+		t.Errorf("Expected exactly 1 disabled job after double-disable, got %d", len(disabled))
+	}
+	if disabled[0].GetName() != "idempotent-disable" {
+		t.Errorf("Expected disabled job name 'idempotent-disable', got %q", disabled[0].GetName())
+	}
+
+	// Verify the job can still be re-enabled after double disable
+	err = sc.EnableJob("idempotent-disable")
+	if err != nil {
+		t.Fatalf("EnableJob should succeed after double disable: %v", err)
+	}
+	if sc.GetJob("idempotent-disable") == nil {
+		t.Error("Job should be active again after re-enable")
 	}
 }
 
@@ -1107,5 +1220,204 @@ func TestRecordWorkflowMetrics_EmptyResults(t *testing.T) {
 	// No individual job results
 	if len(capture.jobResults) != 0 {
 		t.Errorf("Expected 0 job results, got %d", len(capture.jobResults))
+	}
+}
+
+// ============================================================================
+// Tests for GetAnyJob and GetActiveJobs (Finding 1: CRITICAL - 0% coverage)
+// ============================================================================
+
+func TestGetAnyJob_Active(t *testing.T) {
+	t.Parallel()
+
+	sc := NewScheduler(newDiscardLogger())
+
+	job := &TestJob{}
+	job.Name = "any-active"
+	job.Schedule = "@daily"
+	if err := sc.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	found := sc.GetAnyJob("any-active")
+	if found == nil {
+		t.Fatal("GetAnyJob should find an active job")
+	}
+	if found.GetName() != "any-active" {
+		t.Errorf("GetAnyJob returned wrong job, got %q", found.GetName())
+	}
+}
+
+func TestGetAnyJob_Disabled(t *testing.T) {
+	t.Parallel()
+
+	sc := NewScheduler(newDiscardLogger())
+
+	job := &TestJob{}
+	job.Name = "any-disabled"
+	job.Schedule = "@daily"
+	if err := sc.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	// Disable the job
+	if err := sc.DisableJob("any-disabled"); err != nil {
+		t.Fatalf("DisableJob: %v", err)
+	}
+
+	// GetJob should NOT find a disabled job
+	if sc.GetJob("any-disabled") != nil {
+		t.Error("GetJob should return nil for a disabled job")
+	}
+
+	// GetAnyJob SHOULD still find a disabled job
+	found := sc.GetAnyJob("any-disabled")
+	if found == nil {
+		t.Fatal("GetAnyJob should find a disabled job (unlike GetJob)")
+	}
+	if found.GetName() != "any-disabled" {
+		t.Errorf("GetAnyJob returned wrong job, got %q", found.GetName())
+	}
+}
+
+func TestGetAnyJob_NotFound(t *testing.T) {
+	t.Parallel()
+
+	sc := NewScheduler(newDiscardLogger())
+
+	found := sc.GetAnyJob("nonexistent")
+	if found != nil {
+		t.Errorf("GetAnyJob should return nil for nonexistent job, got %v", found)
+	}
+}
+
+func TestGetActiveJobs_FiltersDisabled(t *testing.T) {
+	t.Parallel()
+
+	sc := NewScheduler(newDiscardLogger())
+
+	job1 := &TestJob{}
+	job1.Name = "active-job"
+	job1.Schedule = "@daily"
+	if err := sc.AddJob(job1); err != nil {
+		t.Fatalf("AddJob job1: %v", err)
+	}
+
+	job2 := &TestJob{}
+	job2.Name = "disabled-job"
+	job2.Schedule = "@hourly"
+	if err := sc.AddJob(job2); err != nil {
+		t.Fatalf("AddJob job2: %v", err)
+	}
+
+	// Disable one job
+	if err := sc.DisableJob("disabled-job"); err != nil {
+		t.Fatalf("DisableJob: %v", err)
+	}
+
+	active := sc.GetActiveJobs()
+	if len(active) != 1 {
+		t.Fatalf("GetActiveJobs should return 1 active job, got %d", len(active))
+	}
+	if active[0].GetName() != "active-job" {
+		t.Errorf("GetActiveJobs returned wrong job, got %q", active[0].GetName())
+	}
+}
+
+func TestGetActiveJobs_Empty(t *testing.T) {
+	t.Parallel()
+
+	sc := NewScheduler(newDiscardLogger())
+
+	active := sc.GetActiveJobs()
+	if len(active) != 0 {
+		t.Errorf("GetActiveJobs should return empty slice on empty scheduler, got %d", len(active))
+	}
+}
+
+func TestGetActiveJobs_AllDisabled(t *testing.T) {
+	t.Parallel()
+
+	sc := NewScheduler(newDiscardLogger())
+
+	job := &TestJob{}
+	job.Name = "will-disable"
+	job.Schedule = "@daily"
+	if err := sc.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	if err := sc.DisableJob("will-disable"); err != nil {
+		t.Fatalf("DisableJob: %v", err)
+	}
+
+	active := sc.GetActiveJobs()
+	if len(active) != 0 {
+		t.Errorf("GetActiveJobs should return empty slice when all jobs disabled, got %d", len(active))
+	}
+}
+
+// ============================================================================
+// Tests for lookupJob fallback path (Finding 4: IMPORTANT - fallback untested)
+// ============================================================================
+
+func TestLookupJob_FallbackWithoutMap(t *testing.T) {
+	t.Parallel()
+
+	// Create a Scheduler struct directly (not via NewScheduler)
+	// so jobsByName is nil, forcing the linear scan fallback in lookupJob.
+	job := &TestJob{}
+	job.Name = "fallback-job"
+	job.Schedule = "@daily"
+
+	sc := &Scheduler{
+		Logger:     newDiscardLogger(),
+		Jobs:       []Job{job},
+		jobsByName: nil, // explicitly nil to trigger fallback
+	}
+
+	// lookupJob is called by GetJob (when job is not disabled) and GetDisabledJob.
+	// Since disabledNames is nil/empty, GetJob will call lookupJob, which should
+	// fall back to linear scan since jobsByName is nil.
+	found := sc.GetJob("fallback-job")
+	if found == nil {
+		t.Fatal("GetJob should find the job via lookupJob's linear scan fallback")
+	}
+	if found.GetName() != "fallback-job" {
+		t.Errorf("GetJob returned wrong job, got %q", found.GetName())
+	}
+
+	// Verify not-found returns nil via the fallback path
+	notFound := sc.GetJob("does-not-exist")
+	if notFound != nil {
+		t.Error("GetJob should return nil for nonexistent job via fallback path")
+	}
+}
+
+func TestGetAnyJob_FallbackWithoutMap(t *testing.T) {
+	t.Parallel()
+
+	// Also exercise GetAnyJob's fallback path when jobsByName is nil.
+	job := &TestJob{}
+	job.Name = "any-fallback"
+	job.Schedule = "@daily"
+
+	sc := &Scheduler{
+		Logger:     newDiscardLogger(),
+		Jobs:       []Job{job},
+		jobsByName: nil, // nil to trigger fallback in GetAnyJob
+	}
+
+	found := sc.GetAnyJob("any-fallback")
+	if found == nil {
+		t.Fatal("GetAnyJob should find the job via fallback linear scan")
+	}
+	if found.GetName() != "any-fallback" {
+		t.Errorf("GetAnyJob returned wrong job, got %q", found.GetName())
+	}
+
+	notFound := sc.GetAnyJob("does-not-exist")
+	if notFound != nil {
+		t.Error("GetAnyJob should return nil for nonexistent job via fallback path")
 	}
 }

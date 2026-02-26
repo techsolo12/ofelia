@@ -23,6 +23,12 @@ func TestOverlapRun(t *testing.T) {
 	require.NoError(t, m.Run(ctx))
 }
 
+func TestOverlap_ContinueOnStop(t *testing.T) {
+	t.Parallel()
+	m := &Overlap{}
+	assert.False(t, m.ContinueOnStop(), "Overlap.ContinueOnStop() should return false")
+}
+
 func TestOverlapRunOverlap(t *testing.T) {
 	t.Parallel()
 	ctx, _ := setupTestContext(t)

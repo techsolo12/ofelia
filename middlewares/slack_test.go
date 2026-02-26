@@ -96,6 +96,12 @@ func TestSlackCustomHTTPClient(t *testing.T) {
 	require.NoError(t, m.Run(ctx))
 }
 
+func TestSlack_ContinueOnStop(t *testing.T) {
+	t.Parallel()
+	m := &Slack{}
+	assert.True(t, m.ContinueOnStop(), "Slack.ContinueOnStop() should return true")
+}
+
 func TestSlackDedupSuppressesDuplicateErrors(t *testing.T) {
 	t.Parallel()
 

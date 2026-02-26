@@ -312,3 +312,94 @@ func TestSaveConfig_GetRestoreHistoryMaxAge(t *testing.T) {
 		assert.Equal(t, 48*time.Hour, cfg.GetRestoreHistoryMaxAge())
 	})
 }
+
+// Phase 8: Additional coverage tests for restore.go
+
+func TestRestoreHistory_SkipsEmptyJobName(t *testing.T) {
+	dir := t.TempDir()
+	job := &core.BareJob{Name: "test-job", HistoryLimit: 10}
+
+	execTime := time.Now().Add(-1 * time.Hour)
+	savedData := map[string]any{
+		"Job":       map[string]any{"Name": ""},
+		"Execution": map[string]any{"ID": "exec-1", "Date": execTime, "Duration": float64(5 * time.Second), "Failed": false, "Skipped": false},
+	}
+
+	jsonData, _ := json.MarshalIndent(savedData, "", "  ")
+	filename := filepath.Join(dir, execTime.Format("20060102_150405")+"_empty.json")
+	err := os.WriteFile(filename, jsonData, 0o600)
+	require.NoError(t, err)
+
+	err = RestoreHistory(dir, 24*time.Hour, []core.Job{job}, newDiscardLogger())
+	require.NoError(t, err)
+	assert.Empty(t, job.GetHistory(), "Empty job name should be skipped")
+}
+
+func TestRestoreHistory_SkipsNonJSONFiles(t *testing.T) {
+	dir := t.TempDir()
+	job := &core.BareJob{Name: "test-job", HistoryLimit: 10}
+
+	err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("not json"), 0o600)
+	require.NoError(t, err)
+	err = os.WriteFile(filepath.Join(dir, "data.yaml"), []byte("key: value"), 0o600)
+	require.NoError(t, err)
+
+	err = RestoreHistory(dir, 24*time.Hour, []core.Job{job}, newDiscardLogger())
+	require.NoError(t, err)
+	assert.Empty(t, job.GetHistory(), "Non-JSON files should be ignored")
+}
+
+func TestRestoreHistory_MultipleJobsMatchCorrectly(t *testing.T) {
+	dir := t.TempDir()
+	job1 := &core.BareJob{Name: "job-alpha", HistoryLimit: 10}
+	job2 := &core.BareJob{Name: "job-beta", HistoryLimit: 10}
+
+	execTime1 := time.Now().Add(-1 * time.Hour)
+	data1 := map[string]any{
+		"Job":       map[string]any{"Name": "job-alpha"},
+		"Execution": map[string]any{"ID": "alpha-1", "Date": execTime1, "Duration": float64(time.Second), "Failed": false, "Skipped": false},
+	}
+	jsonData1, _ := json.MarshalIndent(data1, "", "  ")
+	err := os.WriteFile(filepath.Join(dir, execTime1.Format("20060102_150405")+"_job-alpha.json"), jsonData1, 0o600)
+	require.NoError(t, err)
+
+	execTime2 := time.Now().Add(-2 * time.Hour)
+	data2 := map[string]any{
+		"Job":       map[string]any{"Name": "job-beta"},
+		"Execution": map[string]any{"ID": "beta-1", "Date": execTime2, "Duration": float64(time.Second), "Failed": true, "Skipped": false},
+	}
+	jsonData2, _ := json.MarshalIndent(data2, "", "  ")
+	err = os.WriteFile(filepath.Join(dir, execTime2.Format("20060102_150405")+"_job-beta.json"), jsonData2, 0o600)
+	require.NoError(t, err)
+
+	err = RestoreHistory(dir, 24*time.Hour, []core.Job{job1, job2}, newDiscardLogger())
+	require.NoError(t, err)
+
+	history1 := job1.GetHistory()
+	require.Len(t, history1, 1)
+	assert.Equal(t, "alpha-1", history1[0].ID)
+
+	history2 := job2.GetHistory()
+	require.Len(t, history2, 1)
+	assert.Equal(t, "beta-1", history2[0].ID)
+	assert.True(t, history2[0].Failed)
+}
+
+func TestRestoreHistory_CorruptedJSONFields(t *testing.T) {
+	dir := t.TempDir()
+	job := &core.BareJob{Name: "test-job", HistoryLimit: 10}
+
+	execTime := time.Now().Add(-1 * time.Hour)
+	savedData := map[string]any{
+		"Job": map[string]any{"Name": "test-job"},
+	}
+
+	jsonData, _ := json.MarshalIndent(savedData, "", "  ")
+	filename := filepath.Join(dir, execTime.Format("20060102_150405")+"_test-job.json")
+	err := os.WriteFile(filename, jsonData, 0o600)
+	require.NoError(t, err)
+
+	err = RestoreHistory(dir, 24*time.Hour, []core.Job{job}, newDiscardLogger())
+	require.NoError(t, err)
+	assert.Empty(t, job.GetHistory(), "Missing Execution data should be skipped")
+}

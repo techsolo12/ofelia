@@ -4,6 +4,7 @@
 package middlewares
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -153,6 +154,12 @@ func TestSaveCreatesSaveFolder(t *testing.T) {
 	assert.True(t, fi.IsDir())
 }
 
+func TestSave_ContinueOnStop(t *testing.T) {
+	t.Parallel()
+	m := &Save{}
+	assert.True(t, m.ContinueOnStop(), "Save.ContinueOnStop() should return true")
+}
+
 func TestSaveSafeFilename(t *testing.T) {
 	t.Parallel()
 	ctx, job := setupSaveTestContext(t)
@@ -171,4 +178,48 @@ func TestSaveSafeFilename(t *testing.T) {
 	safe := strings.NewReplacer("/", "_", "\\", "_").Replace(job.Name)
 	_, err := os.Stat(filepath.Join(dir, "00010101_000000_"+safe+".stdout.log"))
 	require.NoError(t, err)
+}
+
+// Phase 8: Additional coverage tests for save.go
+
+func TestSaveConfig_RestoreHistoryEnabled_NilPointer(t *testing.T) {
+	t.Parallel()
+
+	cfg := SaveConfig{RestoreHistory: nil, SaveFolder: ""}
+	assert.False(t, cfg.RestoreHistoryEnabled(), "nil RestoreHistory with empty SaveFolder should be false")
+}
+
+func TestSaveConfig_GetRestoreHistoryMaxAge_ZeroReturnsDefault(t *testing.T) {
+	t.Parallel()
+
+	cfg := SaveConfig{RestoreHistoryMaxAge: 0}
+	assert.Equal(t, 24*time.Hour, cfg.GetRestoreHistoryMaxAge())
+}
+
+func TestSaveConfig_GetRestoreHistoryMaxAge_NegativeReturnsDefault(t *testing.T) {
+	t.Parallel()
+
+	cfg := SaveConfig{RestoreHistoryMaxAge: -1 * time.Hour}
+	assert.Equal(t, 24*time.Hour, cfg.GetRestoreHistoryMaxAge())
+}
+
+func TestSaveRunOnlyOnError_Saves(t *testing.T) {
+	t.Parallel()
+	ctx, job := setupSaveTestContext(t)
+
+	dir := t.TempDir()
+
+	ctx.Start()
+	ctx.Stop(fmt.Errorf("simulated failure"))
+	ctx.Execution.Failed = true
+
+	job.Name = "error-job"
+	ctx.Execution.Date = time.Time{}
+
+	trueVal := true
+	m := NewSave(&SaveConfig{SaveFolder: dir, SaveOnlyOnError: &trueVal})
+	require.NoError(t, m.Run(ctx))
+
+	_, err := os.Stat(filepath.Join(dir, "00010101_000000_error-job.json"))
+	require.NoError(t, err, "JSON file should exist when save-only-on-error is set and job failed")
 }

@@ -4,6 +4,7 @@
 package middlewares
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -455,4 +456,78 @@ func TestWebhookSecurityIPv6URLs(t *testing.T) {
 
 	err = validator.Validate("http://[2001:db8::99]:8080/webhook")
 	assert.Error(t, err, "Non-whitelisted IPv6 host should fail")
+}
+
+// Phase 8: Additional coverage tests for webhook_security.go
+
+func TestSecurityValidator_WhitelistBlocksNonListed(t *testing.T) {
+	t.Parallel()
+
+	config := &WebhookSecurityConfig{AllowedHosts: []string{"hooks.slack.com"}}
+	validator := NewWebhookSecurityValidator(config)
+
+	err := validator.Validate("https://not-allowed.example.com/webhook")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not in allowed hosts")
+}
+
+func TestSecurityValidator_InvalidSchemes(t *testing.T) {
+	t.Parallel()
+
+	validator := NewWebhookSecurityValidator(&WebhookSecurityConfig{AllowedHosts: []string{"*"}})
+	schemes := []string{"ftp://example.com/file", "file:///etc/passwd", "gopher://example.com/"}
+	for _, u := range schemes {
+		err := validator.Validate(u)
+		require.Error(t, err, "scheme in %q should be rejected", u)
+		assert.Contains(t, err.Error(), "http or https")
+	}
+}
+
+func TestSecurityValidator_EmptyHostname(t *testing.T) {
+	t.Parallel()
+
+	validator := NewWebhookSecurityValidator(nil)
+	err := validator.Validate("http:///path-only")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hostname")
+}
+
+func TestSecurityConfigFromGlobal_MultipleHostsWithWhitespace(t *testing.T) {
+	t.Parallel()
+
+	global := &WebhookGlobalConfig{AllowedHosts: "  hooks.slack.com ,  ntfy.local  ,  *.internal.example.com  "}
+	config := SecurityConfigFromGlobal(global)
+
+	assert.Len(t, config.AllowedHosts, 3)
+	assert.Equal(t, "hooks.slack.com", config.AllowedHosts[0])
+	assert.Equal(t, "ntfy.local", config.AllowedHosts[1])
+	assert.Equal(t, "*.internal.example.com", config.AllowedHosts[2])
+}
+
+func TestSetValidateWebhookURLForTest(t *testing.T) {
+	defer SetGlobalSecurityConfig(nil)
+
+	called := false
+	SetValidateWebhookURLForTest(func(_ string) error {
+		called = true
+		return nil
+	})
+
+	err := ValidateWebhookURL("http://example.com/test")
+	require.NoError(t, err)
+	assert.True(t, called, "Custom validator should have been called")
+}
+
+func TestSetTransportFactoryForTest(t *testing.T) {
+	defer SetGlobalSecurityConfig(nil)
+
+	called := false
+	SetTransportFactoryForTest(func() *http.Transport {
+		called = true
+		return &http.Transport{}
+	})
+
+	transport := TransportFactory()
+	assert.NotNil(t, transport)
+	assert.True(t, called, "Custom transport factory should have been called")
 }

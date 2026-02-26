@@ -86,6 +86,53 @@ func TestPathSanitizer_ValidateSaveFolder(t *testing.T) {
 	}
 }
 
+func TestSanitizePath_PackageLevel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"normal relative path", "logs/app.log", "logs_app.log"},
+		{"traversal attack", "../../etc/shadow", "____etc_shadow"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := SanitizePath(tt.input)
+			if result != tt.expected {
+				t.Errorf("SanitizePath(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSanitizeFilename_PackageLevel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"normal filename", "report.pdf", "report.pdf"},
+		{"special chars", "file|name.txt", "file_name.txt"},
+		{"empty becomes unnamed", "", "unnamed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := SanitizeFilename(tt.input)
+			if result != tt.expected {
+				t.Errorf("SanitizeFilename(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
 func TestSanitizeJobName(t *testing.T) {
 	tests := []struct {
 		name     string

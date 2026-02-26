@@ -6,11 +6,13 @@ package web
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io/fs"
 	"net/http"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gobs/args"
@@ -27,10 +29,12 @@ type Server struct {
 	config       any
 	srv          *http.Server
 	origins      map[string]string
+	originsMu    sync.RWMutex
 	provider     core.DockerProvider
 	authConfig   *SecureAuthConfig
 	tokenManager *SecureTokenManager
 	loginLimiter *RateLimiter
+	rl           *rateLimiter
 }
 
 // HTTPServer returns the underlying http.Server used by the web interface. It
@@ -75,7 +79,7 @@ func NewServerWithAuth(addr string, s *core.Scheduler, cfg any, provider core.Do
 
 	mux := http.NewServeMux()
 
-	rl := newRateLimiter(100, time.Minute)
+	server.rl = newRateLimiter(100, time.Minute)
 
 	if server.authConfig != nil && server.authConfig.Enabled {
 		loginHandler := NewSecureLoginHandler(server.authConfig, server.tokenManager, server.loginLimiter)
@@ -106,7 +110,7 @@ func NewServerWithAuth(addr string, s *core.Scheduler, cfg any, provider core.Do
 
 	var handler http.Handler = mux
 	handler = securityHeaders(handler)
-	handler = rl.middleware(handler)
+	handler = server.rl.middleware(handler)
 
 	if server.authConfig != nil && server.authConfig.Enabled {
 		handler = server.authMiddleware(handler)
@@ -125,6 +129,12 @@ func NewServerWithAuth(addr string, s *core.Scheduler, cfg any, provider core.Do
 func (s *Server) Start() error { go func() { _ = s.srv.ListenAndServe() }(); return nil }
 
 func (s *Server) Shutdown(ctx context.Context) error {
+	if s.rl != nil {
+		s.rl.close()
+	}
+	if s.tokenManager != nil {
+		s.tokenManager.Close()
+	}
 	if err := s.srv.Shutdown(ctx); err != nil {
 		return fmt.Errorf("shutdown http server: %w", err)
 	}
@@ -168,10 +178,13 @@ func (s *Server) RegisterHealthEndpoints(hc *HealthChecker) {
 		mux.Handle("/", http.FileServer(http.FS(uiFS)))
 	}
 
-	rl := newRateLimiter(100, time.Minute)
+	if s.rl != nil {
+		s.rl.close()
+	}
+	s.rl = newRateLimiter(100, time.Minute)
 	var handler http.Handler = mux
 	handler = securityHeaders(handler)
-	handler = rl.middleware(handler)
+	handler = s.rl.middleware(handler)
 
 	if s.authConfig != nil && s.authConfig.Enabled {
 		handler = s.authMiddleware(handler)
@@ -234,7 +247,10 @@ func jobOrigin(cfg any, name string) string {
 }
 
 func (s *Server) jobOrigin(name string) string {
-	if o, ok := s.origins[name]; ok {
+	s.originsMu.RLock()
+	o, ok := s.origins[name]
+	s.originsMu.RUnlock()
+	if ok {
 		return o
 	}
 	return jobOrigin(s.config, name)
@@ -356,48 +372,94 @@ type jobRequest struct {
 	ExecFlag  bool   `json:"exec,omitempty"`
 }
 
+// validateJobName checks that a job name is non-empty, not too long, and does
+// not contain control characters.
+func validateJobName(name string) error {
+	if name == "" {
+		return fmt.Errorf("job name must not be empty")
+	}
+	if len(name) > 256 {
+		return fmt.Errorf("job name exceeds maximum length of 256 characters")
+	}
+	for _, r := range name {
+		if r < 32 || r == 127 {
+			return fmt.Errorf("job name contains invalid control character")
+		}
+	}
+	return nil
+}
+
 func (s *Server) runJobHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := validateJobName(req.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if err := s.scheduler.RunJob(r.Context(), req.Name); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		if errors.Is(err, core.ErrJobNotFound) {
+			http.Error(w, "job not found", http.StatusNotFound)
+		} else {
+			s.scheduler.Logger.Error("run job failed", "job", req.Name, "error", err)
+			http.Error(w, "failed to run job", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) disableJobHandler(w http.ResponseWriter, r *http.Request) {
-	var req jobRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.scheduler.DisableJob(req.Name); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	s.toggleJobHandler(w, r, s.scheduler.DisableJob, "disable")
 }
 
 func (s *Server) enableJobHandler(w http.ResponseWriter, r *http.Request) {
+	s.toggleJobHandler(w, r, s.scheduler.EnableJob, "enable")
+}
+
+func (s *Server) toggleJobHandler(w http.ResponseWriter, r *http.Request, toggle func(string) error, action string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := validateJobName(req.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.scheduler.EnableJob(req.Name); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := toggle(req.Name); err != nil {
+		if errors.Is(err, core.ErrJobNotFound) {
+			http.Error(w, "job not found", http.StatusNotFound)
+		} else {
+			s.scheduler.Logger.Error(action+" job failed", "job", req.Name, "error", err)
+			http.Error(w, "failed to "+action+" job", http.StatusInternalServerError)
+		}
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) createJobHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := validateJobName(req.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -407,20 +469,31 @@ func (s *Server) createJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.scheduler.AddJob(job); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		s.scheduler.Logger.Error("create job failed", "job", req.Name, "error", err)
+		http.Error(w, "failed to create job", http.StatusBadRequest)
 		return
 	}
 	origin := r.Header.Get("X-Origin")
 	if origin == "" {
 		origin = "api"
 	}
+	s.originsMu.Lock()
 	s.origins[req.Name] = origin
+	s.originsMu.Unlock()
 	w.WriteHeader(http.StatusCreated)
 }
 
 func (s *Server) updateJobHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := validateJobName(req.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -431,23 +504,33 @@ func (s *Server) updateJobHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Try atomic update first; fall back to remove+add for new jobs
+	status := http.StatusOK
 	if err := s.scheduler.UpdateJob(req.Name, req.Schedule, job); err != nil {
+		if !errors.Is(err, core.ErrJobNotFound) {
+			s.scheduler.Logger.Error("update job failed", "job", req.Name, "error", err)
+			http.Error(w, "failed to update job", http.StatusInternalServerError)
+			return
+		}
 		// Job doesn't exist yet — remove any remnant and add fresh
 		if old := s.scheduler.GetAnyJob(req.Name); old != nil {
 			_ = s.scheduler.RemoveJob(old)
 		}
 		if err := s.scheduler.AddJob(job); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			s.scheduler.Logger.Error("add job failed during update", "job", req.Name, "error", err)
+			http.Error(w, "failed to create job", http.StatusBadRequest)
 			return
 		}
+		status = http.StatusCreated
 	}
 
 	origin := r.Header.Get("X-Origin")
 	if origin == "" {
 		origin = "api"
 	}
+	s.originsMu.Lock()
 	s.origins[req.Name] = origin
-	w.WriteHeader(http.StatusCreated)
+	s.originsMu.Unlock()
+	w.WriteHeader(status)
 }
 
 func (s *Server) jobFromRequest(req *jobRequest) (core.Job, error) {
@@ -519,8 +602,16 @@ func (s *Server) jobFromRequest(req *jobRequest) (core.Job, error) {
 }
 
 func (s *Server) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	var req jobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	if err := validateJobName(req.Name); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -530,7 +621,9 @@ func (s *Server) deleteJobHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.scheduler.RemoveJob(j)
+	s.originsMu.Lock()
 	delete(s.origins, req.Name)
+	s.originsMu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -656,10 +749,14 @@ func (s *Server) authStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data, valid := s.tokenManager.ValidateToken(token)
+	username := ""
+	if data != nil {
+		username = data.Username
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"authEnabled":   true,
 		"authenticated": valid,
-		"username":      data.Username,
+		"username":      username,
 	})
 }
 

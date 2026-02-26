@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -257,4 +258,50 @@ func TestServerTimeouts_NotMutated(t *testing.T) {
 		"IdleTimeout must be greater than 1 minute")
 	assert.LessOrEqual(t, httpSrv.IdleTimeout, 2*time.Minute,
 		"IdleTimeout must be at most 2 minutes")
+}
+
+// ============================================================================
+// Tests for validateJobName edge cases (Finding 3: SUGGESTION - control
+// character and length limit branches untested)
+// ============================================================================
+
+func TestValidateJobName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+	}{
+		{"empty", "", true},
+		{"valid simple", "my-job", false},
+		{"valid with unicode", "mon-job-\u00e9t\u00e9", false},
+		{"valid with dots", "job.name.v2", false},
+		{"valid with underscores", "my_job_1", false},
+		{"tab character", "my\tjob", true},
+		{"null byte", "my\x00job", true},
+		{"DEL character", "my\x7Fjob", true},
+		{"newline", "my\njob", true},
+		{"carriage return", "my\rjob", true},
+		{"bell character", "my\x07job", true},
+		{"escape character", "my\x1Bjob", true},
+		{"control char at start", "\x01job", true},
+		{"control char at end", "job\x1F", true},
+		{"too long", strings.Repeat("a", 257), true},
+		{"max length exactly", strings.Repeat("a", 256), false},
+		{"one over max", strings.Repeat("b", 257), true},
+		{"one under max", strings.Repeat("c", 255), false},
+		{"single character", "x", false},
+		{"spaces allowed", "my job name", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := validateJobName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateJobName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+		})
+	}
 }

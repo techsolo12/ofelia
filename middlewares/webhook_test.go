@@ -384,3 +384,221 @@ func TestWebhook_BuildWebhookData_Error(t *testing.T) {
 	assert.True(t, data.Execution.Failed)
 	assert.Equal(t, "failed", data.Execution.Status)
 }
+
+func TestWebhookManager_GetMiddlewares_TableDriven(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		register    []string
+		lookup      []string
+		wantCount   int
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:      "known webhook returns middleware",
+			register:  []string{"alert"},
+			lookup:    []string{"alert"},
+			wantCount: 1,
+		},
+		{
+			name:        "unknown webhook returns error",
+			register:    []string{},
+			lookup:      []string{"missing"},
+			wantErr:     true,
+			errContains: "not found",
+		},
+		{
+			name:      "empty name in lookup is skipped",
+			register:  []string{"alert"},
+			lookup:    []string{"", "alert", "  "},
+			wantCount: 1,
+		},
+		{
+			name:      "multiple known webhooks",
+			register:  []string{"slack-alert", "discord-alert"},
+			lookup:    []string{"slack-alert", "discord-alert"},
+			wantCount: 2,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			manager := NewWebhookManager(DefaultWebhookGlobalConfig())
+
+			for _, name := range tt.register {
+				err := manager.Register(&WebhookConfig{
+					Name:   name,
+					Preset: "slack",
+					ID:     "T00000/B00000",
+					Secret: "xoxb-secret",
+				})
+				require.NoError(t, err)
+			}
+
+			mws, err := manager.GetMiddlewares(tt.lookup)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.Len(t, mws, tt.wantCount)
+		})
+	}
+}
+
+func TestWebhookManager_GetGlobalMiddlewares_TableDriven(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		webhooks  string
+		register  []string
+		wantCount int
+		wantNil   bool
+		wantErr   bool
+	}{
+		{name: "empty webhooks string returns nil", wantNil: true},
+		{name: "with names resolves", webhooks: "a1,a2", register: []string{"a1", "a2"}, wantCount: 2},
+		{name: "unknown name errors", webhooks: "nonexistent", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gc := DefaultWebhookGlobalConfig()
+			gc.Webhooks = tt.webhooks
+			manager := NewWebhookManager(gc)
+
+			for _, name := range tt.register {
+				_ = manager.Register(&WebhookConfig{Name: name, Preset: "slack", ID: "T0/B0", Secret: "s"})
+			}
+
+			mws, err := manager.GetGlobalMiddlewares()
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			if tt.wantNil {
+				assert.Nil(t, mws)
+				return
+			}
+			assert.Len(t, mws, tt.wantCount)
+		})
+	}
+}
+
+func TestNewWebhookMiddleware_Variants(t *testing.T) {
+	t.Parallel()
+
+	assert.Nil(t, NewWebhookMiddleware(nil), "nil input should return nil")
+	assert.Nil(t, NewWebhookMiddleware([]core.Middleware{}), "empty input should return nil")
+	assert.NotNil(t, NewWebhookMiddleware([]core.Middleware{&stubMW{}}), "non-empty should return middleware")
+}
+
+func TestWebhookMiddleware_ContinueOnStop(t *testing.T) {
+	t.Parallel()
+	wm := &WebhookMiddleware{webhooks: []core.Middleware{&stubMW{}}}
+	assert.True(t, wm.ContinueOnStop())
+}
+
+func TestWebhookMiddleware_Run_DispatchesToAll(t *testing.T) {
+	t.Parallel()
+
+	var called []string
+	s1 := &stubMW{onRun: func() { called = append(called, "s1") }}
+	s2 := &stubMW{onRun: func() { called = append(called, "s2") }}
+	wm := &WebhookMiddleware{webhooks: []core.Middleware{s1, s2}}
+
+	ctx, _ := setupTestContext(t)
+	ctx.Start()
+	err := wm.Run(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"s1", "s2"}, called)
+}
+
+func TestGetJobType_AllVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		job      core.Job
+		expected string
+	}{
+		{"exec job", &core.ExecJob{}, "exec"},
+		{"run job", &core.RunJob{}, "run"},
+		{"local job", &core.LocalJob{}, "local"},
+		{"run-service job", &core.RunServiceJob{}, "run-service"},
+		{"unknown job", &TestJob{}, "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, getJobType(tt.job))
+		})
+	}
+}
+
+func TestGetExecutionStatus_AllVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		exec     *core.Execution
+		expected string
+	}{
+		{"failed", &core.Execution{Failed: true}, "failed"},
+		{"skipped", &core.Execution{Skipped: true}, "skipped"},
+		{"successful", &core.Execution{}, "successful"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.expected, getExecutionStatus(tt.exec))
+		})
+	}
+}
+
+func TestParseWebhookNames_TableDriven(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{"empty string", "", nil},
+		{"single name", "slack", []string{"slack"}},
+		{"multiple names", "slack,discord", []string{"slack", "discord"}},
+		{"with spaces", " slack , discord , teams ", []string{"slack", "discord", "teams"}},
+		{"empty segments", "slack,,discord,", []string{"slack", "discord"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := ParseWebhookNames(tt.input)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+type stubMW struct {
+	onRun func()
+}
+
+func (s *stubMW) ContinueOnStop() bool { return true }
+func (s *stubMW) Run(_ *core.Context) error {
+	if s.onRun != nil {
+		s.onRun()
+	}
+	return nil
+}
