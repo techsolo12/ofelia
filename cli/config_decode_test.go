@@ -468,3 +468,131 @@ typo2 = value2
 	assert.True(t, handler.HasWarning("job-run \"job2\""),
 		"Should have warning for job2")
 }
+
+// Phase 8: Additional coverage tests for config_decode.go
+
+func TestWeakDecodeConsistent_NilInput(t *testing.T) {
+	t.Parallel()
+
+	type Config struct {
+		Name string `mapstructure:"name"`
+	}
+
+	var cfg Config
+	err := weakDecodeConsistent(nil, &cfg)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Name)
+}
+
+func TestWeakDecodeConsistent_NestedMapInput(t *testing.T) {
+	t.Parallel()
+
+	type Inner struct {
+		Value string `mapstructure:"value"`
+	}
+	type Config struct {
+		Inner Inner `mapstructure:"inner"`
+	}
+
+	input := map[string]any{
+		"inner": map[string]any{
+			"value": "nested-value",
+		},
+	}
+
+	var cfg Config
+	err := weakDecodeConsistent(input, &cfg)
+	require.NoError(t, err)
+	assert.Equal(t, "nested-value", cfg.Inner.Value)
+}
+
+func TestWeakDecodeConsistent_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	type Config struct {
+		PollInterval int `mapstructure:"poll-interval"`
+	}
+
+	input := map[string]any{
+		"Poll-Interval": 42,
+	}
+
+	var cfg Config
+	err := weakDecodeConsistent(input, &cfg)
+	require.NoError(t, err)
+	assert.Equal(t, 42, cfg.PollInterval)
+}
+
+func TestWeakDecodeConsistent_InvalidOutput(t *testing.T) {
+	t.Parallel()
+
+	var result string
+	err := weakDecodeConsistent(map[string]any{"key": "val"}, result)
+	assert.Error(t, err)
+}
+
+func TestDecodeWithMetadata_EmptyInput(t *testing.T) {
+	t.Parallel()
+
+	type Config struct {
+		Name string `mapstructure:"name"`
+	}
+
+	var cfg Config
+	result, err := decodeWithMetadata(map[string]any{}, &cfg)
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Name)
+	assert.Empty(t, result.UsedKeys)
+	assert.Empty(t, result.UnusedKeys)
+}
+
+func TestExtractMapstructureKeys_NoTagFallsBackToFieldName(t *testing.T) {
+	t.Parallel()
+
+	type Config struct {
+		NoTag   string
+		WithTag string `mapstructure:"with-tag"`
+	}
+
+	keys := extractMapstructureKeys(Config{})
+	assert.Contains(t, keys, "notag")
+	assert.Contains(t, keys, "with-tag")
+}
+
+func TestExtractMapstructureKeys_PointerType(t *testing.T) {
+	t.Parallel()
+
+	type Config struct {
+		Name string `mapstructure:"name"`
+	}
+
+	keys := extractMapstructureKeys(&Config{})
+	assert.Contains(t, keys, "name")
+}
+
+func TestExtractMapstructureKeys_NonStruct(t *testing.T) {
+	t.Parallel()
+
+	keys := extractMapstructureKeys("not-a-struct")
+	assert.Nil(t, keys)
+}
+
+func TestMergeUsedKeys_AllNil(t *testing.T) {
+	t.Parallel()
+
+	merged := mergeUsedKeys(nil, nil, nil)
+	assert.Empty(t, merged)
+}
+
+func TestMergeUsedKeys_FalseValues(t *testing.T) {
+	t.Parallel()
+
+	result := &DecodeResult{
+		UsedKeys: map[string]bool{"key1": true, "key2": false},
+	}
+
+	merged := mergeUsedKeys(result)
+	assert.True(t, merged["key1"])
+	assert.False(t, merged["key2"], "false values should not be merged")
+	assert.Len(t, merged, 1)
+}

@@ -306,3 +306,88 @@ func TestPresetCache_FilePermissions(t *testing.T) {
 	presetPerm := presetInfo.Mode().Perm()
 	assert.Equal(t, os.FileMode(0o600), presetPerm)
 }
+
+// Phase 8: Additional coverage tests for preset_cache.go
+
+func TestPresetCache_GetFromDisk_CorruptedMetadata(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cache := NewPresetCache(tempDir, time.Hour)
+
+	testURL := "https://example.com/corrupted-meta.yaml"
+	key := cache.cacheKey(testURL)
+
+	metaPath := filepath.Join(tempDir, key+".meta.yaml")
+	err := os.WriteFile(metaPath, []byte("not: valid: yaml: [corrupted"), 0o600)
+	require.NoError(t, err)
+
+	_, err = cache.Get(testURL)
+	assert.Error(t, err, "Corrupted metadata should cause Get to fail")
+}
+
+func TestPresetCache_GetFromDisk_URLCollision(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cache := NewPresetCache(tempDir, time.Hour)
+
+	urlA := "https://example.com/preset-a.yaml"
+	preset := &Preset{Name: "preset-a", Method: "POST"}
+	err := cache.Put(urlA, preset)
+	require.NoError(t, err)
+
+	cache2 := NewPresetCache(tempDir, time.Hour)
+	urlB := "https://example.com/preset-b.yaml"
+	_, err = cache2.Get(urlB)
+	assert.Error(t, err, "Different URL should not match cached preset")
+}
+
+func TestPresetCache_GetFromDisk_ExpiredEntry(t *testing.T) {
+	t.Parallel()
+
+	tempDir := t.TempDir()
+	cache := NewPresetCache(tempDir, time.Hour)
+
+	testURL := "https://example.com/expired-disk.yaml"
+	preset := &Preset{Name: "will-expire", Method: "POST"}
+	err := cache.Put(testURL, preset)
+	require.NoError(t, err)
+
+	key := cache.cacheKey(testURL)
+	metaPath := filepath.Join(tempDir, key+".meta.yaml")
+	expiredMeta := "url: " + testURL + "\nfetched_at: 2020-01-01T00:00:00Z\nexpires_at: 2020-01-01T01:00:00Z\n"
+	err = os.WriteFile(metaPath, []byte(expiredMeta), 0o600)
+	require.NoError(t, err)
+
+	cache2 := NewPresetCache(tempDir, time.Hour)
+	_, err = cache2.Get(testURL)
+	assert.Error(t, err, "Expired disk entry should cause Get to fail")
+}
+
+func TestIsMetaFile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		filename string
+		expected bool
+	}{
+		{"meta yaml file", "abc123def456.meta.yaml", true},
+		{"regular yaml file", "abc123def456.yaml", false},
+		{"short filename", "a.meta.yaml", true},
+		{"just meta yaml", ".meta.yaml", false},
+		{"json file", "abc123def456.json", false},
+		{"empty string", "", false},
+		{"exactly meta.yaml", "meta.yaml", false},
+		{"long meta yaml", "abcdefghijk.meta.yaml", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := isMetaFile(tt.filename)
+			assert.Equal(t, tt.expected, result, "isMetaFile(%q)", tt.filename)
+		})
+	}
+}
