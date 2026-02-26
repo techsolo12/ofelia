@@ -4,6 +4,9 @@
 package middlewares
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
@@ -304,5 +307,324 @@ func TestPresetLoader_TemplateRendering(t *testing.T) {
 		body, err := preset.RenderBodyWithPreset(data)
 		require.NoError(t, err, "Failed to render body for preset %s", name)
 		assert.NotEmpty(t, body, "Preset %s rendered empty body", name)
+	}
+}
+
+func TestPresetLoader_AddLocalPresetDir(t *testing.T) {
+	t.Parallel()
+
+	loader := NewPresetLoader(nil)
+	assert.Empty(t, loader.localPresetDirs)
+
+	loader.AddLocalPresetDir("/tmp/presets")
+	assert.Len(t, loader.localPresetDirs, 1)
+	assert.Equal(t, "/tmp/presets", loader.localPresetDirs[0])
+
+	loader.AddLocalPresetDir("/opt/presets")
+	assert.Len(t, loader.localPresetDirs, 2)
+}
+
+func TestPresetLoader_LoadFromFile(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		content     string
+		path        string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name: "valid YAML file",
+			content: "name: custom\ndescription: Custom preset\n" +
+				"url_scheme: \"https://hooks.example.com/{id}\"\n" +
+				"method: POST\nbody: '{\"text\": \"hello\"}'\n",
+			wantErr: false,
+		},
+		{
+			name:        "non-existent file",
+			path:        "/tmp/nonexistent-preset-12345.yaml",
+			wantErr:     true,
+			errContains: "read preset file",
+		},
+		{
+			name:        "invalid YAML content",
+			content:     "{{invalid yaml: [}",
+			wantErr:     true,
+			errContains: "parse preset file",
+		},
+		{
+			name:        "valid YAML but missing required fields",
+			content:     "name: empty\ndescription: missing body and url_scheme\n",
+			wantErr:     true,
+			errContains: "must have either",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			loader := NewPresetLoader(nil)
+
+			path := tt.path
+			if path == "" {
+				dir := t.TempDir()
+				path = dir + "/preset.yaml"
+				require.NoError(t, os.WriteFile(path, []byte(tt.content), 0o644))
+			}
+
+			preset, err := loader.loadFromFile(path)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				assert.Nil(t, preset)
+				return
+			}
+			require.NoError(t, err)
+			assert.NotNil(t, preset)
+		})
+	}
+}
+
+func TestPresetLoader_LoadFromGitHub(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		config      *WebhookGlobalConfig
+		spec        string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:        "remote disabled with nil config",
+			config:      nil,
+			spec:        "gh:org/repo/preset.yaml@v1",
+			wantErr:     true,
+			errContains: "remote presets are disabled",
+		},
+		{
+			name:        "remote disabled explicitly",
+			config:      &WebhookGlobalConfig{AllowRemotePresets: false},
+			spec:        "gh:org/repo/preset.yaml@v1",
+			wantErr:     true,
+			errContains: "remote presets are disabled",
+		},
+		{
+			name: "untrusted source",
+			config: &WebhookGlobalConfig{
+				AllowRemotePresets:   true,
+				TrustedPresetSources: "gh:trusted-org/*",
+			},
+			spec:        "gh:untrusted-org/repo/preset.yaml@v1",
+			wantErr:     true,
+			errContains: "not in trusted-preset-sources",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			loader := NewPresetLoader(tt.config)
+
+			preset, err := loader.loadFromGitHub(tt.spec)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				assert.Nil(t, preset)
+				return
+			}
+			require.NoError(t, err)
+			assert.NotNil(t, preset)
+		})
+	}
+}
+
+func TestPresetLoader_LoadFromURL(t *testing.T) {
+	t.Parallel()
+
+	t.Run("remote disabled", func(t *testing.T) {
+		t.Parallel()
+		loader := NewPresetLoader(nil)
+		preset, err := loader.loadFromURL("https://example.com/preset.yaml")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "remote presets are disabled")
+		assert.Nil(t, preset)
+	})
+
+	t.Run("SSRF blocked by invalid scheme", func(t *testing.T) {
+		t.Parallel()
+		gc := &WebhookGlobalConfig{AllowRemotePresets: true}
+		loader := NewPresetLoader(gc)
+
+		preset, err := loader.loadFromURL("ftp://169.254.169.254/metadata")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "URL validation failed")
+		assert.Nil(t, preset)
+	})
+
+	t.Run("valid remote preset via httptest", func(t *testing.T) {
+		SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
+		defer SetValidateWebhookURLForTest(ValidateWebhookURLImpl)
+
+		presetYAML := "name: remote-test\ndescription: Remote test preset\n" +
+			"url_scheme: \"https://hooks.example.com/{id}\"\n" +
+			"method: POST\nbody: '{\"msg\": \"hello\"}'\n"
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/yaml")
+			_, _ = w.Write([]byte(presetYAML))
+		}))
+		defer server.Close()
+
+		gc := &WebhookGlobalConfig{AllowRemotePresets: true}
+		loader := NewPresetLoader(gc)
+
+		preset, err := loader.loadFromURL(server.URL + "/preset.yaml")
+		require.NoError(t, err)
+		assert.NotNil(t, preset)
+		assert.Equal(t, "remote-test", preset.Name)
+	})
+
+	t.Run("remote returns non-200 status", func(t *testing.T) {
+		SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
+		defer SetValidateWebhookURLForTest(ValidateWebhookURLImpl)
+
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer server.Close()
+
+		gc := &WebhookGlobalConfig{AllowRemotePresets: true}
+		loader := NewPresetLoader(gc)
+
+		preset, err := loader.loadFromURL(server.URL + "/missing.yaml")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "HTTP 404")
+		assert.Nil(t, preset)
+	})
+}
+
+func TestIsTrustedSource(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		config  *WebhookGlobalConfig
+		source  string
+		trusted bool
+	}{
+		{"nil config returns false", nil, "gh:org/repo/preset.yaml@v1", false},
+		{"empty trusted sources returns false", &WebhookGlobalConfig{TrustedPresetSources: ""}, "gh:org/repo/preset.yaml@v1", false},
+		{"matching glob pattern", &WebhookGlobalConfig{TrustedPresetSources: "gh:netresearch/*"}, "gh:netresearch/ofelia-presets/slack.yaml@v1", true},
+		{"non-matching glob pattern", &WebhookGlobalConfig{TrustedPresetSources: "gh:netresearch/*"}, "gh:evil-org/bad-presets/malicious.yaml@v1", false},
+		{"exact match", &WebhookGlobalConfig{TrustedPresetSources: "gh:org/repo/preset.yaml@v1"}, "gh:org/repo/preset.yaml@v1", true},
+		{"multiple patterns comma-separated", &WebhookGlobalConfig{TrustedPresetSources: "gh:orgA/*, gh:orgB/*"}, "gh:orgB/repo/preset.yaml@v1", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			loader := &PresetLoader{globalConfig: tt.config}
+			assert.Equal(t, tt.trusted, loader.isTrustedSource(tt.source))
+		})
+	}
+}
+
+func TestMatchGlobPattern(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		pattern string
+		input   string
+		matches bool
+	}{
+		{"exact match", "gh:org/repo", "gh:org/repo", true},
+		{"exact mismatch", "gh:org/repo", "gh:org/other", false},
+		{"wildcard matches prefix", "gh:org/*", "gh:org/anything/here", true},
+		{"wildcard does not match different prefix", "gh:org/*", "gh:other/repo", false},
+		{"empty pattern matches empty string", "", "", true},
+		{"wildcard only matches everything", "*", "anything", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			assert.Equal(t, tt.matches, matchGlobPattern(tt.pattern, tt.input))
+		})
+	}
+}
+
+func TestPresetLoader_LoadFromLocalDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	presetContent := "name: local-custom\ndescription: A local custom preset\n" +
+		"url_scheme: \"https://hooks.example.com/{id}\"\n" +
+		"method: POST\nbody: '{\"text\": \"hello\"}'\n"
+	require.NoError(t, os.WriteFile(dir+"/local-custom.yaml", []byte(presetContent), 0o644))
+
+	loader := NewPresetLoader(nil)
+	loader.AddLocalPresetDir(dir)
+
+	preset, err := loader.Load("local-custom")
+	require.NoError(t, err)
+	assert.NotNil(t, preset)
+	assert.Equal(t, "local-custom", preset.Name)
+}
+
+func TestParsePreset_Defaults(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		yaml        string
+		wantMethod  string
+		wantCT      string
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:       "method defaults to POST",
+			yaml:       "body: '{\"msg\":\"hi\"}'",
+			wantMethod: "POST",
+			wantCT:     "application/json",
+		},
+		{
+			name:       "explicit GET method has no default CT",
+			yaml:       "method: GET\nurl_scheme: 'https://example.com/{id}'",
+			wantMethod: "GET",
+			wantCT:     "",
+		},
+		{
+			name:        "no body or url_scheme returns error",
+			yaml:        "name: incomplete\n",
+			wantErr:     true,
+			errContains: "must have either",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			preset, err := ParsePreset([]byte(tt.yaml))
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantMethod, preset.Method)
+			if tt.wantCT != "" {
+				assert.Equal(t, tt.wantCT, preset.Headers["Content-Type"])
+			}
+		})
 	}
 }

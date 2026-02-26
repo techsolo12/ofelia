@@ -294,3 +294,78 @@ func TestNotificationDedup_Integration(t *testing.T) {
 
 	assert.True(t, dedup.ShouldNotify(ctx), "Expected notification after cooldown to be allowed")
 }
+
+func TestDedupStore_Len(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		addErrors []string
+		wantLen   int
+	}{
+		{"empty store", nil, 0},
+		{"store with one entry", []string{"error A"}, 1},
+		{"store with distinct entries", []string{"error A", "error B", "error C"}, 3},
+		{"store with duplicate errors counts once", []string{"error A", "error A"}, 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dedup := NewNotificationDedup(time.Hour)
+
+			job := &TestJob{}
+			job.Name = "len-test"
+			job.Command = "echo test"
+
+			for _, errMsg := range tt.addErrors {
+				sh := core.NewScheduler(newDiscardLogger())
+				e, err := core.NewExecution()
+				require.NoError(t, err)
+				ctx := core.NewContext(sh, job, e)
+				ctx.Start()
+				ctx.Stop(errors.New(errMsg))
+				dedup.ShouldNotify(ctx)
+			}
+
+			assert.Equal(t, tt.wantLen, dedup.Len())
+		})
+	}
+}
+
+func TestInitNotificationDedup(t *testing.T) {
+	original := DefaultNotificationDedup
+	defer func() { DefaultNotificationDedup = original }()
+
+	InitNotificationDedup(30 * time.Minute)
+	require.NotNil(t, DefaultNotificationDedup)
+	assert.Equal(t, 30*time.Minute, DefaultNotificationDedup.cooldown)
+	assert.Equal(t, 0, DefaultNotificationDedup.Len())
+}
+
+func TestStartCleanupRoutine(t *testing.T) {
+	t.Parallel()
+
+	dedup := NewNotificationDedup(5 * time.Millisecond)
+
+	job := &TestJob{}
+	job.Name = "cleanup-test"
+	job.Command = "echo test"
+
+	sh := core.NewScheduler(newDiscardLogger())
+	e, err := core.NewExecution()
+	require.NoError(t, err)
+	ctx := core.NewContext(sh, job, e)
+	ctx.Start()
+	ctx.Stop(errors.New("test error"))
+	dedup.ShouldNotify(ctx)
+
+	assert.Equal(t, 1, dedup.Len())
+
+	stop := dedup.StartCleanupRoutine(10 * time.Millisecond)
+	defer stop()
+
+	time.Sleep(30 * time.Millisecond)
+
+	assert.Equal(t, 0, dedup.Len(), "cleanup routine should have removed expired entries")
+}

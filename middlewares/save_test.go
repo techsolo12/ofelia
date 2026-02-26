@@ -153,6 +153,12 @@ func TestSaveCreatesSaveFolder(t *testing.T) {
 	assert.True(t, fi.IsDir())
 }
 
+func TestSave_ContinueOnStop(t *testing.T) {
+	t.Parallel()
+	m := &Save{}
+	assert.True(t, m.ContinueOnStop(), "Save.ContinueOnStop() should return true")
+}
+
 func TestSaveSafeFilename(t *testing.T) {
 	t.Parallel()
 	ctx, job := setupSaveTestContext(t)

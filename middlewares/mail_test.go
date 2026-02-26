@@ -278,6 +278,12 @@ func TestMailCustomEmailSubject(t *testing.T) {
 	require.NoError(t, runErr)
 }
 
+func TestMail_ContinueOnStop(t *testing.T) {
+	t.Parallel()
+	m := &Mail{}
+	assert.True(t, m.ContinueOnStop(), "Mail.ContinueOnStop() should return true")
+}
+
 func TestMailDefaultEmailSubject(t *testing.T) {
 	t.Parallel()
 	f := setupMailTest(t)
@@ -317,4 +323,97 @@ func TestMailDefaultEmailSubject(t *testing.T) {
 
 	<-done
 	require.NoError(t, runErr2)
+}
+
+// Phase 8: Additional coverage tests for mail.go
+
+func TestMailFromWithHostnameFormat(t *testing.T) {
+	t.Parallel()
+
+	m := &Mail{MailConfig: MailConfig{EmailFrom: "ofelia@%s"}}
+	from := m.from()
+	assert.NotContains(t, from, "%s", "hostname placeholder should be replaced")
+	assert.NotEmpty(t, from)
+}
+
+func TestMailFromWithoutFormat(t *testing.T) {
+	t.Parallel()
+
+	m := &Mail{MailConfig: MailConfig{EmailFrom: "plain@example.com"}}
+	from := m.from()
+	assert.Equal(t, "plain@example.com", from)
+}
+
+func TestMailOnlyOnError_NoSendOnSuccess(t *testing.T) {
+	t.Parallel()
+	f := setupMailTest(t)
+
+	f.ctx.Start()
+	f.ctx.Stop(nil)
+
+	onlyOnError := true
+	m := NewMail(&MailConfig{
+		SMTPHost:        f.smtpdHost,
+		SMTPPort:        f.smtpdPort,
+		EmailTo:         "foo@foo.com",
+		EmailFrom:       "qux@qux.com",
+		MailOnlyOnError: &onlyOnError,
+	})
+
+	done := make(chan struct{})
+	var runErr error
+	go func() {
+		runErr = m.Run(f.ctx)
+		close(done)
+	}()
+
+	// Should NOT receive any mail since execution was successful
+	select {
+	case <-f.fromCh:
+		t.Error("should not have sent mail on success when only-on-error is set")
+	case <-time.After(500 * time.Millisecond):
+		// Expected: no mail sent
+	}
+
+	<-done
+	require.NoError(t, runErr)
+}
+
+func TestExecutionLabel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		exec     *core.Execution
+		expected string
+	}{
+		{
+			name:     "successful",
+			exec:     &core.Execution{Failed: false, Skipped: false},
+			expected: "successful",
+		},
+		{
+			name:     "failed",
+			exec:     &core.Execution{Failed: true, Skipped: false},
+			expected: "failed",
+		},
+		{
+			name:     "skipped",
+			exec:     &core.Execution{Failed: false, Skipped: true},
+			expected: "skipped",
+		},
+		{
+			name:     "skipped takes precedence over failed",
+			exec:     &core.Execution{Failed: true, Skipped: true},
+			expected: "skipped",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := executionLabel(tt.exec)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
 }
