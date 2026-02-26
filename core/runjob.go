@@ -248,7 +248,6 @@ func (j *RunJob) startContainer(ctx context.Context) error {
 	return nil
 }
 
-//nolint:unused // used in integration tests via build tags
 func (j *RunJob) stopContainer(ctx context.Context, timeout time.Duration) error {
 	if err := j.Provider.StopContainer(ctx, j.getContainerID(), &timeout); err != nil {
 		return fmt.Errorf("stopping container: %w", err)
@@ -256,7 +255,6 @@ func (j *RunJob) stopContainer(ctx context.Context, timeout time.Duration) error
 	return nil
 }
 
-//nolint:unused // used in integration tests via build tags
 func (j *RunJob) getContainer(ctx context.Context) (*domain.Container, error) {
 	container, err := j.Provider.InspectContainer(ctx, j.getContainerID())
 	if err != nil {

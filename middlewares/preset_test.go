@@ -445,7 +445,9 @@ func TestPresetLoader_LoadFromGitHub(t *testing.T) {
 }
 
 func TestPresetLoader_LoadFromURL(t *testing.T) {
-	t.Parallel()
+	// Not parallel: subtests modify global URL validator via SetValidateWebhookURLForTest.
+	// Running in parallel causes flaky failures when other tests concurrently call
+	// SetGlobalSecurityConfig, which overwrites the test's validator bypass.
 
 	t.Run("remote disabled", func(t *testing.T) {
 		t.Parallel()

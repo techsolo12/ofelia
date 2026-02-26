@@ -17,7 +17,7 @@ import (
 )
 
 func TestValidateExecuteValidFile(t *testing.T) {
-	t.Parallel()
+	// Not parallel: modifies global os.Stdout which races with other tests.
 
 	configFile := filepath.Join(t.TempDir(), "config.ini")
 	content := `
