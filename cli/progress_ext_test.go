@@ -30,7 +30,7 @@ func TestProgressIndicator_Update_Terminal(t *testing.T) {
 
 	assert.Equal(t, "Updated terminal message", progress.message)
 	// Terminal mode should write clear sequence to buffer
-	assert.True(t, buf.Len() > 0, "terminal update should write to buffer")
+	assert.Positive(t, buf.Len(), "terminal update should write to buffer")
 }
 
 func TestProgressIndicator_Update_NonTerminal(t *testing.T) {
@@ -283,5 +283,5 @@ func TestProgressIndicator_MessagePreservation_AfterUpdate(t *testing.T) {
 	assert.Equal(t, "message-2", progress.message)
 
 	progress.Update("")
-	assert.Equal(t, "", progress.message)
+	assert.Empty(t, progress.message)
 }

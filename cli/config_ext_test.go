@@ -79,7 +79,7 @@ func TestResolveConfigFiles_GlobMatch(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, files, 2)
 	// Files should be sorted
-	assert.True(t, files[0] < files[1], "files should be sorted: %v", files)
+	assert.Less(t, files[0], files[1], "files should be sorted: %v", files)
 }
 
 func TestLatestChanged_NoChange(t *testing.T) {

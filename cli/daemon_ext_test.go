@@ -129,7 +129,7 @@ func TestApplyOptions_AllFields(t *testing.T) {
 		EnableWeb:            true,
 		WebAddr:              ":9090",
 		WebAuthEnabled:       true,
-		WebUsername:           "admin",
+		WebUsername:          "admin",
 		WebPasswordHash:      "hash",
 		WebSecretKey:         "secret",
 		WebTokenExpiry:       48,
@@ -211,4 +211,3 @@ func TestDaemonCommand_ConfigNilAndSet(t *testing.T) {
 	cmd.config = cfg
 	assert.Equal(t, cfg, cmd.Config())
 }
-

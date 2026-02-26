@@ -21,11 +21,11 @@ func TestRecordJobStart_CounterAndGauge(t *testing.T) {
 	mc.RecordJobStart("job-c")
 
 	// Counter should be incremented 3 times
-	assert.Equal(t, float64(3), mc.metrics["ofelia_cron_jobs_started_total"].Value,
+	assert.InDelta(t, float64(3), mc.metrics["ofelia_cron_jobs_started_total"].Value, 0,
 		"started counter should be 3 after 3 job starts")
 
 	// Running gauge should be 3
-	assert.Equal(t, float64(3), mc.getGaugeValue("ofelia_jobs_running"),
+	assert.InDelta(t, float64(3), mc.getGaugeValue("ofelia_jobs_running"), 0,
 		"running gauge should be 3 with 3 active jobs")
 }
 
@@ -39,31 +39,31 @@ func TestRecordJobComplete_AllFields(t *testing.T) {
 	mc.RecordJobStart("job-1")
 	mc.RecordJobStart("job-2")
 
-	assert.Equal(t, float64(2), mc.getGaugeValue("ofelia_jobs_running"))
+	assert.InDelta(t, float64(2), mc.getGaugeValue("ofelia_jobs_running"), 0)
 
 	// Complete first job (no panic)
 	mc.RecordJobComplete("job-1", 2.5, false)
 
 	// Verify counter
-	assert.Equal(t, float64(1), mc.metrics["ofelia_cron_jobs_completed_total"].Value)
+	assert.InDelta(t, float64(1), mc.metrics["ofelia_cron_jobs_completed_total"].Value, 0)
 
 	// Verify histogram recorded the duration
 	hist := mc.metrics["ofelia_job_duration_seconds"].Histogram
 	assert.Equal(t, int64(1), hist.Count)
-	assert.Equal(t, 2.5, hist.Sum)
+	assert.InDelta(t, 2.5, hist.Sum, 0)
 
 	// Verify running gauge decreased
-	assert.Equal(t, float64(1), mc.getGaugeValue("ofelia_jobs_running"))
+	assert.InDelta(t, float64(1), mc.getGaugeValue("ofelia_jobs_running"), 0)
 
 	// Verify panicked counter NOT incremented
-	assert.Equal(t, float64(0), mc.metrics["ofelia_cron_jobs_panicked_total"].Value)
+	assert.InDelta(t, float64(0), mc.metrics["ofelia_cron_jobs_panicked_total"].Value, 0)
 
 	// Complete second job with panic
 	mc.RecordJobComplete("job-2", 0.1, true)
 
-	assert.Equal(t, float64(2), mc.metrics["ofelia_cron_jobs_completed_total"].Value)
-	assert.Equal(t, float64(1), mc.metrics["ofelia_cron_jobs_panicked_total"].Value)
-	assert.Equal(t, float64(0), mc.getGaugeValue("ofelia_jobs_running"))
+	assert.InDelta(t, float64(2), mc.metrics["ofelia_cron_jobs_completed_total"].Value, 0)
+	assert.InDelta(t, float64(1), mc.metrics["ofelia_cron_jobs_panicked_total"].Value, 0)
+	assert.InDelta(t, float64(0), mc.getGaugeValue("ofelia_jobs_running"), 0)
 
 	// Histogram should have 2 observations
 	assert.Equal(t, int64(2), hist.Count)
@@ -81,7 +81,7 @@ func TestRecordJobScheduled_Counter(t *testing.T) {
 	mc.RecordJobScheduled("job-z")
 	mc.RecordJobScheduled("job-x") // same job scheduled again
 
-	assert.Equal(t, float64(4), mc.metrics["ofelia_cron_jobs_scheduled_total"].Value,
+	assert.InDelta(t, float64(4), mc.metrics["ofelia_cron_jobs_scheduled_total"].Value, 0,
 		"scheduled counter should be 4 after 4 scheduling events")
 }
 
@@ -95,13 +95,13 @@ func TestRecordJobStart_GaugeNeverNegative(t *testing.T) {
 	mc.RecordJobStart("job-1")
 	mc.RecordJobComplete("job-1", 1.0, false)
 
-	assert.Equal(t, float64(0), mc.getGaugeValue("ofelia_jobs_running"))
+	assert.InDelta(t, float64(0), mc.getGaugeValue("ofelia_jobs_running"), 0)
 
 	// Complete again without start (shouldn't happen normally, but test gauge behavior)
 	mc.RecordJobComplete("job-1", 1.0, false)
 
 	// Gauge goes negative in this implementation (no clamping)
-	assert.Equal(t, float64(-1), mc.getGaugeValue("ofelia_jobs_running"),
+	assert.InDelta(t, float64(-1), mc.getGaugeValue("ofelia_jobs_running"), 0,
 		"gauge can go negative without clamping")
 }
 
@@ -116,7 +116,7 @@ func TestRecordJobComplete_ZeroDuration(t *testing.T) {
 
 	hist := mc.metrics["ofelia_job_duration_seconds"].Histogram
 	assert.Equal(t, int64(1), hist.Count)
-	assert.Equal(t, 0.0, hist.Sum)
+	assert.InDelta(t, 0.0, hist.Sum, 0)
 }
 
 func TestRecordJobComplete_LargeDuration(t *testing.T) {
@@ -130,7 +130,7 @@ func TestRecordJobComplete_LargeDuration(t *testing.T) {
 
 	hist := mc.metrics["ofelia_job_duration_seconds"].Histogram
 	assert.Equal(t, int64(1), hist.Count)
-	assert.Equal(t, 86400.0, hist.Sum)
+	assert.InDelta(t, 86400.0, hist.Sum, 0)
 }
 
 func TestAdjustGauge_NonExistent(t *testing.T) {
@@ -154,7 +154,7 @@ func TestAdjustGauge_WrongType(t *testing.T) {
 	// Adjusting a counter as gauge should have no effect
 	mc.adjustGauge("my_counter", 5.0)
 
-	assert.Equal(t, float64(0), mc.metrics["my_counter"].Value,
+	assert.InDelta(t, float64(0), mc.metrics["my_counter"].Value, 0,
 		"adjustGauge on counter type should have no effect")
 }
 
@@ -171,15 +171,15 @@ func TestFullJobLifecycle_MetricsIntegrity(t *testing.T) {
 		mc.RecordJobStart(jobName)
 
 		duration := float64(i+1) * 0.5 // 0.5, 1.0, 1.5, 2.0, 2.5
-		panicked := i == 4              // last one panics
+		panicked := i == 4             // last one panics
 		mc.RecordJobComplete(jobName, duration, panicked)
 	}
 
-	assert.Equal(t, float64(5), mc.metrics["ofelia_cron_jobs_scheduled_total"].Value)
-	assert.Equal(t, float64(5), mc.metrics["ofelia_cron_jobs_started_total"].Value)
-	assert.Equal(t, float64(5), mc.metrics["ofelia_cron_jobs_completed_total"].Value)
-	assert.Equal(t, float64(1), mc.metrics["ofelia_cron_jobs_panicked_total"].Value)
-	assert.Equal(t, float64(0), mc.getGaugeValue("ofelia_jobs_running"))
+	assert.InDelta(t, float64(5), mc.metrics["ofelia_cron_jobs_scheduled_total"].Value, 0)
+	assert.InDelta(t, float64(5), mc.metrics["ofelia_cron_jobs_started_total"].Value, 0)
+	assert.InDelta(t, float64(5), mc.metrics["ofelia_cron_jobs_completed_total"].Value, 0)
+	assert.InDelta(t, float64(1), mc.metrics["ofelia_cron_jobs_panicked_total"].Value, 0)
+	assert.InDelta(t, float64(0), mc.getGaugeValue("ofelia_jobs_running"), 0)
 
 	hist := mc.metrics["ofelia_job_duration_seconds"].Histogram
 	assert.Equal(t, int64(5), hist.Count)

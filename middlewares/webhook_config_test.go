@@ -221,7 +221,7 @@ func TestWebhookConfig_Validate_NegativeTimeout(t *testing.T) {
 
 	config := &WebhookConfig{Name: "test", Preset: "slack", Timeout: -1 * time.Second}
 	err := config.Validate()
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timeout cannot be negative")
 }
 
@@ -230,7 +230,7 @@ func TestWebhookConfig_Validate_NegativeRetryCount(t *testing.T) {
 
 	config := &WebhookConfig{Name: "test", Preset: "slack", RetryCount: -1}
 	err := config.Validate()
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "retry-count cannot be negative")
 }
 
@@ -239,7 +239,7 @@ func TestWebhookConfig_Validate_NegativeRetryDelay(t *testing.T) {
 
 	config := &WebhookConfig{Name: "test", Preset: "slack", RetryDelay: -1 * time.Second}
 	err := config.Validate()
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "retry-delay cannot be negative")
 }
 

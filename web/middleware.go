@@ -94,7 +94,7 @@ func (rl *rateLimiter) cleanup() {
 // is determined from the X-Forwarded-For header when present, falling back to
 // r.RemoteAddr. Because X-Forwarded-For can be spoofed by the client, this
 // rate limiter should only be deployed behind a trusted reverse proxy that
-// overwrites or sanitises the header before forwarding requests.
+// overwrites or sanitizes the header before forwarding requests.
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := r.RemoteAddr

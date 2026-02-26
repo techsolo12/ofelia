@@ -416,32 +416,14 @@ func (s *Server) runJobHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) disableJobHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req jobRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
-		return
-	}
-	if err := validateJobName(req.Name); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.scheduler.DisableJob(req.Name); err != nil {
-		if errors.Is(err, core.ErrJobNotFound) {
-			http.Error(w, "job not found", http.StatusNotFound)
-		} else {
-			s.scheduler.Logger.Error("disable job failed", "job", req.Name, "error", err)
-			http.Error(w, "failed to disable job", http.StatusInternalServerError)
-		}
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	s.toggleJobHandler(w, r, s.scheduler.DisableJob, "disable")
 }
 
 func (s *Server) enableJobHandler(w http.ResponseWriter, r *http.Request) {
+	s.toggleJobHandler(w, r, s.scheduler.EnableJob, "enable")
+}
+
+func (s *Server) toggleJobHandler(w http.ResponseWriter, r *http.Request, toggle func(string) error, action string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -455,12 +437,12 @@ func (s *Server) enableJobHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.scheduler.EnableJob(req.Name); err != nil {
+	if err := toggle(req.Name); err != nil {
 		if errors.Is(err, core.ErrJobNotFound) {
 			http.Error(w, "job not found", http.StatusNotFound)
 		} else {
-			s.scheduler.Logger.Error("enable job failed", "job", req.Name, "error", err)
-			http.Error(w, "failed to enable job", http.StatusInternalServerError)
+			s.scheduler.Logger.Error(action+" job failed", "job", req.Name, "error", err)
+			http.Error(w, "failed to "+action+" job", http.StatusInternalServerError)
 		}
 		return
 	}

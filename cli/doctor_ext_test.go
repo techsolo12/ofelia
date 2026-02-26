@@ -281,7 +281,7 @@ func TestOutputJSON_Unhealthy(t *testing.T) {
 	}
 
 	err := cmd.outputJSON(report)
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "health check failed")
 }
 
@@ -300,6 +300,6 @@ func TestOutputHuman_SkipCount(t *testing.T) {
 	}
 
 	err := cmd.outputHuman(report)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.True(t, handler.HasMessage("skipped"))
 }

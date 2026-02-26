@@ -239,13 +239,17 @@ func TestRunServiceJobUnit_FindTaskStatus(t *testing.T) {
 	}{
 		{"no_tasks_means_done", []domain.Task{}, nil, 0, true},
 		{"complete_exit_0", []domain.Task{{ID: "t1", Status: domain.TaskStatus{
-			State: domain.TaskStateComplete, ContainerStatus: &domain.ContainerStatus{ExitCode: 0}}}}, nil, 0, true},
+			State: domain.TaskStateComplete, ContainerStatus: &domain.ContainerStatus{ExitCode: 0},
+		}}}, nil, 0, true},
 		{"failed_exit_1", []domain.Task{{ID: "t2", Status: domain.TaskStatus{
-			State: domain.TaskStateFailed, ContainerStatus: &domain.ContainerStatus{ExitCode: 1}}}}, nil, 1, true},
+			State: domain.TaskStateFailed, ContainerStatus: &domain.ContainerStatus{ExitCode: 1},
+		}}}, nil, 1, true},
 		{"rejected_forces_255", []domain.Task{{ID: "t3", Status: domain.TaskStatus{
-			State: domain.TaskStateRejected, ContainerStatus: &domain.ContainerStatus{ExitCode: 0}}}}, nil, 255, true},
+			State: domain.TaskStateRejected, ContainerStatus: &domain.ContainerStatus{ExitCode: 0},
+		}}}, nil, 255, true},
 		{"running_not_done", []domain.Task{{ID: "t4", Status: domain.TaskStatus{
-			State: domain.TaskStateRunning}}}, nil, 0, false},
+			State: domain.TaskStateRunning,
+		}}}, nil, 0, false},
 		{"list_error_not_done", nil, errors.New("swarm error"), 0, false},
 	}
 

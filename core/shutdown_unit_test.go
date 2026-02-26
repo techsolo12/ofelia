@@ -82,7 +82,6 @@ func TestShutdownManagerUnit_HookPrioritySorting(t *testing.T) {
 
 	// Register hooks in reverse priority order
 	for _, p := range []int{30, 10, 20, 5, 25} {
-		p := p
 		sm.RegisterHook(ShutdownHook{
 			Name:     "hook",
 			Priority: p,
