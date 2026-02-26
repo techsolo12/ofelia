@@ -40,7 +40,7 @@ func TestBoot_InvalidLogLevel(t *testing.T) {
 }
 
 func TestBoot_MissingConfigUsesEmpty(t *testing.T) {
-	t.Parallel()
+	// Not parallel - modifies global newDockerHandler
 
 	logger, handler := test.NewTestLoggerWithHandler()
 	lv := &slog.LevelVar{}
@@ -73,7 +73,7 @@ func TestBoot_MissingConfigUsesEmpty(t *testing.T) {
 }
 
 func TestBoot_WebAuthEnabled_MissingUsername(t *testing.T) {
-	t.Parallel()
+	// Not parallel - modifies global newDockerHandler
 
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.ini")
@@ -114,7 +114,7 @@ command = echo test
 }
 
 func TestBoot_WebAuthEnabled_MissingPassword(t *testing.T) {
-	t.Parallel()
+	// Not parallel - modifies global newDockerHandler
 
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.ini")

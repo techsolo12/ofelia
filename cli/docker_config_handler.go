@@ -40,6 +40,8 @@ type DockerHandler struct {
 	fallbackPollingActive bool
 	fallbackCancel        context.CancelFunc // To stop fallback polling when events recover
 
+	wg sync.WaitGroup // tracks background goroutines for clean shutdown
+
 	includeStopped bool // When true, ListContainers uses All: true so stopped containers are included
 }
 
@@ -132,17 +134,29 @@ func NewDockerHandler(
 
 	// Start config file watcher (separate from container detection)
 	if c.configPollInterval > 0 {
-		go c.watchConfig()
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			c.watchConfig()
+		}()
 	}
 
 	// Start container detection
 	if c.useEvents {
-		go c.watchEvents()
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			c.watchEvents()
+		}()
 	}
 
 	// Start explicit container polling (if enabled, separate from events)
 	if c.dockerPollInterval > 0 {
-		go c.watchContainerPolling()
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			c.watchContainerPolling()
+		}()
 	}
 
 	return c, nil
@@ -434,6 +448,9 @@ func (c *DockerHandler) Shutdown(ctx context.Context) error {
 	if c.cancel != nil {
 		c.cancel()
 	}
+
+	// Wait for all background goroutines to finish before closing provider
+	c.wg.Wait()
 
 	// Close SDK provider if it was created
 	if c.dockerProvider != nil {

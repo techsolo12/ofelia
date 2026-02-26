@@ -32,14 +32,22 @@ func TestProgressIndicator_Animate_TerminalMode(t *testing.T) {
 		ticker:     ticker,
 	}
 
-	go progress.animate()
+	animateDone := make(chan struct{})
+	go func() {
+		progress.animate()
+		close(animateDone)
+	}()
 
 	// Let it animate a few frames
 	time.Sleep(50 * time.Millisecond)
 	close(done)
 
-	// Give goroutine time to exit
-	time.Sleep(10 * time.Millisecond)
+	// Wait for animate goroutine to finish before reading buffer
+	select {
+	case <-animateDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("animate goroutine did not exit after done was closed")
+	}
 
 	output := buf.String()
 	assert.NotEmpty(t, output, "animate should have written output")
