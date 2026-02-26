@@ -121,6 +121,26 @@ commit-msg:
 
         echo "✅ Commit message format validated"
 
+    # Enforce Developer Certificate of Origin (DCO)
+    dco-signoff:
+      run: |
+        msg=$(cat {1})
+
+        # Skip merge commits
+        if echo "$msg" | grep -q "^Merge"; then
+          exit 0
+        fi
+
+        if ! echo "$msg" | grep -qE "^Signed-off-by: .+ <.+>"; then
+          echo "❌ Missing DCO sign-off!"
+          echo ""
+          echo "All commits must include a Signed-off-by trailer."
+          echo "Use: git commit --signoff -m \"your message\""
+          echo ""
+          echo "See CONTRIBUTING.md for details."
+          exit 1
+        fi
+
 pre-push:
   parallel: true
   commands:

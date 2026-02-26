@@ -4,11 +4,50 @@ Thank you for your interest in contributing to Ofelia! This document provides gu
 
 ## Table of Contents
 
+- [Developer Certificate of Origin (DCO)](#developer-certificate-of-origin-dco)
 - [Development Setup](#development-setup)
 - [Testing Strategy](#testing-strategy)
 - [Code Style](#code-style)
 - [Pull Request Process](#pull-request-process)
 - [Release Process](#release-process)
+
+## Developer Certificate of Origin (DCO)
+
+All contributions to Ofelia must include a `Signed-off-by` trailer in the
+commit message, certifying that you wrote the code or have the right to submit
+it under the project's open-source license. This is the
+[Developer Certificate of Origin (DCO)](https://developercertificate.org/).
+
+### How to sign off
+
+Add `--signoff` (or `-s`) to your `git commit` command:
+
+```bash
+git commit --signoff -m "feat(core): add new scheduler algorithm"
+```
+
+This appends a line like:
+
+```
+Signed-off-by: Your Name <your.email@example.com>
+```
+
+If you have already made commits without sign-off, you can amend or rebase to
+add it:
+
+```bash
+# Amend the last commit
+git commit --amend --signoff --no-edit
+
+# Rebase and sign off all commits on your branch
+git rebase --signoff HEAD~N   # where N is the number of commits
+```
+
+### Automated enforcement
+
+The project's lefthook `commit-msg` hook validates the presence of
+`Signed-off-by` locally. CI also checks all commits in a pull request via the
+[DCO GitHub App](https://github.com/apps/dco).
 
 ## Development Setup
 
@@ -261,6 +300,7 @@ job.Run(ctx)
 
 ### PR Checklist
 
+- [ ] All commits are signed off (`git commit --signoff`) per [DCO](#developer-certificate-of-origin-dco)
 - [ ] Tests added for new functionality
 - [ ] All tests pass (`go test -tags=integration,e2e -v ./...`)
 - [ ] Code follows project style guidelines

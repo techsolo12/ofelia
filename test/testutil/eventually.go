@@ -1,3 +1,6 @@
+// Copyright (c) 2025-2026 Netresearch DTT GmbH
+// SPDX-License-Identifier: MIT
+
 // Package testutil provides common test utilities for the Ofelia project.
 package testutil
 

@@ -19,7 +19,11 @@ PKG_TAG = latest
 GOCMD = go
 GOBUILD = $(GOCMD) build
 GHRELEASE = github-release
-LDFLAGS = -ldflags "-X main.version=$(BRANCH) -X main.build=$(BUILD)" 
+# BUILD_FLAGS defaults to stripping debug info for smaller binaries.
+# Override to preserve debug symbols: make build BUILD_FLAGS=""
+# Or build with: make build-debug
+BUILD_FLAGS ?= -s -w
+LDFLAGS = -ldflags "$(BUILD_FLAGS) -X main.version=$(BRANCH) -X main.build=$(BUILD)"
 
 # Coverage
 COVERAGE_REPORT = coverage.txt
@@ -254,7 +258,8 @@ help:
 	@echo "Ofelia Development Commands:"
 	@echo ""
 	@echo "🏗️  Building:"
-	@echo "  build              - Build local binary"
+	@echo "  build              - Build local binary (stripped, no debug symbols)"
+	@echo "  build-debug        - Build local binary with debug symbols preserved"
 	@echo "  packages           - Build cross-platform binaries"
 	@echo "  docker-build       - Build Docker image"
 	@echo "  docker-run         - Build and run Docker container"
@@ -297,7 +302,12 @@ help:
 
 build:
 	@mkdir -p $(BUILD_PATH)
-	@go build -o $(BUILD_PATH)/$(PROJECT) ofelia.go
+	@go build $(LDFLAGS) -o $(BUILD_PATH)/$(PROJECT) ofelia.go
+
+.PHONY: build-debug
+build-debug: BUILD_FLAGS =
+build-debug: build
+	@echo "Built with debug symbols preserved (no -s -w flags)"
 
 packages:
 	@for os in $(PKG_OS); do \
