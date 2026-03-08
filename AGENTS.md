@@ -1,4 +1,4 @@
-<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2025-09-29 -->
+<!-- Managed by agent: keep sections and order; edit content, not structure. Last updated: 2026-03-08 -->
 
 # AGENTS.md (root)
 
@@ -26,9 +26,20 @@ This file explains repo‑wide conventions and where to find scoped rules.
 - `apiJob.Config` is `json.RawMessage` from `json.Marshal(job)` — core structs lack json tags, so keys are capitalized
 
 ## CI & merge workflow
-- ~27 CI checks: golangci-lint (140-char line limit), CodeQL, Trivy, mutation, unit/integration/fuzz
+- ~26 CI checks: golangci-lint (140-char line limit), CodeQL, Trivy, govulncheck, mutation, unit/integration/fuzz (CodSpeed removed)
 - Repo uses **GitHub merge queue** — `gh pr merge --delete-branch` is NOT supported
 - Automated reviewers: github-actions (auto-approve), gemini-code-assist, Copilot (both COMMENTED — check all)
+
+## Release process
+- Releases trigger on `release: published` event via `release-slsa.yml`
+- Create signed tags locally, then create a GitHub release: `gh release create vX.Y.Z --title "vX.Y.Z" --notes-file notes.md --verify-tag`
+- The Release workflow builds SLSA Level 3 provenance, container images, and binary artifacts
+- Follow the narrative release notes style from previous releases (user-facing highlights first, then categorized changes)
+
+## Dependencies
+- `github.com/netresearch/go-cron` — maintained fork of robfig/cron with DAG engine, pause/resume, @triggered schedules
+- Go version tracked in `go.mod` — CI reads from `go-version-file: go.mod`
+- Update Go version in `go.mod` to fix stdlib vulnerabilities (govulncheck detects these)
 
 ## Index of scoped AGENTS.md
 - `./cli/AGENTS.md` — command-line interface and configuration
@@ -41,6 +52,10 @@ This file explains repo‑wide conventions and where to find scoped rules.
 - Manage dependencies exclusively with Go modules.
 - Do **not** vendor or commit downloaded modules. Avoid running `go mod vendor`.
 - Ensure the `vendor/` directory is ignored via `.gitignore`.
+
+## Archived repos
+- `netresearch/node-vault` — archived, do not create PRs
+- `netresearch/satis-git` — archived, do not create PRs
 
 ## When instructions conflict
 - The nearest `AGENTS.md` wins. Explicit user prompts override files.
