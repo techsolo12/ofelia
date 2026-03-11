@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof" // #nosec G108
+	"sync"
 	"time"
 
 	"github.com/netresearch/ofelia/core"
@@ -44,10 +45,17 @@ type DaemonCommand struct {
 	dockerHandler   *DockerHandler
 	config          *Config
 	done            chan struct{}
+	doneOnce        sync.Once // protects done channel close
 	Logger          *slog.Logger
 	LevelVar        *slog.LevelVar
 	shutdownManager *core.ShutdownManager
 	healthChecker   *web.HealthChecker
+}
+
+// closeDone safely closes the done channel at most once, preventing
+// double-close panics when multiple goroutines detect errors concurrently.
+func (c *DaemonCommand) closeDone() {
+	c.doneOnce.Do(func() { close(c.done) })
 }
 
 // Execute runs the daemon
@@ -176,7 +184,7 @@ func (c *DaemonCommand) start() error {
 		<-c.shutdownManager.ShutdownChan()
 		// Give some time for graceful shutdown to complete
 		// The shutdown manager handles the actual shutdown process
-		close(c.done)
+		c.closeDone()
 	}()
 
 	// Start scheduler with progress feedback
@@ -202,7 +210,7 @@ func (c *DaemonCommand) start() error {
 			if err := c.pprofServer.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 				c.Logger.Error(fmt.Sprintf("Error starting HTTP server: %v", err))
 				pprofErrChan <- err
-				close(c.done)
+				c.closeDone()
 			}
 		}()
 
@@ -225,7 +233,7 @@ func (c *DaemonCommand) start() error {
 			if err := c.webServer.Start(); err != nil {
 				c.Logger.Error(fmt.Sprintf("Error starting web server: %v", err))
 				webErrChan <- err
-				close(c.done)
+				c.closeDone()
 			}
 		}()
 
