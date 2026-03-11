@@ -38,6 +38,7 @@ type DaemonCommand struct {
 	WebSecretKey         string         `long:"web-secret-key" env:"OFELIA_WEB_SECRET_KEY" description:"JWT signing key" default-mask:"-"`
 	WebTokenExpiry       int            `long:"web-token-expiry" env:"OFELIA_WEB_TOKEN_EXPIRY" description:"Token expiry hours" default:"24"` //nolint:revive
 	WebMaxLoginAttempts  int            `long:"web-max-login-attempts" env:"OFELIA_WEB_MAX_LOGIN_ATTEMPTS" description:"Lockout" default:"5"` //nolint:revive
+	WebTrustedProxies    []string       `long:"web-trusted-proxies" env:"OFELIA_WEB_TRUSTED_PROXIES" env-delim:"," description:"Trusted proxy CIDRs for X-Forwarded-For"` //nolint:revive
 
 	scheduler       *core.Scheduler
 	pprofServer     *http.Server
@@ -153,12 +154,13 @@ func (c *DaemonCommand) boot() (err error) {
 			}
 
 			authCfg = &web.SecureAuthConfig{
-				Enabled:      true,
-				Username:     c.WebUsername,
-				PasswordHash: c.WebPasswordHash,
-				SecretKey:    c.WebSecretKey,
-				TokenExpiry:  c.WebTokenExpiry,
-				MaxAttempts:  c.WebMaxLoginAttempts,
+				Enabled:        true,
+				Username:       c.WebUsername,
+				PasswordHash:   c.WebPasswordHash,
+				SecretKey:      c.WebSecretKey,
+				TokenExpiry:    c.WebTokenExpiry,
+				MaxAttempts:    c.WebMaxLoginAttempts,
+				TrustedProxies: c.WebTrustedProxies,
 			}
 		}
 		c.webServer = web.NewServerWithAuth(c.WebAddr, c.scheduler, c.config, provider, authCfg)
@@ -313,6 +315,9 @@ func (c *DaemonCommand) applyAuthOptions(config *Config) {
 	if c.WebMaxLoginAttempts != 5 {
 		config.Global.WebMaxLoginAttempts = c.WebMaxLoginAttempts
 	}
+	if len(c.WebTrustedProxies) > 0 {
+		config.Global.WebTrustedProxies = c.WebTrustedProxies
+	}
 }
 
 func (c *DaemonCommand) applyServerOptions(config *Config) {
@@ -365,6 +370,9 @@ func (c *DaemonCommand) applyAuthDefaults(config *Config) {
 	}
 	if c.WebMaxLoginAttempts == 5 && config.Global.WebMaxLoginAttempts != 0 {
 		c.WebMaxLoginAttempts = config.Global.WebMaxLoginAttempts
+	}
+	if len(c.WebTrustedProxies) == 0 && len(config.Global.WebTrustedProxies) > 0 {
+		c.WebTrustedProxies = config.Global.WebTrustedProxies
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"net/http"
 	"reflect"
 	"strings"
@@ -24,17 +25,18 @@ import (
 )
 
 type Server struct {
-	addr         string
-	scheduler    *core.Scheduler
-	config       any
-	srv          *http.Server
-	origins      map[string]string
-	originsMu    sync.RWMutex
-	provider     core.DockerProvider
-	authConfig   *SecureAuthConfig
-	tokenManager *SecureTokenManager
-	loginLimiter *RateLimiter
-	rl           *rateLimiter
+	addr           string
+	scheduler      *core.Scheduler
+	config         any
+	srv            *http.Server
+	origins        map[string]string
+	originsMu      sync.RWMutex
+	provider       core.DockerProvider
+	authConfig     *SecureAuthConfig
+	tokenManager   *SecureTokenManager
+	loginLimiter   *RateLimiter
+	rl             *rateLimiter
+	trustedProxies []*net.IPNet
 }
 
 // HTTPServer returns the underlying http.Server used by the web interface. It
@@ -75,14 +77,26 @@ func NewServerWithAuth(addr string, s *core.Scheduler, cfg any, provider core.Do
 			maxAttempts = 5
 		}
 		server.loginLimiter = NewRateLimiter(maxAttempts, maxAttempts)
+
+		// Parse trusted proxy CIDRs for X-Forwarded-For handling
+		if len(authCfg.TrustedProxies) > 0 {
+			tp, tpErr := ParseTrustedProxies(authCfg.TrustedProxies)
+			if tpErr != nil {
+				s.Logger.Error("failed to parse trusted proxies", "error", tpErr)
+			} else {
+				server.trustedProxies = tp
+				s.Logger.Info("trusted proxies configured", "count", len(tp))
+			}
+		}
 	}
 
 	mux := http.NewServeMux()
 
 	server.rl = newRateLimiter(100, time.Minute)
+	server.rl.trustedProxies = server.trustedProxies
 
 	if server.authConfig != nil && server.authConfig.Enabled {
-		loginHandler := NewSecureLoginHandler(server.authConfig, server.tokenManager, server.loginLimiter)
+		loginHandler := NewSecureLoginHandler(server.authConfig, server.tokenManager, server.loginLimiter, server.trustedProxies...)
 		mux.Handle("/api/login", loginHandler)
 		mux.HandleFunc("/api/logout", server.logoutHandler)
 		mux.HandleFunc("/api/auth/status", server.authStatusHandler)
@@ -149,7 +163,7 @@ func (s *Server) RegisterHealthEndpoints(hc *HealthChecker) {
 	mux := http.NewServeMux()
 
 	if s.authConfig != nil && s.authConfig.Enabled {
-		loginHandler := NewSecureLoginHandler(s.authConfig, s.tokenManager, s.loginLimiter)
+		loginHandler := NewSecureLoginHandler(s.authConfig, s.tokenManager, s.loginLimiter, s.trustedProxies...)
 		mux.Handle("/api/login", loginHandler)
 		mux.HandleFunc("/api/logout", s.logoutHandler)
 		mux.HandleFunc("/api/auth/status", s.authStatusHandler)
@@ -182,6 +196,7 @@ func (s *Server) RegisterHealthEndpoints(hc *HealthChecker) {
 		s.rl.close()
 	}
 	s.rl = newRateLimiter(100, time.Minute)
+	s.rl.trustedProxies = s.trustedProxies
 	var handler http.Handler = mux
 	handler = securityHeaders(handler)
 	handler = s.rl.middleware(handler)

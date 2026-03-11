@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -32,12 +33,13 @@ type TokenData struct {
 
 // SecureAuthConfig holds secure authentication configuration
 type SecureAuthConfig struct {
-	Enabled      bool   `json:"enabled"`
-	Username     string `json:"username"`
-	PasswordHash string `json:"passwordHash"` // bcrypt hash of password
-	SecretKey    string `json:"secretKey"`
-	TokenExpiry  int    `json:"tokenExpiry"` // in hours
-	MaxAttempts  int    `json:"maxAttempts"` // max login attempts per minute
+	Enabled        bool     `json:"enabled"`
+	Username       string   `json:"username"`
+	PasswordHash   string   `json:"passwordHash"` // bcrypt hash of password
+	SecretKey      string   `json:"secretKey"`
+	TokenExpiry    int      `json:"tokenExpiry"`    // in hours
+	MaxAttempts    int      `json:"maxAttempts"`    // max login attempts per minute
+	TrustedProxies []string `json:"trustedProxies"` // CIDRs or IPs whose X-Forwarded-For is trusted
 }
 
 // RateLimiter manages login attempt rate limiting
@@ -256,16 +258,18 @@ func (tm *SecureTokenManager) cleanupExpiredCSRFTokens() {
 
 // SecureLoginHandler handles authentication with security best practices
 type SecureLoginHandler struct {
-	config       *SecureAuthConfig
-	tokenManager *SecureTokenManager
-	rateLimiter  *RateLimiter
+	config         *SecureAuthConfig
+	tokenManager   *SecureTokenManager
+	rateLimiter    *RateLimiter
+	trustedProxies []*net.IPNet
 }
 
-func NewSecureLoginHandler(config *SecureAuthConfig, tm *SecureTokenManager, rl *RateLimiter) *SecureLoginHandler {
+func NewSecureLoginHandler(config *SecureAuthConfig, tm *SecureTokenManager, rl *RateLimiter, trustedProxies ...*net.IPNet) *SecureLoginHandler {
 	return &SecureLoginHandler{
-		config:       config,
-		tokenManager: tm,
-		rateLimiter:  rl,
+		config:         config,
+		tokenManager:   tm,
+		rateLimiter:    rl,
+		trustedProxies: trustedProxies,
 	}
 }
 
@@ -277,7 +281,7 @@ func (h *SecureLoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check rate limiting by IP
-	clientIP := getClientIP(r)
+	clientIP := getClientIP(r, h.trustedProxies...)
 	if !h.rateLimiter.Allow(clientIP) {
 		http.Error(w, "Too many login attempts", http.StatusTooManyRequests)
 		return
@@ -355,14 +359,14 @@ func (h *SecureLoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // getClientIP extracts the client IP address from the request.
 // Forwarded headers (X-Forwarded-For, X-Real-IP) are only trusted when the
-// direct connection comes from a loopback address, indicating a local reverse
-// proxy. For non-loopback connections, the headers are ignored to prevent
-// IP spoofing.
-func getClientIP(r *http.Request) string {
+// direct connection comes from a trusted proxy (loopback by default, or any
+// CIDR in trustedProxies). For other connections, the headers are ignored to
+// prevent IP spoofing.
+func getClientIP(r *http.Request, trustedProxies ...*net.IPNet) string {
 	remoteIP := extractRemoteIP(r.RemoteAddr)
 
-	// Only trust forwarded headers from loopback addresses
-	if isLoopback(remoteIP) {
+	// Only trust forwarded headers from trusted proxies
+	if isTrustedProxy(remoteIP, trustedProxies) {
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			ips := strings.Split(xff, ",")
 			if len(ips) > 0 {

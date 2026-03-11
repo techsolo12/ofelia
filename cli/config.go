@@ -54,6 +54,7 @@ type Config struct {
 		WebSecretKey            string        `gcfg:"web-secret-key" mapstructure:"web-secret-key" json:"-"`
 		WebTokenExpiry          int           `gcfg:"web-token-expiry" mapstructure:"web-token-expiry" validate:"gte=1,lte=8760" default:"24"`           //nolint:revive
 		WebMaxLoginAttempts     int           `gcfg:"web-max-login-attempts" mapstructure:"web-max-login-attempts" validate:"gte=1,lte=100" default:"5"` //nolint:revive
+		WebTrustedProxies       []string      `gcfg:"web-trusted-proxies" mapstructure:"web-trusted-proxies,"`
 		EnablePprof             bool          `gcfg:"enable-pprof" mapstructure:"enable-pprof" default:"false"`
 		PprofAddr               string        `gcfg:"pprof-address" mapstructure:"pprof-address" default:"127.0.0.1:8080"`
 		MaxRuntime              time.Duration `gcfg:"max-runtime" mapstructure:"max-runtime" validate:"gte=0" default:"24h"`

@@ -4,6 +4,7 @@
 package web
 
 import (
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -36,12 +37,13 @@ func securityHeaders(next http.Handler) http.Handler {
 
 // rateLimiter provides basic rate limiting per IP
 type rateLimiter struct {
-	requests  map[string][]time.Time
-	mu        sync.RWMutex
-	limit     int
-	window    time.Duration
-	done      chan struct{}
-	closeOnce sync.Once
+	requests       map[string][]time.Time
+	mu             sync.RWMutex
+	limit          int
+	window         time.Duration
+	trustedProxies []*net.IPNet
+	done           chan struct{}
+	closeOnce      sync.Once
 }
 
 func newRateLimiter(limit int, window time.Duration) *rateLimiter {
@@ -110,6 +112,51 @@ func isLoopback(ip string) bool {
 	return parsed != nil && parsed.IsLoopback()
 }
 
+// isTrustedProxy returns true if the given IP is in any of the trusted CIDR
+// ranges. When trustedProxies is nil or empty, only loopback is trusted.
+func isTrustedProxy(ip string, trustedProxies []*net.IPNet) bool {
+	if isLoopback(ip) {
+		return true
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil {
+		return false
+	}
+	for _, cidr := range trustedProxies {
+		if cidr.Contains(parsed) {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseTrustedProxies parses a slice of CIDR strings (e.g. "172.17.0.0/16",
+// "10.0.0.1/32") into []*net.IPNet. Plain IPs without a mask are treated as
+// /32 (IPv4) or /128 (IPv6).
+func ParseTrustedProxies(cidrs []string) ([]*net.IPNet, error) {
+	var nets []*net.IPNet
+	for _, s := range cidrs {
+		if !strings.Contains(s, "/") {
+			// Plain IP — add /32 or /128
+			ip := net.ParseIP(s)
+			if ip == nil {
+				return nil, fmt.Errorf("invalid trusted proxy IP: %q", s)
+			}
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			s = ip.String() + "/" + fmt.Sprint(bits)
+		}
+		_, network, err := net.ParseCIDR(s)
+		if err != nil {
+			return nil, fmt.Errorf("invalid trusted proxy CIDR %q: %w", s, err)
+		}
+		nets = append(nets, network)
+	}
+	return nets, nil
+}
+
 // middleware wraps an http.Handler with per-IP rate limiting. The client IP
 // is determined from the X-Forwarded-For header only when the direct connection
 // comes from a loopback address (local reverse proxy). For non-loopback
@@ -117,8 +164,8 @@ func isLoopback(ip string) bool {
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := extractRemoteIP(r.RemoteAddr)
-		// Only trust X-Forwarded-For from loopback (local reverse proxy)
-		if isLoopback(ip) {
+		// Only trust X-Forwarded-For from trusted proxies (loopback or configured CIDRs)
+		if isTrustedProxy(ip, rl.trustedProxies) {
 			if xForwarded := r.Header.Get("X-Forwarded-For"); xForwarded != "" {
 				ip = strings.TrimSpace(strings.Split(xForwarded, ",")[0])
 			}

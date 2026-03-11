@@ -417,7 +417,39 @@ func TestGetClientIP_IgnoresXFFFromNonLoopback(t *testing.T) {
 
 	got := getClientIP(req)
 	assert.Equal(t, "203.0.113.1", got,
-		"X-Forwarded-For should be ignored when RemoteAddr is not loopback")
+		"X-Forwarded-For should be ignored when RemoteAddr is not loopback and no trusted proxies")
+}
+
+func TestGetClientIP_TrustsXFFFromConfiguredProxy(t *testing.T) {
+	t.Parallel()
+
+	// Configure 172.17.0.0/16 as trusted proxy CIDR (typical Docker bridge)
+	trusted, err := ParseTrustedProxies([]string{"172.17.0.0/16"})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "172.17.0.2:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.50")
+
+	got := getClientIP(req, trusted...)
+	assert.Equal(t, "203.0.113.50", got,
+		"X-Forwarded-For should be trusted when RemoteAddr is in configured trusted proxy CIDR")
+}
+
+func TestGetClientIP_IgnoresXFFFromUntrustedProxy(t *testing.T) {
+	t.Parallel()
+
+	// Configure only 10.0.0.0/8 as trusted
+	trusted, err := ParseTrustedProxies([]string{"10.0.0.0/8"})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "172.17.0.2:1234" // NOT in 10.0.0.0/8
+	req.Header.Set("X-Forwarded-For", "203.0.113.50")
+
+	got := getClientIP(req, trusted...)
+	assert.Equal(t, "172.17.0.2", got,
+		"X-Forwarded-For should be ignored when RemoteAddr is NOT in trusted proxy CIDR")
 }
 
 func TestGetClientIP_TrustsXFFFromLoopback(t *testing.T) {
@@ -442,4 +474,35 @@ func TestGetClientIP_IPv6Loopback(t *testing.T) {
 	got := getClientIP(req)
 	assert.Equal(t, "10.0.0.1", got,
 		"X-Forwarded-For should be trusted when RemoteAddr is IPv6 loopback")
+}
+
+func TestParseTrustedProxies(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   []string
+		wantErr bool
+		wantLen int
+	}{
+		{"empty", nil, false, 0},
+		{"single CIDR", []string{"172.17.0.0/16"}, false, 1},
+		{"plain IP becomes /32", []string{"10.0.0.1"}, false, 1},
+		{"multiple", []string{"10.0.0.0/8", "172.16.0.0/12"}, false, 2},
+		{"invalid IP", []string{"not-an-ip"}, true, 0},
+		{"invalid CIDR", []string{"10.0.0.0/99"}, true, 0},
+	}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			nets, err := ParseTrustedProxies(tt.input)
+			if tt.wantErr {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+				assert.Len(t, nets, tt.wantLen)
+			}
+		})
+	}
 }
