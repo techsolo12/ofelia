@@ -5,6 +5,7 @@ package cli
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -582,6 +583,124 @@ func TestMergeUsedKeys_AllNil(t *testing.T) {
 
 	merged := mergeUsedKeys(nil, nil, nil)
 	assert.Empty(t, merged)
+}
+
+func TestDecodeWithMetadata_TimeDuration(t *testing.T) {
+	t.Parallel()
+
+	type Config struct {
+		Timeout time.Duration `mapstructure:"timeout"`
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected time.Duration
+	}{
+		{"hours", "1h", time.Hour},
+		{"minutes", "30m", 30 * time.Minute},
+		{"seconds", "55s", 55 * time.Second},
+		{"combined", "1h30m", 90 * time.Minute},
+		{"day-equivalent", "24h", 24 * time.Hour},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var cfg Config
+			_, err := decodeWithMetadata(map[string]any{"timeout": tt.input}, &cfg)
+			require.NoError(t, err, "should parse duration string %q", tt.input)
+			assert.Equal(t, tt.expected, cfg.Timeout)
+		})
+	}
+}
+
+func TestWeakDecodeConsistent_TimeDuration(t *testing.T) {
+	t.Parallel()
+
+	type Config struct {
+		Timeout time.Duration `mapstructure:"timeout"`
+	}
+
+	tests := []struct {
+		name     string
+		input    string
+		expected time.Duration
+	}{
+		{"hours", "1h", time.Hour},
+		{"minutes", "30m", 30 * time.Minute},
+		{"seconds", "55s", 55 * time.Second},
+		{"combined", "1h30m", 90 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var cfg Config
+			err := weakDecodeConsistent(map[string]any{"timeout": tt.input}, &cfg)
+			require.NoError(t, err, "should parse duration string %q", tt.input)
+			assert.Equal(t, tt.expected, cfg.Timeout)
+		})
+	}
+}
+
+func TestBuildFromString_MaxRuntimeDuration(t *testing.T) {
+	t.Parallel()
+
+	configStr := `
+[job-run "test-job"]
+schedule = @every 5s
+image = busybox
+command = echo hello
+max-runtime = 1h
+`
+
+	logger, _ := test.NewTestLoggerWithHandler()
+	cfg, err := BuildFromString(configStr, logger)
+	require.NoError(t, err, "max-runtime = 1h should parse without error")
+	require.Contains(t, cfg.RunJobs, "test-job")
+	assert.Equal(t, time.Hour, cfg.RunJobs["test-job"].MaxRuntime)
+}
+
+func TestBuildFromString_AllDurationFields(t *testing.T) {
+	t.Parallel()
+
+	configStr := `
+[global]
+max-runtime = 2h
+notification-cooldown = 5m
+
+[job-exec "test-exec"]
+schedule = @every 5s
+container = my-container
+command = echo hello
+`
+
+	logger, _ := test.NewTestLoggerWithHandler()
+	cfg, err := BuildFromString(configStr, logger)
+	require.NoError(t, err, "global duration fields should parse without error")
+	assert.Equal(t, 2*time.Hour, cfg.Global.MaxRuntime)
+	assert.Equal(t, 5*time.Minute, cfg.Global.NotificationCooldown)
+}
+
+func TestBuildFromString_ServiceJobMaxRuntime(t *testing.T) {
+	t.Parallel()
+
+	configStr := `
+[job-service-run "test-svc"]
+schedule = @every 5s
+image = busybox
+command = echo hello
+max-runtime = 45m
+`
+
+	logger, _ := test.NewTestLoggerWithHandler()
+	cfg, err := BuildFromString(configStr, logger)
+	require.NoError(t, err, "service job max-runtime = 45m should parse without error")
+	require.Contains(t, cfg.ServiceJobs, "test-svc")
+	assert.Equal(t, 45*time.Minute, cfg.ServiceJobs["test-svc"].MaxRuntime)
 }
 
 func TestMergeUsedKeys_FalseValues(t *testing.T) {
