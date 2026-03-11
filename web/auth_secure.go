@@ -264,7 +264,9 @@ type SecureLoginHandler struct {
 	trustedProxies []*net.IPNet
 }
 
-func NewSecureLoginHandler(config *SecureAuthConfig, tm *SecureTokenManager, rl *RateLimiter, trustedProxies ...*net.IPNet) *SecureLoginHandler {
+func NewSecureLoginHandler(
+	config *SecureAuthConfig, tm *SecureTokenManager, rl *RateLimiter, trustedProxies ...*net.IPNet,
+) *SecureLoginHandler {
 	return &SecureLoginHandler{
 		config:         config,
 		tokenManager:   tm,
