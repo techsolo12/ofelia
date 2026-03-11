@@ -162,16 +162,18 @@ func ParseTrustedProxies(cidrs []string) ([]*net.IPNet, error) {
 }
 
 // middleware wraps an http.Handler with per-IP rate limiting. The client IP
-// is determined from the X-Forwarded-For header only when the direct connection
-// comes from a loopback address (local reverse proxy). For non-loopback
-// connections, forwarded headers are ignored to prevent IP spoofing.
+// is determined from X-Forwarded-For or X-Real-IP headers only when the direct
+// connection comes from a trusted proxy (loopback or configured CIDRs).
+// For untrusted connections, forwarded headers are ignored to prevent IP spoofing.
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := extractRemoteIP(r.RemoteAddr)
-		// Only trust X-Forwarded-For from trusted proxies (loopback or configured CIDRs)
+		// Only trust forwarded headers from trusted proxies (loopback or configured CIDRs)
 		if isTrustedProxy(ip, rl.trustedProxies) {
 			if xForwarded := r.Header.Get("X-Forwarded-For"); xForwarded != "" {
 				ip = strings.TrimSpace(strings.Split(xForwarded, ",")[0])
+			} else if xRealIP := r.Header.Get("X-Real-IP"); xRealIP != "" {
+				ip = xRealIP
 			}
 		}
 
