@@ -265,3 +265,132 @@ func TestJobRunDuringShutdown(t *testing.T) {
 
 	t.Log("Job prevention during shutdown test passed")
 }
+
+// TestShutdownHookPriorityOrdering verifies that hooks with different priorities
+// execute in priority groups: all hooks in a lower priority group must FINISH
+// before hooks in the next priority group START.
+func TestShutdownHookPriorityOrdering(t *testing.T) {
+	logger := newDiscardLogger()
+	sm := NewShutdownManager(logger, 5*time.Second)
+
+	// Use channels to track start and finish times per hook.
+	// Priority-10 hooks must fully finish before priority-20 hooks start,
+	// and priority-20 hooks must fully finish before priority-30 hooks start.
+	type hookEvent struct {
+		name     string
+		priority int
+		start    time.Time
+		end      time.Time
+	}
+
+	var mu sync.Mutex
+	events := make([]hookEvent, 0, 4)
+
+	makeHook := func(name string, priority int, duration time.Duration) ShutdownHook {
+		return ShutdownHook{
+			Name:     name,
+			Priority: priority,
+			Hook: func(ctx context.Context) error {
+				start := time.Now()
+				time.Sleep(duration)
+				end := time.Now()
+				mu.Lock()
+				events = append(events, hookEvent{name: name, priority: priority, start: start, end: end})
+				mu.Unlock()
+				return nil
+			},
+		}
+	}
+
+	// Register hooks in scrambled order to prove sorting works
+	sm.RegisterHook(makeHook("p20-a", 20, 50*time.Millisecond))
+	sm.RegisterHook(makeHook("p10-a", 10, 50*time.Millisecond))
+	sm.RegisterHook(makeHook("p30-a", 30, 50*time.Millisecond))
+	sm.RegisterHook(makeHook("p10-b", 10, 50*time.Millisecond))
+
+	err := sm.Shutdown()
+	if err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(events) != 4 {
+		t.Fatalf("Expected 4 hook events, got %d", len(events))
+	}
+
+	// Find the latest end time in priority-10 group and earliest start time in priority-20 group
+	var p10LatestEnd, p20EarliestStart, p20LatestEnd, p30EarliestStart time.Time
+
+	for _, ev := range events {
+		switch ev.priority {
+		case 10:
+			if p10LatestEnd.IsZero() || ev.end.After(p10LatestEnd) {
+				p10LatestEnd = ev.end
+			}
+		case 20:
+			if p20EarliestStart.IsZero() || ev.start.Before(p20EarliestStart) {
+				p20EarliestStart = ev.start
+			}
+			if p20LatestEnd.IsZero() || ev.end.After(p20LatestEnd) {
+				p20LatestEnd = ev.end
+			}
+		case 30:
+			if p30EarliestStart.IsZero() || ev.start.Before(p30EarliestStart) {
+				p30EarliestStart = ev.start
+			}
+		}
+	}
+
+	// Priority-10 hooks must finish before priority-20 hooks start
+	if !p10LatestEnd.Before(p20EarliestStart) && !p10LatestEnd.Equal(p20EarliestStart) {
+		t.Errorf("Priority-10 hooks did not finish before priority-20 hooks started: "+
+			"p10 latest end=%v, p20 earliest start=%v", p10LatestEnd, p20EarliestStart)
+	}
+
+	// Priority-20 hooks must finish before priority-30 hooks start
+	if !p20LatestEnd.Before(p30EarliestStart) && !p20LatestEnd.Equal(p30EarliestStart) {
+		t.Errorf("Priority-20 hooks did not finish before priority-30 hooks started: "+
+			"p20 latest end=%v, p30 earliest start=%v", p20LatestEnd, p30EarliestStart)
+	}
+}
+
+// TestShutdownHookSamePriorityConcurrent verifies that hooks with the
+// same priority execute concurrently (not sequentially).
+func TestShutdownHookSamePriorityConcurrent(t *testing.T) {
+	logger := newDiscardLogger()
+	sm := NewShutdownManager(logger, 5*time.Second)
+
+	hookDuration := 100 * time.Millisecond
+
+	sm.RegisterHook(ShutdownHook{
+		Name: "p10-slow-a", Priority: 10,
+		Hook: func(ctx context.Context) error {
+			time.Sleep(hookDuration)
+			return nil
+		},
+	})
+	sm.RegisterHook(ShutdownHook{
+		Name: "p10-slow-b", Priority: 10,
+		Hook: func(ctx context.Context) error {
+			time.Sleep(hookDuration)
+			return nil
+		},
+	})
+
+	start := time.Now()
+	err := sm.Shutdown()
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Shutdown failed: %v", err)
+	}
+
+	// If both hooks ran concurrently, total time should be around hookDuration, not 2x.
+	// Allow generous tolerance (1.5x) but must be less than 2x.
+	maxExpected := hookDuration * 2
+	if elapsed >= maxExpected {
+		t.Errorf("Same-priority hooks appear to have run sequentially: elapsed %v >= %v", elapsed, maxExpected)
+	}
+}

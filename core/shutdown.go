@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -97,47 +98,55 @@ func (sm *ShutdownManager) Shutdown() error {
 	// Signal that shutdown has started
 	close(sm.shutdownChan)
 
-	// Execute shutdown hooks in order
-	var wg sync.WaitGroup
-	errChan := make(chan error, len(sm.hooks))
-
+	// Group hooks by priority. Hooks within the same priority group run
+	// concurrently, but each group must complete before the next starts.
+	groups := make(map[int][]ShutdownHook)
+	var priorities []int
 	for _, hook := range sm.hooks {
-		wg.Add(1)
-		go func(h ShutdownHook) {
-			defer wg.Done()
-
-			sm.logger.Debug(fmt.Sprintf("Executing shutdown hook: %s (priority: %d)", h.Name, h.Priority))
-
-			if err := h.Hook(ctx); err != nil {
-				sm.logger.Error(fmt.Sprintf("Shutdown hook '%s' failed: %v", h.Name, err))
-				errChan <- fmt.Errorf("hook %s: %w", h.Name, err)
-			} else {
-				sm.logger.Debug(fmt.Sprintf("Shutdown hook '%s' completed successfully", h.Name))
-			}
-		}(hook)
+		if _, exists := groups[hook.Priority]; !exists {
+			priorities = append(priorities, hook.Priority)
+		}
+		groups[hook.Priority] = append(groups[hook.Priority], hook)
 	}
+	sort.Ints(priorities)
 
-	// Wait for all hooks to complete or timeout
-	done := make(chan struct{})
-	go func() {
+	var shutdownErrors []error
+
+	for _, priority := range priorities {
+		groupHooks := groups[priority]
+		var wg sync.WaitGroup
+		errChan := make(chan error, len(groupHooks))
+
+		for _, hook := range groupHooks {
+			wg.Add(1)
+			go func(h ShutdownHook) {
+				defer wg.Done()
+
+				sm.logger.Debug(fmt.Sprintf("Executing shutdown hook: %s (priority: %d)", h.Name, h.Priority))
+
+				if err := h.Hook(ctx); err != nil {
+					sm.logger.Error(fmt.Sprintf("Shutdown hook '%s' failed: %v", h.Name, err))
+					errChan <- fmt.Errorf("hook %s: %w", h.Name, err)
+				} else {
+					sm.logger.Debug(fmt.Sprintf("Shutdown hook '%s' completed successfully", h.Name))
+				}
+			}(hook)
+		}
+
 		wg.Wait()
-		close(done)
-	}()
+		close(errChan)
+		for err := range errChan {
+			shutdownErrors = append(shutdownErrors, err)
+		}
 
-	select {
-	case <-done:
-		sm.logger.Info("Graceful shutdown completed successfully")
-	case <-ctx.Done():
-		sm.logger.Error(fmt.Sprintf("Graceful shutdown timed out after %v", sm.timeout))
-		return ErrShutdownTimeout
+		// Check timeout between groups
+		if ctx.Err() != nil {
+			sm.logger.Error(fmt.Sprintf("Graceful shutdown timed out after %v", sm.timeout))
+			return ErrShutdownTimeout
+		}
 	}
 
-	// Check for errors
-	close(errChan)
-	shutdownErrors := make([]error, 0, 5) // Pre-allocate with reasonable capacity
-	for err := range errChan {
-		shutdownErrors = append(shutdownErrors, err)
-	}
+	sm.logger.Info("Graceful shutdown completed successfully")
 
 	if len(shutdownErrors) > 0 {
 		return fmt.Errorf("%w: %d errors occurred", ErrShutdownTimeout, len(shutdownErrors))
