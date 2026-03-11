@@ -6,6 +6,7 @@ package web
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,7 +20,7 @@ func TestCleanupOldLimiters_Empty(t *testing.T) {
 	rl := NewRateLimiter(10, 5)
 
 	// Cleanup on empty map should not panic
-	rl.CleanupOldLimiters()
+	rl.CleanupOldLimiters(5 * time.Minute)
 	assert.NotNil(t, rl.limiters)
 	assert.Empty(t, rl.limiters)
 }
@@ -34,8 +35,8 @@ func TestCleanupOldLimiters_WithEntries(t *testing.T) {
 
 	assert.Len(t, rl.limiters, 3)
 
-	// Cleanup should not panic and map should remain valid
-	rl.CleanupOldLimiters()
+	// Cleanup should not panic and map should remain valid (all entries are recent)
+	rl.CleanupOldLimiters(5 * time.Minute)
 	assert.NotNil(t, rl.limiters)
 }
 
@@ -256,19 +257,19 @@ func TestGetClientIP(t *testing.T) {
 		expected   string
 	}{
 		{
-			name:       "X-Forwarded-For single IP",
+			name:       "X-Forwarded-For single IP from loopback",
 			xff:        "203.0.113.1",
 			remoteAddr: "127.0.0.1:1234",
 			expected:   "203.0.113.1",
 		},
 		{
-			name:       "X-Forwarded-For multiple IPs",
+			name:       "X-Forwarded-For multiple IPs from loopback",
 			xff:        "203.0.113.1, 70.41.3.18",
 			remoteAddr: "127.0.0.1:1234",
 			expected:   "203.0.113.1",
 		},
 		{
-			name:       "X-Real-IP header",
+			name:       "X-Real-IP header from loopback",
 			xri:        "198.51.100.1",
 			remoteAddr: "127.0.0.1:1234",
 			expected:   "198.51.100.1",
@@ -295,4 +296,150 @@ func TestGetClientIP(t *testing.T) {
 			assert.Equal(t, tt.expected, got)
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Fix #6: CSRF bypass via X-Requested-With header
+// ---------------------------------------------------------------------------
+
+func TestCSRF_XRequestedWithBypassRemoved(t *testing.T) {
+	t.Parallel()
+
+	// Create a valid bcrypt hash for "testpassword"
+	hash, err := HashPassword("testpassword")
+	require.NoError(t, err)
+
+	config := &SecureAuthConfig{
+		Enabled:      true,
+		Username:     "admin",
+		PasswordHash: hash,
+		SecretKey:    "test-secret-key-for-csrf",
+		TokenExpiry:  24,
+		MaxAttempts:  10,
+	}
+
+	tm, err := NewSecureTokenManager(config.SecretKey, config.TokenExpiry)
+	require.NoError(t, err)
+	defer tm.Close()
+
+	rl := NewRateLimiter(config.MaxAttempts, config.MaxAttempts)
+	handler := NewSecureLoginHandler(config, tm, rl)
+
+	// Send a POST with X-Requested-With: XMLHttpRequest but NO CSRF token.
+	// The bug allows this to bypass CSRF validation entirely.
+	body := strings.NewReader(`{"username":"admin","password":"testpassword"}`)
+	req := httptest.NewRequest(http.MethodPost, "/login", body)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	req.RemoteAddr = "127.0.0.1:1234"
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	// After the fix, this should return 403 Forbidden because no CSRF token
+	// is provided, regardless of the X-Requested-With header.
+	assert.Equal(t, http.StatusForbidden, w.Code,
+		"requests with X-Requested-With but no CSRF token must be rejected")
+	assert.Contains(t, w.Body.String(), "CSRF token required")
+}
+
+// ---------------------------------------------------------------------------
+// Fix #7: Rate limiter cleanup (memory DoS)
+// ---------------------------------------------------------------------------
+
+func TestRateLimiterCleanupRemovesOldEntries(t *testing.T) {
+	t.Parallel()
+
+	rl := NewRateLimiter(10, 5)
+
+	// Access three IPs to create limiters
+	rl.GetLimiter("192.168.1.1")
+	rl.GetLimiter("192.168.1.2")
+	rl.GetLimiter("192.168.1.3")
+
+	require.Len(t, rl.limiters, 3)
+
+	// Backdate lastAccess for two of the IPs to simulate stale entries
+	rl.mu.Lock()
+	staleTime := time.Now().Add(-10 * time.Minute)
+	rl.lastAccess["192.168.1.1"] = staleTime
+	rl.lastAccess["192.168.1.2"] = staleTime
+	// Leave 192.168.1.3 with its recent access time
+	rl.mu.Unlock()
+
+	// Cleanup entries older than 5 minutes
+	rl.CleanupOldLimiters(5 * time.Minute)
+
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+
+	assert.Len(t, rl.limiters, 1, "only the non-stale IP should remain")
+	assert.Contains(t, rl.limiters, "192.168.1.3", "recent IP should survive cleanup")
+	assert.NotContains(t, rl.limiters, "192.168.1.1", "stale IP should be removed")
+	assert.NotContains(t, rl.limiters, "192.168.1.2", "stale IP should be removed")
+
+	assert.Len(t, rl.lastAccess, 1, "lastAccess map should also be cleaned")
+	assert.Contains(t, rl.lastAccess, "192.168.1.3")
+}
+
+func TestRateLimiterCleanupPreservesRecentEntries(t *testing.T) {
+	t.Parallel()
+
+	rl := NewRateLimiter(10, 5)
+
+	// Access several IPs -- all are recent
+	rl.GetLimiter("10.0.0.1")
+	rl.GetLimiter("10.0.0.2")
+	rl.GetLimiter("10.0.0.3")
+
+	require.Len(t, rl.limiters, 3)
+
+	// Cleanup with a 5-minute maxAge -- all entries are fresh, none should be removed
+	rl.CleanupOldLimiters(5 * time.Minute)
+
+	rl.mu.RLock()
+	defer rl.mu.RUnlock()
+
+	assert.Len(t, rl.limiters, 3, "all recent entries should survive cleanup")
+	assert.Len(t, rl.lastAccess, 3, "all recent lastAccess entries should survive cleanup")
+}
+
+// ---------------------------------------------------------------------------
+// Fix #10: Trusted proxies for rate limiter IP extraction
+// ---------------------------------------------------------------------------
+
+func TestGetClientIP_IgnoresXFFFromNonLoopback(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.1:1234"
+	req.Header.Set("X-Forwarded-For", "10.0.0.1")
+
+	got := getClientIP(req)
+	assert.Equal(t, "203.0.113.1", got,
+		"X-Forwarded-For should be ignored when RemoteAddr is not loopback")
+}
+
+func TestGetClientIP_TrustsXFFFromLoopback(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "203.0.113.1")
+
+	got := getClientIP(req)
+	assert.Equal(t, "203.0.113.1", got,
+		"X-Forwarded-For should be trusted when RemoteAddr is loopback")
+}
+
+func TestGetClientIP_IPv6Loopback(t *testing.T) {
+	t.Parallel()
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "[::1]:1234"
+	req.Header.Set("X-Forwarded-For", "10.0.0.1")
+
+	got := getClientIP(req)
+	assert.Equal(t, "10.0.0.1", got,
+		"X-Forwarded-For should be trusted when RemoteAddr is IPv6 loopback")
 }

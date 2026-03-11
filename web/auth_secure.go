@@ -42,17 +42,19 @@ type SecureAuthConfig struct {
 
 // RateLimiter manages login attempt rate limiting
 type RateLimiter struct {
-	limiters map[string]*rate.Limiter
-	mu       sync.RWMutex
-	rate     int // attempts per minute
-	burst    int // burst size
+	limiters   map[string]*rate.Limiter
+	lastAccess map[string]time.Time
+	mu         sync.RWMutex
+	rate       int // attempts per minute
+	burst      int // burst size
 }
 
 func NewRateLimiter(ratePerMinute, burst int) *RateLimiter {
 	return &RateLimiter{
-		limiters: make(map[string]*rate.Limiter),
-		rate:     ratePerMinute,
-		burst:    burst,
+		limiters:   make(map[string]*rate.Limiter),
+		lastAccess: make(map[string]time.Time),
+		rate:       ratePerMinute,
+		burst:      burst,
 	}
 }
 
@@ -60,6 +62,7 @@ func (rl *RateLimiter) GetLimiter(key string) *rate.Limiter {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
+	rl.lastAccess[key] = time.Now()
 	limiter, exists := rl.limiters[key]
 	if !exists {
 		limiter = rate.NewLimiter(rate.Every(time.Minute/time.Duration(rl.rate)), rl.burst)
@@ -74,10 +77,18 @@ func (rl *RateLimiter) Allow(key string) bool {
 	return limiter.Allow()
 }
 
-// CleanupOldLimiters removes limiters that haven't been used recently
-func (rl *RateLimiter) CleanupOldLimiters() {
-	// This should be called periodically to prevent memory leak
-	// Implementation would track last access time and remove old entries
+// CleanupOldLimiters removes limiters that haven't been accessed for the given maxAge.
+func (rl *RateLimiter) CleanupOldLimiters(maxAge time.Duration) {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	cutoff := time.Now().Add(-maxAge)
+	for key, lastAccess := range rl.lastAccess {
+		if lastAccess.Before(cutoff) {
+			delete(rl.limiters, key)
+			delete(rl.lastAccess, key)
+		}
+	}
 }
 
 // SecureTokenManager handles token management with enhanced security
@@ -272,17 +283,15 @@ func (h *SecureLoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate CSRF token for web requests
-	if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
-		csrfToken := r.Header.Get("X-CSRF-Token")
-		if csrfToken == "" {
-			http.Error(w, "CSRF token required", http.StatusForbidden)
-			return
-		}
-		if !h.tokenManager.ValidateCSRFToken(csrfToken) {
-			http.Error(w, "Invalid CSRF token", http.StatusForbidden)
-			return
-		}
+	// Validate CSRF token for all requests
+	csrfToken := r.Header.Get("X-CSRF-Token")
+	if csrfToken == "" {
+		http.Error(w, "CSRF token required", http.StatusForbidden)
+		return
+	}
+	if !h.tokenManager.ValidateCSRFToken(csrfToken) {
+		http.Error(w, "Invalid CSRF token", http.StatusForbidden)
+		return
 	}
 
 	var credentials struct {
@@ -318,7 +327,7 @@ func (h *SecureLoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Generate new CSRF token for the session
-	csrfToken, err := h.tokenManager.GenerateCSRFToken()
+	csrfToken, err = h.tokenManager.GenerateCSRFToken()
 	if err != nil {
 		http.Error(w, "Failed to generate CSRF token", http.StatusInternalServerError)
 		return
@@ -344,29 +353,28 @@ func (h *SecureLoginHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// getClientIP extracts the client IP address from the request
+// getClientIP extracts the client IP address from the request.
+// Forwarded headers (X-Forwarded-For, X-Real-IP) are only trusted when the
+// direct connection comes from a loopback address, indicating a local reverse
+// proxy. For non-loopback connections, the headers are ignored to prevent
+// IP spoofing.
 func getClientIP(r *http.Request) string {
-	// Check X-Forwarded-For header first (for proxies)
-	xff := r.Header.Get("X-Forwarded-For")
-	if xff != "" {
-		ips := strings.Split(xff, ",")
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
+	remoteIP := extractRemoteIP(r.RemoteAddr)
+
+	// Only trust forwarded headers from loopback addresses
+	if isLoopback(remoteIP) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			ips := strings.Split(xff, ",")
+			if len(ips) > 0 {
+				return strings.TrimSpace(ips[0])
+			}
+		}
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return xri
 		}
 	}
 
-	// Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return xri
-	}
-
-	// Fall back to RemoteAddr
-	ip := r.RemoteAddr
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		ip = ip[:idx]
-	}
-
-	return ip
+	return remoteIP
 }
 
 // HashPassword generates a bcrypt hash of the password
