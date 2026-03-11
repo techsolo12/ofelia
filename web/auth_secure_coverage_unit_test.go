@@ -5,6 +5,7 @@ package web
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -21,8 +22,8 @@ func TestRateLimiter_CleanupOldLimiters(t *testing.T) {
 	rl.GetLimiter("192.168.1.1")
 	rl.GetLimiter("192.168.1.2")
 
-	// Should not panic (currently a no-op implementation)
-	rl.CleanupOldLimiters()
+	// Should not panic; all entries are recent so none should be removed
+	rl.CleanupOldLimiters(5 * time.Minute)
 
 	// Limiters should still exist (cleanup is a no-op)
 	assert.True(t, rl.Allow("192.168.1.1"))

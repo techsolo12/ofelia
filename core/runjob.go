@@ -96,15 +96,21 @@ func entrypointSlice(ep *string) []string {
 
 func (j *RunJob) Run(ctx *Context) error {
 	pull, _ := strconv.ParseBool(j.Pull)
-	bgCtx := context.Background()
+	// Use the middleware chain's context for cancellation propagation.
+	// This ensures scheduler shutdown, job removal, and max-runtime
+	// cancellation reach the Docker API calls.
+	runCtx := ctx.Ctx
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
 
 	if j.Image != "" && j.Container == "" {
-		if err := j.ensureImageAvailable(bgCtx, ctx, pull); err != nil {
+		if err := j.ensureImageAvailable(runCtx, ctx, pull); err != nil {
 			return err
 		}
 	}
 
-	containerID, err := j.createOrInspectContainer(bgCtx)
+	containerID, err := j.createOrInspectContainer(runCtx)
 	if err != nil {
 		return err
 	}
@@ -113,13 +119,13 @@ func (j *RunJob) Run(ctx *Context) error {
 	created := j.Container == ""
 	if created {
 		defer func() {
-			if delErr := j.deleteContainer(bgCtx); delErr != nil {
+			if delErr := j.deleteContainer(runCtx); delErr != nil {
 				ctx.Warn("failed to delete container: " + delErr.Error())
 			}
 		}()
 	}
 
-	return j.startAndWait(bgCtx, ctx)
+	return j.startAndWait(runCtx, ctx)
 }
 
 // ensureImageAvailable pulls or verifies the image presence according to Pull option.

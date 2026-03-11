@@ -58,25 +58,31 @@ func (j *RunServiceJob) Validate() error {
 }
 
 func (j *RunServiceJob) Run(ctx *Context) error {
-	bgCtx := context.Background()
+	// Use the middleware chain's context for cancellation propagation.
+	// This ensures scheduler shutdown, job removal, and max-runtime
+	// cancellation reach the Docker API calls.
+	runCtx := ctx.Ctx
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
 
 	// Pull image using the provider
-	if err := j.Provider.EnsureImage(bgCtx, j.Image, true); err != nil {
+	if err := j.Provider.EnsureImage(runCtx, j.Image, true); err != nil {
 		return fmt.Errorf("ensuring image: %w", err)
 	}
 
-	svcID, err := j.buildService(bgCtx)
+	svcID, err := j.buildService(runCtx)
 	if err != nil {
 		return err
 	}
 
 	ctx.Logger.Info(fmt.Sprintf("Created service %s for job %s", svcID, j.Name))
 
-	if err := j.watchContainer(bgCtx, ctx, svcID); err != nil {
+	if err := j.watchContainer(runCtx, ctx, svcID); err != nil {
 		return err
 	}
 
-	return j.deleteService(bgCtx, ctx, svcID)
+	return j.deleteService(runCtx, ctx, svcID)
 }
 
 func (j *RunServiceJob) buildService(ctx context.Context) (string, error) {
@@ -168,7 +174,19 @@ func (j *RunServiceJob) watchContainer(ctx context.Context, jobCtx *Context, svc
 	wg.Wait()
 
 	jobCtx.Logger.Info(fmt.Sprintf("Service ID %s (%s) has completed with exit code %d", svcID, j.Name, exitCode))
-	return err
+
+	if err != nil {
+		return err
+	}
+
+	switch exitCode {
+	case 0:
+		return nil
+	case -1, ExitCodeSwarmError:
+		return ErrUnexpected
+	default:
+		return NonZeroExitError{ExitCode: exitCode}
+	}
 }
 
 func (j *RunServiceJob) findTaskStatus(ctx context.Context, jobCtx *Context, serviceID string) (int, bool) {

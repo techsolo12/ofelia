@@ -5,6 +5,7 @@ package web
 
 import (
 	"testing"
+	"time"
 )
 
 const (
@@ -105,8 +106,8 @@ func TestRateLimiterCleanupOldLimiters(t *testing.T) {
 		t.Errorf("Expected 3 limiters before cleanup, got %d", len(rateLimiter.limiters))
 	}
 
-	// Call cleanup - this should execute without panic
-	rateLimiter.CleanupOldLimiters()
+	// Call cleanup - this should execute without panic (all entries are recent)
+	rateLimiter.CleanupOldLimiters(5 * time.Minute)
 
 	// The cleanup might or might not remove limiters depending on implementation
 	// Main goal is to ensure it doesn't panic

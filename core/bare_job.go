@@ -39,6 +39,21 @@ func (j *BareJob) GetName() string {
 	return j.Name
 }
 
+// GetDependencies returns the list of job names this job depends on.
+func (j *BareJob) GetDependencies() []string {
+	return j.Dependencies
+}
+
+// GetOnSuccess returns the list of job names to trigger when this job succeeds.
+func (j *BareJob) GetOnSuccess() []string {
+	return j.OnSuccess
+}
+
+// GetOnFailure returns the list of job names to trigger when this job fails.
+func (j *BareJob) GetOnFailure() []string {
+	return j.OnFailure
+}
+
 func (j *BareJob) GetSchedule() string {
 	return j.Schedule
 }

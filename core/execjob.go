@@ -39,6 +39,11 @@ func (j *ExecJob) InitializeRuntimeFields() {
 }
 
 func (j *ExecJob) Run(ctx *Context) error {
+	runCtx := ctx.Ctx
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
+
 	// Use RunExec for a simpler, unified approach
 	config := &domain.ExecConfig{
 		Cmd:          args.GetArgs(j.Command),
@@ -52,7 +57,7 @@ func (j *ExecJob) Run(ctx *Context) error {
 	}
 
 	exitCode, err := j.Provider.RunExec(
-		context.Background(),
+		runCtx,
 		j.Container,
 		config,
 		ctx.Execution.OutputStream,

@@ -21,6 +21,39 @@ func generateTestHash(password string) string {
 	return string(hash)
 }
 
+// fetchCSRFToken retrieves a CSRF token from the /api/csrf-token endpoint.
+func fetchCSRFToken(t *testing.T, handler http.Handler) string {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/api/csrf-token", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("failed to fetch CSRF token: status %d", w.Code)
+	}
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode CSRF token response: %v", err)
+	}
+	token := resp["csrf_token"]
+	if token == "" {
+		t.Fatal("CSRF token is empty")
+	}
+	return token
+}
+
+// loginWithCSRF performs a login request using a fresh CSRF token.
+func loginWithCSRF(t *testing.T, handler http.Handler, username, password string) *httptest.ResponseRecorder {
+	t.Helper()
+	csrfToken := fetchCSRFToken(t, handler)
+	body := `{"username":"` + username + `","password":"` + password + `"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrfToken)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	return w
+}
+
 func TestServerWithAuthEnabled(t *testing.T) {
 	sched := core.NewScheduler(stubDiscardLogger())
 	authCfg := &webpkg.SecureAuthConfig{
@@ -113,12 +146,7 @@ func TestLoginFlow(t *testing.T) {
 	httpSrv := srv.HTTPServer()
 
 	t.Run("login_with_valid_credentials", func(t *testing.T) {
-		body := `{"username":"testuser","password":"correctpassword"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
-		w := httptest.NewRecorder()
-		httpSrv.Handler.ServeHTTP(w, req)
+		w := loginWithCSRF(t, httpSrv.Handler, "testuser", "correctpassword")
 
 		if w.Code != http.StatusOK {
 			t.Errorf("expected status 200, got %d: %s", w.Code, w.Body.String())
@@ -147,12 +175,7 @@ func TestLoginFlow(t *testing.T) {
 	})
 
 	t.Run("login_with_invalid_password", func(t *testing.T) {
-		body := `{"username":"testuser","password":"wrongpassword"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
-		w := httptest.NewRecorder()
-		httpSrv.Handler.ServeHTTP(w, req)
+		w := loginWithCSRF(t, httpSrv.Handler, "testuser", "wrongpassword")
 
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", w.Code)
@@ -160,12 +183,7 @@ func TestLoginFlow(t *testing.T) {
 	})
 
 	t.Run("login_with_invalid_username", func(t *testing.T) {
-		body := `{"username":"wronguser","password":"correctpassword"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
-		w := httptest.NewRecorder()
-		httpSrv.Handler.ServeHTTP(w, req)
+		w := loginWithCSRF(t, httpSrv.Handler, "wronguser", "correctpassword")
 
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("expected status 401, got %d", w.Code)
@@ -203,12 +221,7 @@ func TestAuthenticatedAccess(t *testing.T) {
 	srv := webpkg.NewServerWithAuth("", sched, nil, nil, authCfg)
 	httpSrv := srv.HTTPServer()
 
-	body := `{"username":"admin","password":"password123"}`
-	loginReq := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-	loginReq.Header.Set("Content-Type", "application/json")
-	loginReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-	loginW := httptest.NewRecorder()
-	httpSrv.Handler.ServeHTTP(loginW, loginReq)
+	loginW := loginWithCSRF(t, httpSrv.Handler, "admin", "password123")
 
 	if loginW.Code != http.StatusOK {
 		t.Fatalf("login failed: %d", loginW.Code)
@@ -287,12 +300,7 @@ func TestLogoutFlow(t *testing.T) {
 	srv := webpkg.NewServerWithAuth("", sched, nil, nil, authCfg)
 	httpSrv := srv.HTTPServer()
 
-	body := `{"username":"admin","password":"password"}`
-	loginReq := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-	loginReq.Header.Set("Content-Type", "application/json")
-	loginReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-	loginW := httptest.NewRecorder()
-	httpSrv.Handler.ServeHTTP(loginW, loginReq)
+	loginW := loginWithCSRF(t, httpSrv.Handler, "admin", "password")
 
 	var loginResp map[string]any
 	_ = json.NewDecoder(loginW.Body).Decode(&loginResp)
@@ -331,12 +339,7 @@ func TestLogoutFlow(t *testing.T) {
 	})
 
 	t.Run("logout_method_not_allowed", func(t *testing.T) {
-		body := `{"username":"admin","password":"password"}`
-		newLoginReq := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-		newLoginReq.Header.Set("Content-Type", "application/json")
-		newLoginReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-		newLoginW := httptest.NewRecorder()
-		httpSrv.Handler.ServeHTTP(newLoginW, newLoginReq)
+		newLoginW := loginWithCSRF(t, httpSrv.Handler, "admin", "password")
 
 		var newLoginResp map[string]any
 		_ = json.NewDecoder(newLoginW.Body).Decode(&newLoginResp)
@@ -353,15 +356,10 @@ func TestLogoutFlow(t *testing.T) {
 	})
 
 	t.Run("logout_cookie_secure_flag_without_https", func(t *testing.T) {
-		body := `{"username":"admin","password":"password"}`
-		loginReq := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-		loginReq.Header.Set("Content-Type", "application/json")
-		loginReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-		loginW := httptest.NewRecorder()
-		httpSrv.Handler.ServeHTTP(loginW, loginReq)
+		w := loginWithCSRF(t, httpSrv.Handler, "admin", "password")
 
 		var resp map[string]any
-		_ = json.NewDecoder(loginW.Body).Decode(&resp)
+		_ = json.NewDecoder(w.Body).Decode(&resp)
 		tkn := resp["token"].(string)
 
 		logoutReq := httptest.NewRequest(http.MethodPost, "/api/logout", nil)
@@ -381,15 +379,10 @@ func TestLogoutFlow(t *testing.T) {
 	})
 
 	t.Run("logout_cookie_secure_flag_with_forwarded_proto", func(t *testing.T) {
-		body := `{"username":"admin","password":"password"}`
-		loginReq := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-		loginReq.Header.Set("Content-Type", "application/json")
-		loginReq.Header.Set("X-Requested-With", "XMLHttpRequest")
-		loginW := httptest.NewRecorder()
-		httpSrv.Handler.ServeHTTP(loginW, loginReq)
+		w := loginWithCSRF(t, httpSrv.Handler, "admin", "password")
 
 		var resp map[string]any
-		_ = json.NewDecoder(loginW.Body).Decode(&resp)
+		_ = json.NewDecoder(w.Body).Decode(&resp)
 		tkn := resp["token"].(string)
 
 		logoutReq := httptest.NewRequest(http.MethodPost, "/api/logout", nil)
@@ -499,12 +492,7 @@ func TestAuthConfigDefaults(t *testing.T) {
 			t.Fatal("expected server to be created with default token expiry")
 		}
 
-		body := `{"username":"admin","password":"password"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
-		w := httptest.NewRecorder()
-		srv.HTTPServer().Handler.ServeHTTP(w, req)
+		w := loginWithCSRF(t, srv.HTTPServer().Handler, "admin", "password")
 
 		if w.Code != http.StatusOK {
 			t.Errorf("login should succeed with default token expiry, got %d", w.Code)
@@ -526,12 +514,7 @@ func TestAuthConfigDefaults(t *testing.T) {
 			t.Fatal("expected server to be created with custom token expiry")
 		}
 
-		body := `{"username":"admin","password":"password"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
-		w := httptest.NewRecorder()
-		srv.HTTPServer().Handler.ServeHTTP(w, req)
+		w := loginWithCSRF(t, srv.HTTPServer().Handler, "admin", "password")
 
 		if w.Code != http.StatusOK {
 			t.Errorf("login should succeed with custom token expiry, got %d", w.Code)
@@ -553,21 +536,12 @@ func TestAuthConfigDefaults(t *testing.T) {
 			t.Fatal("expected server to be created with default max attempts")
 		}
 
+		handler := srv.HTTPServer().Handler
 		for range 5 {
-			body := `{"username":"admin","password":"wrong"}`
-			req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-Requested-With", "XMLHttpRequest")
-			w := httptest.NewRecorder()
-			srv.HTTPServer().Handler.ServeHTTP(w, req)
+			loginWithCSRF(t, handler, "admin", "wrong")
 		}
 
-		body := `{"username":"admin","password":"wrong"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
-		w := httptest.NewRecorder()
-		srv.HTTPServer().Handler.ServeHTTP(w, req)
+		w := loginWithCSRF(t, handler, "admin", "wrong")
 
 		if w.Code != http.StatusTooManyRequests {
 			t.Errorf("expected rate limit after 5 attempts, got %d", w.Code)
@@ -589,21 +563,12 @@ func TestAuthConfigDefaults(t *testing.T) {
 			t.Fatal("expected server to be created with custom max attempts")
 		}
 
+		handler := srv.HTTPServer().Handler
 		for range 3 {
-			body := `{"username":"admin","password":"wrong"}`
-			req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("X-Requested-With", "XMLHttpRequest")
-			w := httptest.NewRecorder()
-			srv.HTTPServer().Handler.ServeHTTP(w, req)
+			loginWithCSRF(t, handler, "admin", "wrong")
 		}
 
-		body := `{"username":"admin","password":"wrong"}`
-		req := httptest.NewRequest(http.MethodPost, "/api/login", strings.NewReader(body))
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
-		w := httptest.NewRecorder()
-		srv.HTTPServer().Handler.ServeHTTP(w, req)
+		w := loginWithCSRF(t, handler, "admin", "wrong")
 
 		if w.Code != http.StatusTooManyRequests {
 			t.Errorf("expected rate limit after 3 attempts, got %d", w.Code)

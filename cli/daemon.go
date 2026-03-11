@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	_ "net/http/pprof" // #nosec G108
+	"sync"
 	"time"
 
 	"github.com/netresearch/ofelia/core"
@@ -35,8 +36,9 @@ type DaemonCommand struct {
 	WebUsername          string         `long:"web-username" env:"OFELIA_WEB_USERNAME" description:"Web UI auth username"`
 	WebPasswordHash      string         `long:"web-password-hash" env:"OFELIA_WEB_PASSWORD_HASH" description:"Bcrypt hash" default-mask:"-"`
 	WebSecretKey         string         `long:"web-secret-key" env:"OFELIA_WEB_SECRET_KEY" description:"JWT signing key" default-mask:"-"`
-	WebTokenExpiry       int            `long:"web-token-expiry" env:"OFELIA_WEB_TOKEN_EXPIRY" description:"Token expiry hours" default:"24"` //nolint:revive
-	WebMaxLoginAttempts  int            `long:"web-max-login-attempts" env:"OFELIA_WEB_MAX_LOGIN_ATTEMPTS" description:"Lockout" default:"5"` //nolint:revive
+	WebTokenExpiry       int            `long:"web-token-expiry" env:"OFELIA_WEB_TOKEN_EXPIRY" description:"Token expiry hours" default:"24"`                             //nolint:revive
+	WebMaxLoginAttempts  int            `long:"web-max-login-attempts" env:"OFELIA_WEB_MAX_LOGIN_ATTEMPTS" description:"Lockout" default:"5"`                             //nolint:revive
+	WebTrustedProxies    []string       `long:"web-trusted-proxies" env:"OFELIA_WEB_TRUSTED_PROXIES" env-delim:"," description:"Trusted proxy CIDRs for X-Forwarded-For"` //nolint:revive
 
 	scheduler       *core.Scheduler
 	pprofServer     *http.Server
@@ -44,10 +46,17 @@ type DaemonCommand struct {
 	dockerHandler   *DockerHandler
 	config          *Config
 	done            chan struct{}
+	doneOnce        sync.Once // protects done channel close
 	Logger          *slog.Logger
 	LevelVar        *slog.LevelVar
 	shutdownManager *core.ShutdownManager
 	healthChecker   *web.HealthChecker
+}
+
+// closeDone safely closes the done channel at most once, preventing
+// double-close panics when multiple goroutines detect errors concurrently.
+func (c *DaemonCommand) closeDone() {
+	c.doneOnce.Do(func() { close(c.done) })
 }
 
 // Execute runs the daemon
@@ -145,12 +154,13 @@ func (c *DaemonCommand) boot() (err error) {
 			}
 
 			authCfg = &web.SecureAuthConfig{
-				Enabled:      true,
-				Username:     c.WebUsername,
-				PasswordHash: c.WebPasswordHash,
-				SecretKey:    c.WebSecretKey,
-				TokenExpiry:  c.WebTokenExpiry,
-				MaxAttempts:  c.WebMaxLoginAttempts,
+				Enabled:        true,
+				Username:       c.WebUsername,
+				PasswordHash:   c.WebPasswordHash,
+				SecretKey:      c.WebSecretKey,
+				TokenExpiry:    c.WebTokenExpiry,
+				MaxAttempts:    c.WebMaxLoginAttempts,
+				TrustedProxies: c.WebTrustedProxies,
 			}
 		}
 		c.webServer = web.NewServerWithAuth(c.WebAddr, c.scheduler, c.config, provider, authCfg)
@@ -176,7 +186,7 @@ func (c *DaemonCommand) start() error {
 		<-c.shutdownManager.ShutdownChan()
 		// Give some time for graceful shutdown to complete
 		// The shutdown manager handles the actual shutdown process
-		close(c.done)
+		c.closeDone()
 	}()
 
 	// Start scheduler with progress feedback
@@ -202,7 +212,7 @@ func (c *DaemonCommand) start() error {
 			if err := c.pprofServer.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 				c.Logger.Error(fmt.Sprintf("Error starting HTTP server: %v", err))
 				pprofErrChan <- err
-				close(c.done)
+				c.closeDone()
 			}
 		}()
 
@@ -225,7 +235,7 @@ func (c *DaemonCommand) start() error {
 			if err := c.webServer.Start(); err != nil {
 				c.Logger.Error(fmt.Sprintf("Error starting web server: %v", err))
 				webErrChan <- err
-				close(c.done)
+				c.closeDone()
 			}
 		}()
 
@@ -305,6 +315,9 @@ func (c *DaemonCommand) applyAuthOptions(config *Config) {
 	if c.WebMaxLoginAttempts != 5 {
 		config.Global.WebMaxLoginAttempts = c.WebMaxLoginAttempts
 	}
+	if len(c.WebTrustedProxies) > 0 {
+		config.Global.WebTrustedProxies = c.WebTrustedProxies
+	}
 }
 
 func (c *DaemonCommand) applyServerOptions(config *Config) {
@@ -357,6 +370,9 @@ func (c *DaemonCommand) applyAuthDefaults(config *Config) {
 	}
 	if c.WebMaxLoginAttempts == 5 && config.Global.WebMaxLoginAttempts != 0 {
 		c.WebMaxLoginAttempts = config.Global.WebMaxLoginAttempts
+	}
+	if len(c.WebTrustedProxies) == 0 && len(config.Global.WebTrustedProxies) > 0 {
+		c.WebTrustedProxies = config.Global.WebTrustedProxies
 	}
 }
 

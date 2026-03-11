@@ -172,7 +172,8 @@ func TestConfigIni(t *testing.T) {
 		},
 	}
 
-	for _, tc := range testcases {
+	for i := range testcases {
+		tc := &testcases[i]
 		t.Run(tc.Comment, func(t *testing.T) {
 			conf, err := BuildFromString(tc.Ini, test.NewTestLogger())
 			require.NoError(t, err)
@@ -650,7 +651,8 @@ func TestLabelsConfig(t *testing.T) {
 		},
 	}
 
-	for _, tc := range testcases {
+	for i := range testcases {
+		tc := &testcases[i]
 		t.Run(tc.Comment, func(t *testing.T) {
 			conf := Config{}
 			conf.logger = test.NewTestLogger()
@@ -666,7 +668,12 @@ func TestLabelsConfig(t *testing.T) {
 			tc.ExpectedConfig.WebhookConfigs = nil
 			tc.ExpectedConfig.Global.AllowHostJobsFromLabels = true
 
-			assert.Equal(t, tc.ExpectedConfig, conf, "Test %q failed", tc.Comment)
+			assert.Equal(t, tc.ExpectedConfig.ExecJobs, conf.ExecJobs, "Test %q ExecJobs", tc.Comment)
+			assert.Equal(t, tc.ExpectedConfig.RunJobs, conf.RunJobs, "Test %q RunJobs", tc.Comment)
+			assert.Equal(t, tc.ExpectedConfig.LocalJobs, conf.LocalJobs, "Test %q LocalJobs", tc.Comment)
+			assert.Equal(t, tc.ExpectedConfig.ServiceJobs, conf.ServiceJobs, "Test %q ServiceJobs", tc.Comment)
+			assert.Equal(t, tc.ExpectedConfig.ComposeJobs, conf.ComposeJobs, "Test %q ComposeJobs", tc.Comment)
+			assert.Equal(t, tc.ExpectedConfig.Global, conf.Global, "Test %q Global", tc.Comment)
 		})
 	}
 }

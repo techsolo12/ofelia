@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	defaults "github.com/creasty/defaults"
@@ -49,10 +50,11 @@ type Config struct {
 		WebAddr                 string        `gcfg:"web-address" mapstructure:"web-address" default:":8081"`
 		WebAuthEnabled          bool          `gcfg:"web-auth-enabled" mapstructure:"web-auth-enabled" default:"false"`
 		WebUsername             string        `gcfg:"web-username" mapstructure:"web-username"`
-		WebPasswordHash         string        `gcfg:"web-password-hash" mapstructure:"web-password-hash"`
-		WebSecretKey            string        `gcfg:"web-secret-key" mapstructure:"web-secret-key"`
+		WebPasswordHash         string        `gcfg:"web-password-hash" mapstructure:"web-password-hash" json:"-"`
+		WebSecretKey            string        `gcfg:"web-secret-key" mapstructure:"web-secret-key" json:"-"`
 		WebTokenExpiry          int           `gcfg:"web-token-expiry" mapstructure:"web-token-expiry" validate:"gte=1,lte=8760" default:"24"`           //nolint:revive
 		WebMaxLoginAttempts     int           `gcfg:"web-max-login-attempts" mapstructure:"web-max-login-attempts" validate:"gte=1,lte=100" default:"5"` //nolint:revive
+		WebTrustedProxies       []string      `gcfg:"web-trusted-proxies" mapstructure:"web-trusted-proxies,"`
 		EnablePprof             bool          `gcfg:"enable-pprof" mapstructure:"enable-pprof" default:"false"`
 		PprofAddr               string        `gcfg:"pprof-address" mapstructure:"pprof-address" default:"127.0.0.1:8080"`
 		MaxRuntime              time.Duration `gcfg:"max-runtime" mapstructure:"max-runtime" validate:"gte=0" default:"24h"`
@@ -74,6 +76,7 @@ type Config struct {
 	LocalJobs         map[string]*LocalJobConfig   `gcfg:"job-local" mapstructure:"job-local,squash"`
 	ComposeJobs       map[string]*ComposeJobConfig `gcfg:"job-compose" mapstructure:"job-compose,squash"`
 	Docker            DockerConfig
+	mu                sync.RWMutex // protects job map access
 	configPath        string
 	configFiles       []string
 	configModTime     time.Time
@@ -689,8 +692,6 @@ func (c *Config) dockerContainersUpdate(containers []DockerContainerInfo) {
 		c.mergeNotificationDefaults(&j.SlackConfig, &j.MailConfig, &j.SaveConfig)
 		c.injectDedup(&j.SlackConfig, &j.MailConfig)
 	}
-	syncJobMap(c, c.ExecJobs, parsedLabelConfig.ExecJobs, execPrep, JobSourceLabel, "exec")
-
 	runPrep := func(name string, j *RunJobConfig) {
 		_ = defaults.Set(j)
 		c.applyDefaultUser(&j.User)
@@ -703,7 +704,6 @@ func (c *Config) dockerContainersUpdate(containers []DockerContainerInfo) {
 		c.mergeNotificationDefaults(&j.SlackConfig, &j.MailConfig, &j.SaveConfig)
 		c.injectDedup(&j.SlackConfig, &j.MailConfig)
 	}
-	syncJobMap(c, c.RunJobs, parsedLabelConfig.RunJobs, runPrep, JobSourceLabel, "run")
 
 	localPrep := func(name string, j *LocalJobConfig) {
 		_ = defaults.Set(j)
@@ -742,9 +742,13 @@ func (c *Config) dockerContainersUpdate(containers []DockerContainerInfo) {
 		}
 	}
 
+	c.mu.Lock()
+	syncJobMap(c, c.ExecJobs, parsedLabelConfig.ExecJobs, execPrep, JobSourceLabel, "exec")
+	syncJobMap(c, c.RunJobs, parsedLabelConfig.RunJobs, runPrep, JobSourceLabel, "run")
 	syncJobMap(c, c.LocalJobs, parsedLabelConfig.LocalJobs, localPrep, JobSourceLabel, "local")
 	syncJobMap(c, c.ServiceJobs, parsedLabelConfig.ServiceJobs, servicePrep, JobSourceLabel, "service")
 	syncJobMap(c, c.ComposeJobs, parsedLabelConfig.ComposeJobs, composePrep, JobSourceLabel, "compose")
+	c.mu.Unlock()
 
 	// Sync webhook configs from labels
 	c.syncWebhookConfigs(parsedLabelConfig.WebhookConfigs)
@@ -782,6 +786,9 @@ func (c *Config) iniConfigUpdate() error {
 	if err != nil {
 		return err
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	globalChanged := !reflect.DeepEqual(parsed.Global, c.Global)
 	c.configFiles = files
 	c.configModTime = latest
@@ -791,8 +798,10 @@ func (c *Config) iniConfigUpdate() error {
 		c.sh.ResetMiddlewares()
 		c.buildSchedulerMiddlewares(c.sh)
 		wm := c.getWebhookManager()
-		// All jobs (including disabled/paused) remain in Jobs, so one loop suffices.
-		for _, j := range c.sh.Jobs {
+		// All jobs (including disabled/paused) need middleware updates.
+		// Use safe accessors that hold the scheduler's own lock to get a copy.
+		allJobs := append(c.sh.GetActiveJobs(), c.sh.GetDisabledJobs()...)
+		for _, j := range allJobs {
 			if jc, ok := j.(jobConfig); ok {
 				jc.ResetMiddlewares()
 				jc.buildMiddlewares(wm)
