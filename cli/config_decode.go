@@ -31,6 +31,7 @@ func decodeWithMetadata(input map[string]any, output any) (*DecodeResult, error)
 		WeaklyTypedInput: true,
 		TagName:          "mapstructure",
 		MatchName:        caseInsensitiveMatch,
+		DecodeHook:       mapstructure.StringToTimeDurationHookFunc(),
 	}
 
 	decoder, err := mapstructure.NewDecoder(config)
@@ -65,6 +66,7 @@ func weakDecodeConsistent(input, output any) error {
 		WeaklyTypedInput: true,
 		TagName:          "mapstructure",
 		MatchName:        caseInsensitiveMatch,
+		DecodeHook:       mapstructure.StringToTimeDurationHookFunc(),
 	}
 
 	decoder, err := mapstructure.NewDecoder(config)
