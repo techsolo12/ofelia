@@ -356,6 +356,108 @@ func TestRunServiceJobUnit_DeleteService(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// watchContainer() exit code handling
+// ---------------------------------------------------------------------------
+
+func TestRunServiceJobUnit_WatchContainer_NonZeroExitReturnsError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		exitCode       int
+		taskState      domain.TaskState
+		wantErr        bool
+		wantNonZeroErr bool
+		wantUnexpected bool
+	}{
+		{
+			name: "exit_code_0_returns_nil",
+			exitCode: 0, taskState: domain.TaskStateComplete,
+			wantErr: false,
+		},
+		{
+			name: "exit_code_1_returns_NonZeroExitError",
+			exitCode: 1, taskState: domain.TaskStateFailed,
+			wantErr: true, wantNonZeroErr: true,
+		},
+		{
+			name: "exit_code_137_returns_NonZeroExitError",
+			exitCode: 137, taskState: domain.TaskStateFailed,
+			wantErr: true, wantNonZeroErr: true,
+		},
+		{
+			name: "swarm_error_code_returns_ErrUnexpected",
+			exitCode: ExitCodeSwarmError, taskState: domain.TaskStateFailed,
+			wantErr: true, wantUnexpected: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			k := newTestRunServiceKit(t)
+			ctx := newRunServiceJobContext(t, k.job)
+
+			k.services.SetTasks([]domain.Task{{
+				ID:        "task-exit",
+				ServiceID: "mock-service-id",
+				Status: domain.TaskStatus{
+					State:           tc.taskState,
+					ContainerStatus: &domain.ContainerStatus{ExitCode: tc.exitCode},
+				},
+			}})
+
+			err := k.job.watchContainer(context.Background(), ctx, "mock-service-id")
+
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error for exit code %d, got nil", tc.exitCode)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("expected nil error for exit code %d, got %v", tc.exitCode, err)
+			}
+			if tc.wantNonZeroErr {
+				if !IsNonZeroExitError(err) {
+					t.Errorf("expected NonZeroExitError for exit code %d, got %v", tc.exitCode, err)
+				}
+				var nze NonZeroExitError
+				if errors.As(err, &nze) && nze.ExitCode != tc.exitCode {
+					t.Errorf("expected NonZeroExitError.ExitCode=%d, got %d", tc.exitCode, nze.ExitCode)
+				}
+			}
+			if tc.wantUnexpected && !errors.Is(err, ErrUnexpected) {
+				t.Errorf("expected ErrUnexpected for exit code %d, got %v", tc.exitCode, err)
+			}
+		})
+	}
+}
+
+func TestRunServiceJobUnit_Run_NonZeroExitReturnsError(t *testing.T) {
+	t.Parallel()
+	k := newTestRunServiceKit(t)
+	ctx := newRunServiceJobContext(t, k.job)
+
+	// Service task exits with code 1 -- Run() should return an error
+	k.services.SetTasks([]domain.Task{
+		{
+			ID:        "task-fail",
+			ServiceID: "mock-service-id",
+			Status: domain.TaskStatus{
+				State:           domain.TaskStateFailed,
+				ContainerStatus: &domain.ContainerStatus{ExitCode: 1},
+			},
+		},
+	})
+
+	err := k.job.Run(ctx)
+	if err == nil {
+		t.Fatal("expected error from non-zero exit code, got nil")
+	}
+	if !IsNonZeroExitError(err) {
+		t.Errorf("expected NonZeroExitError, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // isNotFoundError()
 // ---------------------------------------------------------------------------
 
