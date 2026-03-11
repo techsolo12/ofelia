@@ -52,7 +52,7 @@ func (j *ExecJob) Run(ctx *Context) error {
 	}
 
 	exitCode, err := j.Provider.RunExec(
-		context.Background(),
+		ctx.Ctx,
 		j.Container,
 		config,
 		ctx.Execution.OutputStream,
