@@ -81,6 +81,7 @@ func TestRunServiceJobUnit_Validate(t *testing.T) {
 	}
 
 	for _, tc := range tests {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			job := &RunServiceJob{Image: tc.image}
@@ -181,6 +182,7 @@ func TestRunServiceJobUnit_BuildService(t *testing.T) {
 	}
 
 	for _, tc := range tests {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			k := newTestRunServiceKit(t)
@@ -254,6 +256,7 @@ func TestRunServiceJobUnit_FindTaskStatus(t *testing.T) {
 	}
 
 	for _, tc := range tests {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			k := newTestRunServiceKit(t)
@@ -328,6 +331,7 @@ func TestRunServiceJobUnit_DeleteService(t *testing.T) {
 	}
 
 	for _, tc := range tests {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			k := newTestRunServiceKit(t)
@@ -393,6 +397,7 @@ func TestRunServiceJobUnit_WatchContainer_NonZeroExitReturnsError(t *testing.T) 
 	}
 
 	for _, tc := range tests {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			k := newTestRunServiceKit(t)
@@ -478,6 +483,7 @@ func TestRunServiceJobUnit_IsNotFoundError(t *testing.T) {
 	}
 
 	for _, tc := range tests {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := isNotFoundError(tc.err)
