@@ -20,7 +20,7 @@ func TestDaemonCommand_CloseDoneMultipleTimes(t *testing.T) {
 	const goroutines = 10
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
 			c.closeDone()

@@ -32,14 +32,14 @@ func TestContextPropagation_ExecJob(t *testing.T) {
 	// Create a context with a cancel func and a recognizable value
 	type ctxKey struct{}
 	cancelCtx, cancel := context.WithCancel(context.Background())
-	parentCtx := context.WithValue(cancelCtx, ctxKey{},"propagated")
+	parentCtx := context.WithValue(cancelCtx, ctxKey{}, "propagated")
 	defer cancel()
 
 	// Track what context the Docker exec call receives
 	var receivedCtx context.Context
 	execSvc := mc.Exec().(*mock.ExecService)
 	execSvc.OnRun = func(ctx context.Context, _ string, _ *domain.ExecConfig, _, _ io.Writer) (int, error) {
-		receivedCtx = ctx
+		receivedCtx = ctx //nolint:fatcontext // capturing ctx for test assertion, not nesting
 		return 0, nil
 	}
 
@@ -88,7 +88,7 @@ func TestContextPropagation_ExecJob_Canceled(t *testing.T) {
 	var receivedCtx context.Context
 	execSvc := mc.Exec().(*mock.ExecService)
 	execSvc.OnRun = func(ctx context.Context, _ string, _ *domain.ExecConfig, _, _ io.Writer) (int, error) {
-		receivedCtx = ctx
+		receivedCtx = ctx //nolint:fatcontext // capturing ctx for test assertion, not nesting
 		return 0, ctx.Err()
 	}
 
@@ -134,14 +134,14 @@ func TestContextPropagation_RunJob(t *testing.T) {
 
 	type ctxKey struct{}
 	cancelCtx, cancel := context.WithCancel(context.Background())
-	parentCtx := context.WithValue(cancelCtx, ctxKey{},"run-propagated")
+	parentCtx := context.WithValue(cancelCtx, ctxKey{}, "run-propagated")
 	defer cancel()
 
 	// Track what context the Docker calls receive
 	var receivedCreateCtx context.Context
 	containerSvc := mc.Containers().(*mock.ContainerService)
 	containerSvc.OnCreate = func(ctx context.Context, _ *domain.ContainerConfig) (string, error) {
-		receivedCreateCtx = ctx
+		receivedCreateCtx = ctx //nolint:fatcontext // capturing ctx for test assertion, not nesting
 		return "test-container-id", nil
 	}
 
@@ -184,14 +184,14 @@ func TestContextPropagation_RunServiceJob(t *testing.T) {
 
 	type ctxKey struct{}
 	cancelCtx, cancel := context.WithCancel(context.Background())
-	parentCtx := context.WithValue(cancelCtx, ctxKey{},"svc-propagated")
+	parentCtx := context.WithValue(cancelCtx, ctxKey{}, "svc-propagated")
 	defer cancel()
 
 	// Track what context the Docker image ensure call receives
 	var receivedEnsureCtx context.Context
 	imageSvc := mc.Images().(*mock.ImageService)
 	imageSvc.OnPullAndWait = func(ctx context.Context, _ domain.PullOptions) error {
-		receivedEnsureCtx = ctx
+		receivedEnsureCtx = ctx        //nolint:fatcontext // capturing ctx for test assertion, not nesting
 		return errors.New("stop-here") // Stop early so we can check context
 	}
 
