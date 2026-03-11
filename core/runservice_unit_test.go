@@ -81,7 +81,6 @@ func TestRunServiceJobUnit_Validate(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			job := &RunServiceJob{Image: tc.image}
@@ -182,7 +181,6 @@ func TestRunServiceJobUnit_BuildService(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			k := newTestRunServiceKit(t)
@@ -256,7 +254,6 @@ func TestRunServiceJobUnit_FindTaskStatus(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			k := newTestRunServiceKit(t)
@@ -331,7 +328,6 @@ func TestRunServiceJobUnit_DeleteService(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			k := newTestRunServiceKit(t)
@@ -375,29 +371,28 @@ func TestRunServiceJobUnit_WatchContainer_NonZeroExitReturnsError(t *testing.T) 
 		wantUnexpected bool
 	}{
 		{
-			name: "exit_code_0_returns_nil",
+			name:     "exit_code_0_returns_nil",
 			exitCode: 0, taskState: domain.TaskStateComplete,
 			wantErr: false,
 		},
 		{
-			name: "exit_code_1_returns_NonZeroExitError",
+			name:     "exit_code_1_returns_NonZeroExitError",
 			exitCode: 1, taskState: domain.TaskStateFailed,
 			wantErr: true, wantNonZeroErr: true,
 		},
 		{
-			name: "exit_code_137_returns_NonZeroExitError",
+			name:     "exit_code_137_returns_NonZeroExitError",
 			exitCode: 137, taskState: domain.TaskStateFailed,
 			wantErr: true, wantNonZeroErr: true,
 		},
 		{
-			name: "swarm_error_code_returns_ErrUnexpected",
+			name:     "swarm_error_code_returns_ErrUnexpected",
 			exitCode: ExitCodeSwarmError, taskState: domain.TaskStateFailed,
 			wantErr: true, wantUnexpected: true,
 		},
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			k := newTestRunServiceKit(t)
@@ -483,7 +478,6 @@ func TestRunServiceJobUnit_IsNotFoundError(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			got := isNotFoundError(tc.err)

@@ -31,8 +31,8 @@ func TestContextPropagation_ExecJob(t *testing.T) {
 
 	// Create a context with a cancel func and a recognizable value
 	type ctxKey struct{}
-	parentCtx, cancel := context.WithCancel(context.Background())
-	parentCtx = context.WithValue(parentCtx, ctxKey{}, "propagated")
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	parentCtx := context.WithValue(cancelCtx, ctxKey{},"propagated")
 	defer cancel()
 
 	// Track what context the Docker exec call receives
@@ -133,8 +133,8 @@ func TestContextPropagation_RunJob(t *testing.T) {
 	job.Pull = "false"
 
 	type ctxKey struct{}
-	parentCtx, cancel := context.WithCancel(context.Background())
-	parentCtx = context.WithValue(parentCtx, ctxKey{}, "run-propagated")
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	parentCtx := context.WithValue(cancelCtx, ctxKey{},"run-propagated")
 	defer cancel()
 
 	// Track what context the Docker calls receive
@@ -183,8 +183,8 @@ func TestContextPropagation_RunServiceJob(t *testing.T) {
 	job.Delete = "true"
 
 	type ctxKey struct{}
-	parentCtx, cancel := context.WithCancel(context.Background())
-	parentCtx = context.WithValue(parentCtx, ctxKey{}, "svc-propagated")
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	parentCtx := context.WithValue(cancelCtx, ctxKey{},"svc-propagated")
 	defer cancel()
 
 	// Track what context the Docker image ensure call receives

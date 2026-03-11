@@ -36,8 +36,8 @@ type DaemonCommand struct {
 	WebUsername          string         `long:"web-username" env:"OFELIA_WEB_USERNAME" description:"Web UI auth username"`
 	WebPasswordHash      string         `long:"web-password-hash" env:"OFELIA_WEB_PASSWORD_HASH" description:"Bcrypt hash" default-mask:"-"`
 	WebSecretKey         string         `long:"web-secret-key" env:"OFELIA_WEB_SECRET_KEY" description:"JWT signing key" default-mask:"-"`
-	WebTokenExpiry       int            `long:"web-token-expiry" env:"OFELIA_WEB_TOKEN_EXPIRY" description:"Token expiry hours" default:"24"` //nolint:revive
-	WebMaxLoginAttempts  int            `long:"web-max-login-attempts" env:"OFELIA_WEB_MAX_LOGIN_ATTEMPTS" description:"Lockout" default:"5"` //nolint:revive
+	WebTokenExpiry       int            `long:"web-token-expiry" env:"OFELIA_WEB_TOKEN_EXPIRY" description:"Token expiry hours" default:"24"`                             //nolint:revive
+	WebMaxLoginAttempts  int            `long:"web-max-login-attempts" env:"OFELIA_WEB_MAX_LOGIN_ATTEMPTS" description:"Lockout" default:"5"`                             //nolint:revive
 	WebTrustedProxies    []string       `long:"web-trusted-proxies" env:"OFELIA_WEB_TRUSTED_PROXIES" env-delim:"," description:"Trusted proxy CIDRs for X-Forwarded-For"` //nolint:revive
 
 	scheduler       *core.Scheduler

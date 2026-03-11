@@ -62,6 +62,9 @@ func (j *RunServiceJob) Run(ctx *Context) error {
 	// This ensures scheduler shutdown, job removal, and max-runtime
 	// cancellation reach the Docker API calls.
 	runCtx := ctx.Ctx
+	if runCtx == nil {
+		runCtx = context.Background()
+	}
 
 	// Pull image using the provider
 	if err := j.Provider.EnsureImage(runCtx, j.Image, true); err != nil {

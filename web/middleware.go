@@ -4,6 +4,7 @@
 package web
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -130,6 +131,9 @@ func isTrustedProxy(ip string, trustedProxies []*net.IPNet) bool {
 	return false
 }
 
+// ErrInvalidTrustedProxy indicates a trusted proxy value could not be parsed.
+var ErrInvalidTrustedProxy = errors.New("invalid trusted proxy")
+
 // ParseTrustedProxies parses a slice of CIDR strings (e.g. "172.17.0.0/16",
 // "10.0.0.1/32") into []*net.IPNet. Plain IPs without a mask are treated as
 // /32 (IPv4) or /128 (IPv6).
@@ -140,7 +144,7 @@ func ParseTrustedProxies(cidrs []string) ([]*net.IPNet, error) {
 			// Plain IP — add /32 or /128
 			ip := net.ParseIP(s)
 			if ip == nil {
-				return nil, fmt.Errorf("invalid trusted proxy IP: %q", s)
+				return nil, fmt.Errorf("%w: %q is not a valid IP", ErrInvalidTrustedProxy, s)
 			}
 			bits := 32
 			if ip.To4() == nil {

@@ -33,10 +33,10 @@ func TestConfig_ConcurrentJobMapAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
-			for j := 0; j < iterations; j++ {
+			for range iterations {
 				if id%2 == 0 {
 					// Writer goroutines: modify maps under lock
 					c.mu.Lock()
@@ -86,7 +86,7 @@ func TestConfig_SyncJobMapConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
 
-	for i := 0; i < goroutines; i++ {
+	for i := range goroutines {
 		go func(id int) {
 			defer wg.Done()
 			if id%2 == 0 {

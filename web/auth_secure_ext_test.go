@@ -493,14 +493,13 @@ func TestParseTrustedProxies(t *testing.T) {
 		{"invalid CIDR", []string{"10.0.0.0/99"}, true, 0},
 	}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			nets, err := ParseTrustedProxies(tt.input)
 			if tt.wantErr {
-				assert.Error(t, err)
+				require.Error(t, err)
 			} else {
-				assert.NoError(t, err)
+				require.NoError(t, err)
 				assert.Len(t, nets, tt.wantLen)
 			}
 		})
