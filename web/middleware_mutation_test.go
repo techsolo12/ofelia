@@ -168,11 +168,12 @@ func TestMiddleware_BoundaryExactlyAtWindow(t *testing.T) {
 		window:   window,
 	}
 
-	ip := "10.0.0.5:9999"
+	// Use host-only key since the middleware strips the port via extractRemoteIP.
+	hostIP := "10.0.0.5"
 
 	// Pre-populate with a request that is exactly `window` old.
 	rl.mu.Lock()
-	rl.requests[ip] = []time.Time{time.Now().Add(-window)}
+	rl.requests[hostIP] = []time.Time{time.Now().Add(-window)}
 	rl.mu.Unlock()
 
 	var successCount int32
@@ -184,7 +185,7 @@ func TestMiddleware_BoundaryExactlyAtWindow(t *testing.T) {
 	// Send one new request. With correct `<`, the old request (age == window)
 	// should be filtered out, so our new request fits within the limit.
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.RemoteAddr = ip
+	req.RemoteAddr = hostIP + ":9999"
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -205,11 +206,12 @@ func TestMiddleware_RecentRequestCountedForLimit(t *testing.T) {
 		window:   window,
 	}
 
-	ip := "10.0.0.6:9999"
+	// Use host-only key since the middleware strips the port via extractRemoteIP.
+	hostIP := "10.0.0.6"
 
 	// Pre-populate with a very recent request (well within window).
 	rl.mu.Lock()
-	rl.requests[ip] = []time.Time{time.Now()}
+	rl.requests[hostIP] = []time.Time{time.Now()}
 	rl.mu.Unlock()
 
 	handler := rl.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +219,7 @@ func TestMiddleware_RecentRequestCountedForLimit(t *testing.T) {
 	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.RemoteAddr = ip
+	req.RemoteAddr = hostIP + ":9999"
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -226,8 +228,7 @@ func TestMiddleware_RecentRequestCountedForLimit(t *testing.T) {
 }
 
 // TestMiddleware_XForwardedFor verifies the X-Forwarded-For header is used for
-// rate limiting when present. This is additional coverage that ensures the IP
-// extraction path works correctly.
+// rate limiting when the request comes from a loopback (trusted) address.
 func TestMiddleware_XForwardedFor(t *testing.T) {
 	t.Parallel()
 
@@ -241,21 +242,21 @@ func TestMiddleware_XForwardedFor(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// First request with X-Forwarded-For
+	// First request with X-Forwarded-For from loopback (trusted proxy)
 	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req.RemoteAddr = "10.0.0.7:9999"
+	req.RemoteAddr = "127.0.0.1:9999"
 	req.Header.Set("X-Forwarded-For", "192.168.1.100")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
 
-	// Second request from same X-Forwarded-For should be rate limited
+	// Second request from same X-Forwarded-For via loopback should be rate limited
 	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
-	req2.RemoteAddr = "10.0.0.8:9999" // different RemoteAddr
+	req2.RemoteAddr = "127.0.0.1:9998" // same loopback, different port
 	req2.Header.Set("X-Forwarded-For", "192.168.1.100")
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
-	assert.Equal(t, http.StatusTooManyRequests, w2.Code, "should rate limit by X-Forwarded-For, not RemoteAddr")
+	assert.Equal(t, http.StatusTooManyRequests, w2.Code, "should rate limit by X-Forwarded-For when from loopback")
 }
 
 // TestCleanup_MixedOldAndNewRequests verifies that cleanup correctly retains
@@ -289,4 +290,41 @@ func TestCleanup_MixedOldAndNewRequests(t *testing.T) {
 	rl.mu.RUnlock()
 
 	assert.Len(t, times, 2, "should retain only the 2 requests within the window")
+}
+
+// TestRateLimiterMiddleware_IgnoresXFFFromNonLoopback verifies that the
+// middleware ignores X-Forwarded-For when the direct client is not loopback.
+// An attacker at 203.0.113.50 sending X-Forwarded-For: 10.0.0.1 should be
+// rate-limited under 203.0.113.50, not 10.0.0.1.
+func TestRateLimiterMiddleware_IgnoresXFFFromNonLoopback(t *testing.T) {
+	t.Parallel()
+
+	rl := &rateLimiter{
+		requests: make(map[string][]time.Time),
+		limit:    1,
+		window:   time.Minute,
+	}
+
+	handler := rl.middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// First request from an external IP spoofing X-Forwarded-For
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.RemoteAddr = "203.0.113.50:9999"
+	req.Header.Set("X-Forwarded-For", "10.0.0.1")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Second request from the SAME external IP with a DIFFERENT spoofed XFF.
+	// If XFF is ignored (correct), both requests hit the same key (203.0.113.50)
+	// and the second should be rate-limited.
+	req2 := httptest.NewRequest(http.MethodGet, "/test", nil)
+	req2.RemoteAddr = "203.0.113.50:9999"
+	req2.Header.Set("X-Forwarded-For", "10.0.0.2") // different spoofed IP
+	w2 := httptest.NewRecorder()
+	handler.ServeHTTP(w2, req2)
+	assert.Equal(t, http.StatusTooManyRequests, w2.Code,
+		"rate limiter should use RemoteAddr, not spoofed X-Forwarded-For, for non-loopback clients")
 }

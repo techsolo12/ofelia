@@ -4,7 +4,9 @@
 package web
 
 import (
+	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -90,16 +92,36 @@ func (rl *rateLimiter) cleanup() {
 	}
 }
 
+// extractRemoteIP strips the port from a RemoteAddr string, handling both
+// IPv4 ("1.2.3.4:port") and IPv6 ("[::1]:port") formats.
+func extractRemoteIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		// No port or unparseable — return as-is
+		return remoteAddr
+	}
+	return host
+}
+
+// isLoopback returns true if the given IP string is a loopback address
+// (127.0.0.0/8 for IPv4, ::1 for IPv6).
+func isLoopback(ip string) bool {
+	parsed := net.ParseIP(ip)
+	return parsed != nil && parsed.IsLoopback()
+}
+
 // middleware wraps an http.Handler with per-IP rate limiting. The client IP
-// is determined from the X-Forwarded-For header when present, falling back to
-// r.RemoteAddr. Because X-Forwarded-For can be spoofed by the client, this
-// rate limiter should only be deployed behind a trusted reverse proxy that
-// overwrites or sanitizes the header before forwarding requests.
+// is determined from the X-Forwarded-For header only when the direct connection
+// comes from a loopback address (local reverse proxy). For non-loopback
+// connections, forwarded headers are ignored to prevent IP spoofing.
 func (rl *rateLimiter) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		if xForwarded := r.Header.Get("X-Forwarded-For"); xForwarded != "" {
-			ip = xForwarded
+		ip := extractRemoteIP(r.RemoteAddr)
+		// Only trust X-Forwarded-For from loopback (local reverse proxy)
+		if isLoopback(ip) {
+			if xForwarded := r.Header.Get("X-Forwarded-For"); xForwarded != "" {
+				ip = strings.TrimSpace(strings.Split(xForwarded, ",")[0])
+			}
 		}
 
 		rl.mu.Lock()
