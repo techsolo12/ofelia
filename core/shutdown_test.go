@@ -394,3 +394,40 @@ func TestShutdownHookSamePriorityConcurrent(t *testing.T) {
 		t.Errorf("Same-priority hooks appear to have run sequentially: elapsed %v >= %v", elapsed, maxExpected)
 	}
 }
+
+// TestShutdownTimeout_HookIgnoresContext verifies that shutdown still returns
+// ErrShutdownTimeout even when a hook ignores its context and blocks.
+// This was the bug reported in review: wg.Wait() without ctx.Done() select
+// caused the shutdown to hang forever.
+func TestShutdownTimeout_HookIgnoresContext(t *testing.T) {
+	logger := newDiscardLogger()
+	sm := NewShutdownManager(logger, 100*time.Millisecond)
+
+	// Register a hook that ignores the context and blocks for much longer
+	sm.RegisterHook(ShutdownHook{
+		Name:     "context-ignoring-hook",
+		Priority: 10,
+		Hook: func(_ context.Context) error {
+			// Deliberately ignores ctx.Done() — sleeps unconditionally.
+			// The shutdown manager must still return within its timeout.
+			time.Sleep(5 * time.Second)
+			return nil
+		},
+	})
+
+	start := time.Now()
+	err := sm.Shutdown()
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("Expected ErrShutdownTimeout, got nil")
+	}
+	if !errors.Is(err, ErrShutdownTimeout) {
+		t.Errorf("Expected ErrShutdownTimeout, got: %v", err)
+	}
+
+	// Must return within 200ms (timeout is 100ms + tolerance), not 5s
+	if elapsed > 300*time.Millisecond {
+		t.Errorf("Shutdown should have timed out quickly, but took %v", elapsed)
+	}
+}

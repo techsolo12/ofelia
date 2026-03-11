@@ -133,16 +133,25 @@ func (sm *ShutdownManager) Shutdown() error {
 			}(hook)
 		}
 
-		wg.Wait()
+		// Wait for all hooks in this group with timeout enforcement.
+		// Without this select, a hook that ignores its context could block forever.
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+			// Group completed normally
+		case <-ctx.Done():
+			sm.logger.Error(fmt.Sprintf("Graceful shutdown timed out after %v (waiting for priority %d hooks)", sm.timeout, priority))
+			return ErrShutdownTimeout
+		}
+
 		close(errChan)
 		for err := range errChan {
 			shutdownErrors = append(shutdownErrors, err)
-		}
-
-		// Check timeout between groups
-		if ctx.Err() != nil {
-			sm.logger.Error(fmt.Sprintf("Graceful shutdown timed out after %v", sm.timeout))
-			return ErrShutdownTimeout
 		}
 	}
 
