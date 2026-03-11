@@ -376,31 +376,38 @@ func TestCollectDependencyEdges_TriggeredJobInOnSuccessFailure(t *testing.T) {
 	}
 }
 
-// TestCollectDependencyEdges_NonBareJobSkipped tests that non-BareJob types are
-// gracefully skipped by collectDependencyEdges (no edges collected, no panic).
-func TestCollectDependencyEdges_NonBareJobSkipped(t *testing.T) {
+// TestCollectDependencyEdges_NonBareJobCollected tests that non-*BareJob types
+// that embed BareJob have their dependencies collected via the DependencyProvider
+// interface (BareJob methods are promoted to the embedding type).
+func TestCollectDependencyEdges_NonBareJobCollected(t *testing.T) {
 	t.Parallel()
 
-	// nonBareTestJob embeds BareJob indirectly via TestJob, but is *not* a *BareJob.
-	// collectDependencyEdges uses a type assertion for *BareJob, so this should be skipped.
+	// TestJob embeds BareJob so it inherits GetDependencies/GetOnSuccess/GetOnFailure/GetName.
+	// collectDependencyEdges should collect edges from it via DependencyProvider interface.
 	nonBareJob := &TestJob{}
 	nonBareJob.Name = "non-bare-job"
 	nonBareJob.Schedule = "@daily"
 	nonBareJob.Command = "echo test"
 	nonBareJob.Dependencies = []string{"some-parent"}
 
-	jobs := []Job{nonBareJob}
+	parentJob := &BareJob{Name: "some-parent", Schedule: "@daily", Command: "echo parent"}
+
+	jobs := []Job{nonBareJob, parentJob}
 
 	edges := collectDependencyEdges(jobs, newDiscardLogger())
 
-	// Non-BareJob jobs should be skipped entirely: no edges, no panic
-	if len(edges) != 0 {
-		t.Errorf("Expected 0 edges for non-BareJob types, got %d", len(edges))
+	// TestJob embeds BareJob, so DependencyProvider is satisfied: 1 edge expected
+	if len(edges) != 1 {
+		t.Fatalf("Expected 1 edge for TestJob (embeds BareJob), got %d", len(edges))
+	}
+	if edges[0].child != "non-bare-job" || edges[0].parent != "some-parent" {
+		t.Errorf("Unexpected edge: %s -> %s", edges[0].parent, edges[0].child)
 	}
 }
 
 // TestCollectDependencyEdges_MixedJobTypes tests that a mix of *BareJob and
-// non-*BareJob types correctly collects edges only from *BareJob instances.
+// types embedding BareJob all have their dependency edges collected via
+// the DependencyProvider interface.
 func TestCollectDependencyEdges_MixedJobTypes(t *testing.T) {
 	t.Parallel()
 
@@ -426,12 +433,60 @@ func TestCollectDependencyEdges_MixedJobTypes(t *testing.T) {
 
 	edges := collectDependencyEdges(jobs, newDiscardLogger())
 
-	// Only the *BareJob should produce an edge; TestJob (non-*BareJob) should be skipped
-	if len(edges) != 1 {
-		t.Fatalf("Expected 1 edge (from BareJob only), got %d", len(edges))
+	// Both BareJob and TestJob (embeds BareJob) should produce edges
+	if len(edges) != 2 {
+		t.Fatalf("Expected 2 edges (from both BareJob and TestJob), got %d", len(edges))
 	}
-	if edges[0].child != "bare-child" || edges[0].parent != "parent" {
-		t.Errorf("Unexpected edge: %s -> %s", edges[0].parent, edges[0].child)
+
+	edgeMap := make(map[string]bool)
+	for _, e := range edges {
+		edgeMap[e.child] = true
+	}
+	if !edgeMap["bare-child"] {
+		t.Error("Expected edge from bare-child")
+	}
+	if !edgeMap["non-bare-child"] {
+		t.Error("Expected edge from non-bare-child (TestJob embeds BareJob)")
+	}
+}
+
+// TestCollectDependencyEdges_ExecJobWithDependencies tests that ExecJob
+// (which embeds BareJob) has its dependencies collected via the DependencyProvider
+// interface, proving the fix works for real Docker job types.
+func TestCollectDependencyEdges_ExecJobWithDependencies(t *testing.T) {
+	t.Parallel()
+
+	execJob := &ExecJob{}
+	execJob.Name = "exec-child"
+	execJob.Schedule = "@daily"
+	execJob.Command = "echo exec"
+	execJob.Dependencies = []string{"parent-job"}
+	execJob.OnSuccess = []string{"success-handler"}
+
+	parentJob := &BareJob{Name: "parent-job", Schedule: "@daily", Command: "echo parent"}
+	successJob := &BareJob{Name: "success-handler", Schedule: "@daily", Command: "echo success"}
+
+	jobs := []Job{execJob, parentJob, successJob}
+
+	edges := collectDependencyEdges(jobs, newDiscardLogger())
+
+	// ExecJob embeds BareJob, so DependencyProvider is satisfied: 2 edges expected
+	// (1 depends-on + 1 on-success)
+	if len(edges) != 2 {
+		t.Fatalf("Expected 2 edges from ExecJob, got %d", len(edges))
+	}
+
+	edgeMap := map[string]cron.TriggerCondition{}
+	for _, e := range edges {
+		key := e.parent + "->" + e.child
+		edgeMap[key] = e.condition
+	}
+
+	if cond, ok := edgeMap["parent-job->exec-child"]; !ok || cond != cron.OnSuccess {
+		t.Error("Expected depends-on edge: parent-job->exec-child (OnSuccess)")
+	}
+	if cond, ok := edgeMap["exec-child->success-handler"]; !ok || cond != cron.OnSuccess {
+		t.Error("Expected on-success edge: exec-child->success-handler (OnSuccess)")
 	}
 }
 

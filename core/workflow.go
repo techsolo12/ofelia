@@ -11,6 +11,16 @@ import (
 	"github.com/netresearch/go-cron"
 )
 
+// DependencyProvider is implemented by jobs that can declare workflow dependencies.
+// BareJob implements this interface, and since ExecJob, RunJob, LocalJob, etc.
+// embed BareJob, they automatically satisfy it via promoted methods.
+type DependencyProvider interface {
+	GetDependencies() []string
+	GetOnSuccess() []string
+	GetOnFailure() []string
+	GetName() string
+}
+
 // dependencyEdge represents a single dependency edge to be wired via go-cron.
 type dependencyEdge struct {
 	child     string // child job name
@@ -44,20 +54,22 @@ func BuildWorkflowDependencies(cronInstance *cron.Cron, jobs []Job, logger *slog
 	return wireEdges(cronInstance, edges, logger)
 }
 
-// collectDependencyEdges extracts dependency edges from BareJob configuration fields.
+// collectDependencyEdges extracts dependency edges from jobs that implement
+// the DependencyProvider interface. BareJob and all types that embed it
+// (ExecJob, RunJob, LocalJob, etc.) satisfy DependencyProvider automatically.
 func collectDependencyEdges(jobs []Job, logger *slog.Logger) []dependencyEdge {
 	var edges []dependencyEdge
 
 	for _, job := range jobs {
-		bareJob, ok := job.(*BareJob)
+		dp, ok := job.(DependencyProvider)
 		if !ok {
 			continue
 		}
 
-		jobName := bareJob.GetName()
+		jobName := dp.GetName()
 
 		// depends-on: this job depends on the listed parents succeeding
-		for _, parent := range bareJob.Dependencies {
+		for _, parent := range dp.GetDependencies() {
 			edges = append(edges, dependencyEdge{
 				child:     jobName,
 				parent:    parent,
@@ -67,7 +79,7 @@ func collectDependencyEdges(jobs []Job, logger *slog.Logger) []dependencyEdge {
 		}
 
 		// on-success: listed jobs should run when this job succeeds
-		for _, target := range bareJob.OnSuccess {
+		for _, target := range dp.GetOnSuccess() {
 			edges = append(edges, dependencyEdge{
 				child:     target,
 				parent:    jobName,
@@ -77,7 +89,7 @@ func collectDependencyEdges(jobs []Job, logger *slog.Logger) []dependencyEdge {
 		}
 
 		// on-failure: listed jobs should run when this job fails
-		for _, target := range bareJob.OnFailure {
+		for _, target := range dp.GetOnFailure() {
 			edges = append(edges, dependencyEdge{
 				child:     target,
 				parent:    jobName,
