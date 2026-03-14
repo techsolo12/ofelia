@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.2] - 2026-03-14
+
+### Security
+
+- Hide `WebPasswordHash` and `WebSecretKey` from `/api/config` endpoint ([#511](https://github.com/netresearch/ofelia/pull/511))
+- Remove CSRF bypass via `X-Requested-With` header ([#511](https://github.com/netresearch/ofelia/pull/511))
+- Implement rate limiter cleanup to prevent memory exhaustion DoS ([#511](https://github.com/netresearch/ofelia/pull/511))
+- Only trust `X-Forwarded-For` and `X-Real-IP` from trusted proxies to prevent IP spoofing ([#511](https://github.com/netresearch/ofelia/pull/511))
+- Make trusted proxies configurable via `web-trusted-proxies` ([#511](https://github.com/netresearch/ofelia/pull/511))
+
+### Fixed
+
+- Propagate context to Docker API calls so cancellation and shutdown reach containers ([#511](https://github.com/netresearch/ofelia/pull/511))
+- Prevent double-close panic on daemon done channel ([#511](https://github.com/netresearch/ofelia/pull/511))
+- Add mutex to Config to prevent concurrent map access crash ([#511](https://github.com/netresearch/ofelia/pull/511))
+- Execute shutdown hooks in priority groups, not all concurrently ([#511](https://github.com/netresearch/ofelia/pull/511))
+- Enforce shutdown timeout even when hooks ignore context ([#511](https://github.com/netresearch/ofelia/pull/511))
+- Return `NonZeroExitError` for non-zero Swarm service exit codes ([#511](https://github.com/netresearch/ofelia/pull/511))
+
+### Dependencies
+
+- Bump `golang.org/x/crypto` from 0.48.0 to 0.49.0 ([#512](https://github.com/netresearch/ofelia/pull/512))
+- Bump `github.com/netresearch/go-cron` from 0.13.0 to 0.13.1 ([#514](https://github.com/netresearch/ofelia/pull/514))
+- Bump `golang.org/x/time` from 0.14.0 to 0.15.0 ([#515](https://github.com/netresearch/ofelia/pull/515))
+
 ## [0.17.0] - 2025-12-22
 
 ### Added
