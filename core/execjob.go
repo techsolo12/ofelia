@@ -24,6 +24,7 @@ type ExecJob struct {
 	TTY         bool     `default:"false" hash:"true"`
 	Environment []string `mapstructure:"environment" hash:"true"`
 	WorkingDir  string   `mapstructure:"working-dir" hash:"true"`
+	Privileged  bool     `default:"false" hash:"true"`
 }
 
 func NewExecJob(provider DockerProvider) *ExecJob {
@@ -54,6 +55,7 @@ func (j *ExecJob) Run(ctx *Context) error {
 		AttachStdout: true,
 		AttachStderr: true,
 		Tty:          j.TTY,
+		Privileged:   j.Privileged,
 	}
 
 	exitCode, err := j.Provider.RunExec(
@@ -89,6 +91,7 @@ func (j *ExecJob) RunWithStreams(ctx context.Context, stdout, stderr io.Writer) 
 		AttachStdout: true,
 		AttachStderr: true,
 		Tty:          j.TTY,
+		Privileged:   j.Privileged,
 	}
 
 	exitCode, err := j.Provider.RunExec(ctx, j.Container, config, stdout, stderr)

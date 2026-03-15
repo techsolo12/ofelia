@@ -271,6 +271,7 @@ func convertToHostConfig(config *domain.HostConfig) *container.HostConfig {
 
 	hostConfig := &container.HostConfig{
 		Binds:          config.Binds,
+		VolumesFrom:    config.VolumesFrom,
 		NetworkMode:    container.NetworkMode(config.NetworkMode),
 		PortBindings:   convertToPortMap(config.PortBindings),
 		AutoRemove:     config.AutoRemove,

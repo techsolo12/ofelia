@@ -89,10 +89,11 @@ type LocalJob struct {
 Runs jobs as Docker Swarm services.
 
 ```go
-type ServiceJob struct {
-    RunJob
-    // Inherits RunJob configuration
-    // Deployed as Swarm service
+type RunServiceJob struct {
+    BareJob
+    // Deployed as a one-shot Swarm service
+    // Supports: Image, Network, Environment, Hostname, Dir,
+    // User, TTY, Delete, Annotations, MaxRuntime
 }
 ```
 

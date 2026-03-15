@@ -32,6 +32,8 @@ This job is executed inside a running container, similar to `docker exec`.
   - Working directory for the command execution, similar to `docker exec --workdir <dir>`
   - **Backward compatibility:** Requires Docker API v1.35+ (Docker Engine 17.09+). On older Docker versions, this parameter is silently ignored and the exec runs in the container's default working directory
   - If not specified, uses the working directory defined in the container image
+- `privileged`: boolean = `false`
+  - Run the exec in privileged mode, similar to `docker exec --privileged`
 - `no-overlap`: boolean = `false`
   - Prevent that the job runs concurrently
 - `history-limit`: integer = `10`
@@ -122,6 +124,9 @@ This job can be used in 2 situations:
   - Same format as used with `-e` flag within `docker run`. For example: `FOO=bar`
     - **INI config**: `Environment` setting can be provided multiple times for multiple environment variables.
     - **Labels config**: multiple environment variables has to be provided as JSON array: `["FOO=bar", "BAZ=qux"]`
+- `working-dir`: string (1)
+  - Working directory inside the container, similar to `docker run --workdir <dir>`
+  - If not specified, uses the working directory defined in the container image
 - `annotations`
   - Container annotations for metadata tracking, audit trails, and observability. Unlike labels, annotations don't affect Docker behavior.
   - Format: `key=value` strings. For example: `team=platform`, `cost-center=12345`
@@ -250,6 +255,15 @@ This job can be used to:
   - If not set, uses the global `default-user` (default `nobody`); set to `default` to use the container's default user
 - `tty`: boolean = `false` (1, 2)
   - Allocate a pseudo-tty, similar to `docker exec -t`. See this [Stack Overflow answer](https://stackoverflow.com/questions/30137135/confused-about-docker-t-option-to-allocate-a-pseudo-tty) for more info.
+- `environment`
+  - Environment variables passed to the service container.
+  - Same format as used with `-e` flag within `docker run`. For example: `FOO=bar`
+    - **INI config**: `Environment` setting can be provided multiple times for multiple environment variables.
+    - **Labels config**: multiple environment variables must be provided as JSON array: `["FOO=bar", "BAZ=qux"]`
+- `hostname`: string
+  - Hostname for the service container.
+- `dir`: string
+  - Working directory inside the service container.
 - `annotations`
   - Service annotations for metadata tracking and observability. Stored as service labels in Docker Swarm.
   - Format: `key=value` strings. For example: `team=platform`, `environment=staging`
@@ -285,6 +299,10 @@ schedule = @daily
 image = postgres:15
 network = swarm_network
 command = pg_dump mydb
+environment = PGPASSWORD=secret
+environment = PGHOST=db.internal
+hostname = backup-worker
+dir = /var/backups
 annotations = team=data-platform
 annotations = environment=staging
 annotations = service-tier=backend

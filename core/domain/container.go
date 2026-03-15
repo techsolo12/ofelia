@@ -91,8 +91,9 @@ type HostConfig struct {
 	NanoCPUs   int64 // CPU limit in units of 10^-9 CPUs
 
 	// Binds and mounts
-	Binds  []string // Volume bindings in format "host:container[:options]"
-	Mounts []Mount  // Mount configurations
+	Binds       []string // Volume bindings in format "host:container[:options]"
+	VolumesFrom []string // Volumes from other containers in format "container[:ro|rw]"
+	Mounts      []Mount  // Mount configurations
 
 	// Networking
 	NetworkMode  string   // Network mode (bridge, host, none, container:<name|id>)
