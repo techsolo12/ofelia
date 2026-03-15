@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.3] - 2026-03-15
+
+### Fixed
+
+- Wire missing container spec fields across job types ([#520](https://github.com/netresearch/ofelia/pull/520), closes [#519](https://github.com/netresearch/ofelia/issues/519))
+  - `job-service-run`: add `environment`, `hostname`, `dir` support
+  - `job-run`: add `working-dir` support, wire `volumes-from` (was in struct but unused)
+  - `job-exec`: add `privileged` support
+  - Fix misleading documentation claiming `job-service-run` inherits from `RunJob`
+
 ## [0.21.2] - 2026-03-14
 
 ### Security
