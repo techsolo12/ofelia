@@ -46,6 +46,7 @@ type RunJob struct {
 	Volume      []string `hash:"true"`
 	VolumesFrom []string `gcfg:"volumes-from" mapstructure:"volumes-from," hash:"true"`
 	Environment []string `mapstructure:"environment" hash:"true"`
+	WorkingDir  string   `gcfg:"working-dir" mapstructure:"working-dir" hash:"true"`
 	Annotations []string `mapstructure:"annotations" hash:"true"`
 
 	MaxRuntime time.Duration `gcfg:"max-runtime" mapstructure:"max-runtime"`
@@ -214,6 +215,7 @@ func (j *RunJob) buildContainer(ctx context.Context) (string, error) {
 		Cmd:          args.GetArgs(j.Command),
 		Entrypoint:   entrypointSlice(j.Entrypoint),
 		Env:          j.Environment,
+		WorkingDir:   j.WorkingDir,
 		User:         j.User,
 		Hostname:     j.Hostname,
 		AttachStdin:  false,
@@ -223,7 +225,8 @@ func (j *RunJob) buildContainer(ctx context.Context) (string, error) {
 		Name:         name,
 		Labels:       annotations,
 		HostConfig: &domain.HostConfig{
-			Binds: j.Volume,
+			Binds:       j.Volume,
+			VolumesFrom: j.VolumesFrom,
 		},
 	}
 

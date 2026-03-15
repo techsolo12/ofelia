@@ -105,6 +105,7 @@ user = nobody                   # Optional (default: nobody)
 tty = false                     # Optional
 working-dir = /app              # Optional (Docker 17.09+)
 environment = FOO=bar           # Optional (Docker API 1.30+)
+privileged = false              # Optional (default: false)
 no-overlap = true               # Optional
 history-limit = 10              # Optional
 ```
@@ -118,6 +119,7 @@ command = echo "hello"
 user = nobody                   # Optional (default: nobody)
 network = bridge                # Optional
 hostname = job-container        # Optional
+working-dir = /app              # Optional
 volume = /host:/container:ro    # Optional
 environment = FOO=bar           # Optional
 delete = true                   # Optional (default: true)
@@ -142,6 +144,9 @@ schedule = @daily
 image = alpine:latest
 command = echo "hello"
 network = swarm_network         # Required for swarm
+environment = FOO=bar           # Optional, repeatable
+hostname = my-worker            # Optional
+dir = /app                      # Optional working directory
 user = nobody                   # Optional (default: nobody)
 no-overlap = true               # Optional
 max-runtime = 24h               # Optional

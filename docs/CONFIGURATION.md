@@ -375,21 +375,17 @@ Deploys as a Docker Swarm service (requires Swarm mode).
 
 ```ini
 [job-service-run "distributed-task"]
-# Inherits all RunJob configuration
 schedule = @hourly
 image = myapp/worker:latest
 command = run-distributed-task
-
-# Swarm-specific
-replicas = 3                # Number of replicas
-placement-constraints = node.role==worker
-resources-limits-cpu = 2
-resources-limits-memory = 1g
-resources-reservations-cpu = 0.5
-resources-reservations-memory = 256m
-restart-policy = on-failure
-restart-delay = 10s
-restart-max-attempts = 3
+network = swarm_network
+environment = DB_HOST=postgres
+environment = DB_PORT=5432
+hostname = worker-1
+dir = /opt/app
+user = appuser
+delete = true
+max-runtime = 1h
 ```
 
 ### ComposeJob - Docker Compose Operations

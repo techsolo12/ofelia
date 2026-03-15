@@ -34,6 +34,9 @@ type RunServiceJob struct {
 	Delete      string        `default:"true" hash:"true"`
 	Image       string        `hash:"true"`
 	Network     string        `hash:"true"`
+	Hostname    string        `hash:"true"`
+	Dir         string        `hash:"true"`
+	Environment []string      `mapstructure:"environment" hash:"true"`
 	Annotations []string      `mapstructure:"annotations" hash:"true"`
 	MaxRuntime  time.Duration `gcfg:"max-runtime" mapstructure:"max-runtime"`
 }
@@ -96,9 +99,12 @@ func (j *RunServiceJob) buildService(ctx context.Context) (string, error) {
 		Labels: annotations,
 		TaskTemplate: domain.TaskSpec{
 			ContainerSpec: domain.ContainerSpec{
-				Image: j.Image,
-				User:  j.User,
-				TTY:   j.TTY,
+				Image:    j.Image,
+				Env:      j.Environment,
+				User:     j.User,
+				Hostname: j.Hostname,
+				Dir:      j.Dir,
+				TTY:      j.TTY,
 			},
 			RestartPolicy: &domain.ServiceRestartPolicy{
 				Condition:   domain.RestartConditionNone,
