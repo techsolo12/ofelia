@@ -11,8 +11,8 @@ import (
 	"github.com/netresearch/ofelia/core/domain"
 )
 
-// Bug #3: ExecJob does not expose the Privileged field,
-// even though domain.ExecConfig.Privileged exists and the Docker API supports it.
+// TestExecJob_Run_Privileged verifies that ExecJob.Privileged is passed
+// through to domain.ExecConfig.Privileged when running an exec.
 
 func TestExecJob_Run_Privileged(t *testing.T) {
 	t.Parallel()

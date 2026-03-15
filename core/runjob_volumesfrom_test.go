@@ -8,9 +8,8 @@ import (
 	"testing"
 )
 
-// Bug #2: RunJob.VolumesFrom exists in the struct but is never passed to
-// buildContainer(). The domain.HostConfig also lacks a VolumesFrom field,
-// so the full chain (job → domain → adapter) needs wiring.
+// TestRunJob_BuildContainer_VolumesFrom verifies that RunJob.VolumesFrom is
+// passed through the full chain: job → domain.HostConfig → Docker SDK.
 
 func TestRunJob_BuildContainer_VolumesFrom(t *testing.T) {
 	t.Parallel()

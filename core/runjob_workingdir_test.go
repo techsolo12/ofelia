@@ -8,8 +8,8 @@ import (
 	"testing"
 )
 
-// Bug #1: RunJob.buildContainer() does not pass WorkingDir to ContainerConfig,
-// even though domain.ContainerConfig.WorkingDir exists and the Docker API supports it.
+// TestRunJob_BuildContainer_WorkingDir verifies that RunJob.WorkingDir is passed
+// through to domain.ContainerConfig.WorkingDir when building a container.
 
 func TestRunJob_BuildContainer_WorkingDir(t *testing.T) {
 	t.Parallel()
