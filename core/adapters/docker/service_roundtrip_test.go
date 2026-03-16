@@ -350,3 +350,74 @@ func TestServiceSpec_RoundTrip_Mounts(t *testing.T) {
 	assert.Equal(t, "/app/data", mounts[1].Target)
 	assert.False(t, mounts[1].ReadOnly)
 }
+
+func TestServiceSpec_RoundTrip_NilFields(t *testing.T) {
+	t.Parallel()
+
+	// Minimal spec — only required Image. Everything else nil/zero.
+	// Verifies nil stays nil after round-trip (not converted to empty slice).
+	original := &domain.ServiceSpec{
+		Name: "minimal-rt",
+		TaskTemplate: domain.TaskSpec{
+			ContainerSpec: domain.ContainerSpec{
+				Image: "alpine:latest",
+			},
+		},
+	}
+
+	result := roundTripServiceSpec(original)
+	require.NotNil(t, result)
+
+	assert.Equal(t, "minimal-rt", result.Spec.Name)
+	assert.Equal(t, "alpine:latest", result.Spec.TaskTemplate.ContainerSpec.Image)
+
+	// These should all remain nil/empty — not be converted to empty slices or zero structs
+	assert.Nil(t, result.Spec.TaskTemplate.RestartPolicy, "nil RestartPolicy should stay nil")
+	assert.Nil(t, result.Spec.TaskTemplate.Resources, "nil Resources should stay nil")
+	assert.Empty(t, result.Spec.TaskTemplate.Networks, "nil Networks should stay empty")
+	assert.Empty(t, result.Spec.Networks, "nil ServiceSpec.Networks should stay empty")
+	assert.Empty(t, result.Spec.TaskTemplate.ContainerSpec.Mounts, "nil Mounts should stay empty")
+	assert.Nil(t, result.Spec.Mode.Replicated, "nil Replicated should stay nil")
+	assert.Nil(t, result.Spec.Mode.Global, "nil Global should stay nil")
+
+	// Zero-value strings/bools should stay zero
+	assert.Empty(t, result.Spec.TaskTemplate.ContainerSpec.Hostname)
+	assert.Empty(t, result.Spec.TaskTemplate.ContainerSpec.Dir)
+	assert.Empty(t, result.Spec.TaskTemplate.ContainerSpec.User)
+	assert.Empty(t, result.Spec.TaskTemplate.ContainerSpec.Env)
+	assert.Empty(t, result.Spec.TaskTemplate.ContainerSpec.Command)
+	assert.False(t, result.Spec.TaskTemplate.ContainerSpec.TTY)
+	assert.False(t, result.Spec.TaskTemplate.ContainerSpec.OpenStdin)
+}
+
+func TestServiceSpec_RoundTrip_RestartConditionNone(t *testing.T) {
+	t.Parallel()
+
+	// buildService() uses RestartConditionNone with MaxAttempts=1 — test the exact
+	// values used in production.
+	maxAttempts := uint64(1)
+	original := &domain.ServiceSpec{
+		Name: "condnone-rt",
+		TaskTemplate: domain.TaskSpec{
+			ContainerSpec: domain.ContainerSpec{
+				Image: "alpine:latest",
+			},
+			RestartPolicy: &domain.ServiceRestartPolicy{
+				Condition:   domain.RestartConditionNone,
+				MaxAttempts: &maxAttempts,
+			},
+		},
+	}
+
+	result := roundTripServiceSpec(original)
+	require.NotNil(t, result)
+
+	rp := result.Spec.TaskTemplate.RestartPolicy
+	require.NotNil(t, rp, "RestartPolicy should survive round-trip")
+	assert.Equal(t, domain.RestartConditionNone, rp.Condition)
+	require.NotNil(t, rp.MaxAttempts)
+	assert.Equal(t, uint64(1), *rp.MaxAttempts)
+	// Delay and Window were not set — should be nil
+	assert.Nil(t, rp.Delay, "unset Delay should stay nil")
+	assert.Nil(t, rp.Window, "unset Window should stay nil")
+}
