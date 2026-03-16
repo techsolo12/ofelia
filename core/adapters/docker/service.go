@@ -238,8 +238,10 @@ func convertToSwarmSpec(spec *domain.ServiceSpec) swarm.ServiceSpec {
 		}
 	}
 
-	// Convert networks
-	for _, n := range spec.Networks {
+	// Convert networks from both ServiceSpec and TaskTemplate levels.
+	// buildService() writes to TaskTemplate.Networks; both locations are valid.
+	allNetworks := append(spec.Networks, spec.TaskTemplate.Networks...)
+	for _, n := range allNetworks {
 		swarmSpec.TaskTemplate.Networks = append(swarmSpec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{
 			Target:  n.Target,
 			Aliases: n.Aliases,
@@ -280,18 +282,75 @@ func convertFromSwarmService(svc *swarm.Service) *domain.Service {
 
 	// Convert task template
 	if svc.Spec.TaskTemplate.ContainerSpec != nil {
+		cs := svc.Spec.TaskTemplate.ContainerSpec
 		service.Spec.TaskTemplate.ContainerSpec = domain.ContainerSpec{
-			Image:     svc.Spec.TaskTemplate.ContainerSpec.Image,
-			Labels:    svc.Spec.TaskTemplate.ContainerSpec.Labels,
-			Command:   svc.Spec.TaskTemplate.ContainerSpec.Command,
-			Args:      svc.Spec.TaskTemplate.ContainerSpec.Args,
-			Hostname:  svc.Spec.TaskTemplate.ContainerSpec.Hostname,
-			Env:       svc.Spec.TaskTemplate.ContainerSpec.Env,
-			Dir:       svc.Spec.TaskTemplate.ContainerSpec.Dir,
-			User:      svc.Spec.TaskTemplate.ContainerSpec.User,
-			TTY:       svc.Spec.TaskTemplate.ContainerSpec.TTY,
-			OpenStdin: svc.Spec.TaskTemplate.ContainerSpec.OpenStdin,
+			Image:     cs.Image,
+			Labels:    cs.Labels,
+			Command:   cs.Command,
+			Args:      cs.Args,
+			Hostname:  cs.Hostname,
+			Env:       cs.Env,
+			Dir:       cs.Dir,
+			User:      cs.User,
+			TTY:       cs.TTY,
+			OpenStdin: cs.OpenStdin,
 		}
+		for _, m := range cs.Mounts {
+			service.Spec.TaskTemplate.ContainerSpec.Mounts = append(
+				service.Spec.TaskTemplate.ContainerSpec.Mounts,
+				domain.ServiceMount{
+					Type:     domain.MountType(m.Type),
+					Source:   m.Source,
+					Target:   m.Target,
+					ReadOnly: m.ReadOnly,
+				},
+			)
+		}
+	}
+
+	// Convert restart policy
+	if svc.Spec.TaskTemplate.RestartPolicy != nil {
+		rp := svc.Spec.TaskTemplate.RestartPolicy
+		service.Spec.TaskTemplate.RestartPolicy = &domain.ServiceRestartPolicy{
+			Condition:   domain.RestartCondition(rp.Condition),
+			Delay:       rp.Delay,
+			MaxAttempts: rp.MaxAttempts,
+			Window:      rp.Window,
+		}
+	}
+
+	// Convert resources
+	if svc.Spec.TaskTemplate.Resources != nil {
+		service.Spec.TaskTemplate.Resources = &domain.ResourceRequirements{}
+		if svc.Spec.TaskTemplate.Resources.Limits != nil {
+			service.Spec.TaskTemplate.Resources.Limits = &domain.Resources{
+				NanoCPUs:    svc.Spec.TaskTemplate.Resources.Limits.NanoCPUs,
+				MemoryBytes: svc.Spec.TaskTemplate.Resources.Limits.MemoryBytes,
+			}
+		}
+		if svc.Spec.TaskTemplate.Resources.Reservations != nil {
+			service.Spec.TaskTemplate.Resources.Reservations = &domain.Resources{
+				NanoCPUs:    svc.Spec.TaskTemplate.Resources.Reservations.NanoCPUs,
+				MemoryBytes: svc.Spec.TaskTemplate.Resources.Reservations.MemoryBytes,
+			}
+		}
+	}
+
+	// Convert networks
+	for _, n := range svc.Spec.TaskTemplate.Networks {
+		service.Spec.TaskTemplate.Networks = append(service.Spec.TaskTemplate.Networks, domain.NetworkAttachment{
+			Target:  n.Target,
+			Aliases: n.Aliases,
+		})
+	}
+
+	// Convert mode
+	if svc.Spec.Mode.Replicated != nil {
+		service.Spec.Mode.Replicated = &domain.ReplicatedService{
+			Replicas: svc.Spec.Mode.Replicated.Replicas,
+		}
+	} else if svc.Spec.Mode.Global != nil {
+		service.Spec.Mode.Global = &domain.GlobalService{}
 	}
 
 	return service
