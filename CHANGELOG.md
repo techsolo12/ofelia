@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.4] - 2026-03-17
+
 ### Fixed
 
 - Fix `job-service-run` network not attached to service ([#525](https://github.com/netresearch/ofelia/pull/525), closes [#524](https://github.com/netresearch/ofelia/issues/524))
