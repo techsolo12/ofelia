@@ -182,95 +182,13 @@ func convertToSwarmSpec(spec *domain.ServiceSpec) swarm.ServiceSpec {
 			Name:   spec.Name,
 			Labels: spec.Labels,
 		},
-		TaskTemplate: swarm.TaskSpec{
-			ContainerSpec: &swarm.ContainerSpec{
-				Image:     spec.TaskTemplate.ContainerSpec.Image,
-				Labels:    spec.TaskTemplate.ContainerSpec.Labels,
-				Command:   spec.TaskTemplate.ContainerSpec.Command,
-				Args:      spec.TaskTemplate.ContainerSpec.Args,
-				Hostname:  spec.TaskTemplate.ContainerSpec.Hostname,
-				Env:       spec.TaskTemplate.ContainerSpec.Env,
-				Dir:       spec.TaskTemplate.ContainerSpec.Dir,
-				User:      spec.TaskTemplate.ContainerSpec.User,
-				TTY:       spec.TaskTemplate.ContainerSpec.TTY,
-				OpenStdin: spec.TaskTemplate.ContainerSpec.OpenStdin,
-			},
-		},
 	}
 
-	// Convert mounts
-	for _, m := range spec.TaskTemplate.ContainerSpec.Mounts {
-		swarmSpec.TaskTemplate.ContainerSpec.Mounts = append(
-			swarmSpec.TaskTemplate.ContainerSpec.Mounts,
-			mount.Mount{
-				Type:     mount.Type(m.Type),
-				Source:   m.Source,
-				Target:   m.Target,
-				ReadOnly: m.ReadOnly,
-			},
-		)
-	}
-
-	// Convert restart policy
-	if spec.TaskTemplate.RestartPolicy != nil {
-		swarmSpec.TaskTemplate.RestartPolicy = &swarm.RestartPolicy{
-			Condition:   swarm.RestartPolicyCondition(spec.TaskTemplate.RestartPolicy.Condition),
-			Delay:       spec.TaskTemplate.RestartPolicy.Delay,
-			MaxAttempts: spec.TaskTemplate.RestartPolicy.MaxAttempts,
-			Window:      spec.TaskTemplate.RestartPolicy.Window,
-		}
-	}
-
-	// Convert resources
-	if spec.TaskTemplate.Resources != nil {
-		swarmSpec.TaskTemplate.Resources = &swarm.ResourceRequirements{}
-		if spec.TaskTemplate.Resources.Limits != nil {
-			swarmSpec.TaskTemplate.Resources.Limits = &swarm.Limit{
-				NanoCPUs:    spec.TaskTemplate.Resources.Limits.NanoCPUs,
-				MemoryBytes: spec.TaskTemplate.Resources.Limits.MemoryBytes,
-			}
-		}
-		if spec.TaskTemplate.Resources.Reservations != nil {
-			swarmSpec.TaskTemplate.Resources.Reservations = &swarm.Resources{
-				NanoCPUs:    spec.TaskTemplate.Resources.Reservations.NanoCPUs,
-				MemoryBytes: spec.TaskTemplate.Resources.Reservations.MemoryBytes,
-			}
-		}
-	}
-
-	// Convert placement
-	if spec.TaskTemplate.Placement != nil {
-		swarmSpec.TaskTemplate.Placement = &swarm.Placement{
-			Constraints: spec.TaskTemplate.Placement.Constraints,
-		}
-		for _, pref := range spec.TaskTemplate.Placement.Preferences {
-			sp := swarm.PlacementPreference{}
-			if pref.Spread != nil {
-				sp.Spread = &swarm.SpreadOver{
-					SpreadDescriptor: pref.Spread.SpreadDescriptor,
-				}
-			}
-			swarmSpec.TaskTemplate.Placement.Preferences = append(swarmSpec.TaskTemplate.Placement.Preferences, sp)
-		}
-	}
-
-	// Convert log driver
-	if spec.TaskTemplate.LogDriver != nil {
-		swarmSpec.TaskTemplate.LogDriver = &swarm.Driver{
-			Name:    spec.TaskTemplate.LogDriver.Name,
-			Options: spec.TaskTemplate.LogDriver.Options,
-		}
-	}
+	convertTaskTemplateToSwarm(&spec.TaskTemplate, &swarmSpec.TaskTemplate)
 
 	// Convert networks from both ServiceSpec and TaskTemplate levels.
 	// buildService() writes to TaskTemplate.Networks; both locations are valid.
 	for _, n := range spec.Networks {
-		swarmSpec.TaskTemplate.Networks = append(swarmSpec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{
-			Target:  n.Target,
-			Aliases: n.Aliases,
-		})
-	}
-	for _, n := range spec.TaskTemplate.Networks {
 		swarmSpec.TaskTemplate.Networks = append(swarmSpec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{
 			Target:  n.Target,
 			Aliases: n.Aliases,
@@ -309,6 +227,84 @@ func convertToSwarmSpec(spec *domain.ServiceSpec) swarm.ServiceSpec {
 	return swarmSpec
 }
 
+func convertTaskTemplateToSwarm(src *domain.TaskSpec, dst *swarm.TaskSpec) {
+	dst.ContainerSpec = &swarm.ContainerSpec{
+		Image:     src.ContainerSpec.Image,
+		Labels:    src.ContainerSpec.Labels,
+		Command:   src.ContainerSpec.Command,
+		Args:      src.ContainerSpec.Args,
+		Hostname:  src.ContainerSpec.Hostname,
+		Env:       src.ContainerSpec.Env,
+		Dir:       src.ContainerSpec.Dir,
+		User:      src.ContainerSpec.User,
+		TTY:       src.ContainerSpec.TTY,
+		OpenStdin: src.ContainerSpec.OpenStdin,
+	}
+
+	for _, m := range src.ContainerSpec.Mounts {
+		dst.ContainerSpec.Mounts = append(dst.ContainerSpec.Mounts, mount.Mount{
+			Type:     mount.Type(m.Type),
+			Source:   m.Source,
+			Target:   m.Target,
+			ReadOnly: m.ReadOnly,
+		})
+	}
+
+	if src.RestartPolicy != nil {
+		dst.RestartPolicy = &swarm.RestartPolicy{
+			Condition:   swarm.RestartPolicyCondition(src.RestartPolicy.Condition),
+			Delay:       src.RestartPolicy.Delay,
+			MaxAttempts: src.RestartPolicy.MaxAttempts,
+			Window:      src.RestartPolicy.Window,
+		}
+	}
+
+	if src.Resources != nil {
+		dst.Resources = &swarm.ResourceRequirements{}
+		if src.Resources.Limits != nil {
+			dst.Resources.Limits = &swarm.Limit{
+				NanoCPUs:    src.Resources.Limits.NanoCPUs,
+				MemoryBytes: src.Resources.Limits.MemoryBytes,
+			}
+		}
+		if src.Resources.Reservations != nil {
+			dst.Resources.Reservations = &swarm.Resources{
+				NanoCPUs:    src.Resources.Reservations.NanoCPUs,
+				MemoryBytes: src.Resources.Reservations.MemoryBytes,
+			}
+		}
+	}
+
+	if src.Placement != nil {
+		dst.Placement = &swarm.Placement{
+			Constraints: src.Placement.Constraints,
+		}
+		for _, pref := range src.Placement.Preferences {
+			sp := swarm.PlacementPreference{}
+			if pref.Spread != nil {
+				sp.Spread = &swarm.SpreadOver{
+					SpreadDescriptor: pref.Spread.SpreadDescriptor,
+				}
+			}
+			dst.Placement.Preferences = append(dst.Placement.Preferences, sp)
+		}
+	}
+
+	if src.LogDriver != nil {
+		dst.LogDriver = &swarm.Driver{
+			Name:    src.LogDriver.Name,
+			Options: src.LogDriver.Options,
+		}
+	}
+
+	for _, n := range src.Networks {
+		dst.Networks = append(dst.Networks, swarm.NetworkAttachmentConfig{
+			Target:  n.Target,
+			Aliases: n.Aliases,
+		})
+	}
+}
+
 func convertFromSwarmService(svc *swarm.Service) *domain.Service {
 	service := &domain.Service{
 		ID: svc.ID,
@@ -325,93 +321,7 @@ func convertFromSwarmService(svc *swarm.Service) *domain.Service {
 		},
 	}
 
-	// Convert task template
-	if svc.Spec.TaskTemplate.ContainerSpec != nil {
-		cs := svc.Spec.TaskTemplate.ContainerSpec
-		service.Spec.TaskTemplate.ContainerSpec = domain.ContainerSpec{
-			Image:     cs.Image,
-			Labels:    cs.Labels,
-			Command:   cs.Command,
-			Args:      cs.Args,
-			Hostname:  cs.Hostname,
-			Env:       cs.Env,
-			Dir:       cs.Dir,
-			User:      cs.User,
-			TTY:       cs.TTY,
-			OpenStdin: cs.OpenStdin,
-		}
-		for _, m := range cs.Mounts {
-			service.Spec.TaskTemplate.ContainerSpec.Mounts = append(
-				service.Spec.TaskTemplate.ContainerSpec.Mounts,
-				domain.ServiceMount{
-					Type:     domain.MountType(m.Type),
-					Source:   m.Source,
-					Target:   m.Target,
-					ReadOnly: m.ReadOnly,
-				},
-			)
-		}
-	}
-
-	// Convert restart policy
-	if svc.Spec.TaskTemplate.RestartPolicy != nil {
-		rp := svc.Spec.TaskTemplate.RestartPolicy
-		service.Spec.TaskTemplate.RestartPolicy = &domain.ServiceRestartPolicy{
-			Condition:   domain.RestartCondition(rp.Condition),
-			Delay:       rp.Delay,
-			MaxAttempts: rp.MaxAttempts,
-			Window:      rp.Window,
-		}
-	}
-
-	// Convert resources
-	if svc.Spec.TaskTemplate.Resources != nil {
-		service.Spec.TaskTemplate.Resources = &domain.ResourceRequirements{}
-		if svc.Spec.TaskTemplate.Resources.Limits != nil {
-			service.Spec.TaskTemplate.Resources.Limits = &domain.Resources{
-				NanoCPUs:    svc.Spec.TaskTemplate.Resources.Limits.NanoCPUs,
-				MemoryBytes: svc.Spec.TaskTemplate.Resources.Limits.MemoryBytes,
-			}
-		}
-		if svc.Spec.TaskTemplate.Resources.Reservations != nil {
-			service.Spec.TaskTemplate.Resources.Reservations = &domain.Resources{
-				NanoCPUs:    svc.Spec.TaskTemplate.Resources.Reservations.NanoCPUs,
-				MemoryBytes: svc.Spec.TaskTemplate.Resources.Reservations.MemoryBytes,
-			}
-		}
-	}
-
-	// Convert networks
-	for _, n := range svc.Spec.TaskTemplate.Networks {
-		service.Spec.TaskTemplate.Networks = append(service.Spec.TaskTemplate.Networks, domain.NetworkAttachment{
-			Target:  n.Target,
-			Aliases: n.Aliases,
-		})
-	}
-
-	// Convert placement
-	if svc.Spec.TaskTemplate.Placement != nil {
-		service.Spec.TaskTemplate.Placement = &domain.Placement{
-			Constraints: svc.Spec.TaskTemplate.Placement.Constraints,
-		}
-		for _, pref := range svc.Spec.TaskTemplate.Placement.Preferences {
-			dp := domain.PlacementPreference{}
-			if pref.Spread != nil {
-				dp.Spread = &domain.SpreadOver{
-					SpreadDescriptor: pref.Spread.SpreadDescriptor,
-				}
-			}
-			service.Spec.TaskTemplate.Placement.Preferences = append(service.Spec.TaskTemplate.Placement.Preferences, dp)
-		}
-	}
-
-	// Convert log driver
-	if svc.Spec.TaskTemplate.LogDriver != nil {
-		service.Spec.TaskTemplate.LogDriver = &domain.LogDriver{
-			Name:    svc.Spec.TaskTemplate.LogDriver.Name,
-			Options: svc.Spec.TaskTemplate.LogDriver.Options,
-		}
-	}
+	convertTaskTemplateFromSwarm(&svc.Spec.TaskTemplate, &service.Spec.TaskTemplate)
 
 	// Convert mode
 	if svc.Spec.Mode.Replicated != nil {
@@ -439,6 +349,87 @@ func convertFromSwarmService(svc *swarm.Service) *domain.Service {
 	}
 
 	return service
+}
+
+func convertTaskTemplateFromSwarm(src *swarm.TaskSpec, dst *domain.TaskSpec) {
+	if src.ContainerSpec != nil {
+		cs := src.ContainerSpec
+		dst.ContainerSpec = domain.ContainerSpec{
+			Image:     cs.Image,
+			Labels:    cs.Labels,
+			Command:   cs.Command,
+			Args:      cs.Args,
+			Hostname:  cs.Hostname,
+			Env:       cs.Env,
+			Dir:       cs.Dir,
+			User:      cs.User,
+			TTY:       cs.TTY,
+			OpenStdin: cs.OpenStdin,
+		}
+		for _, m := range cs.Mounts {
+			dst.ContainerSpec.Mounts = append(dst.ContainerSpec.Mounts, domain.ServiceMount{
+				Type:     domain.MountType(m.Type),
+				Source:   m.Source,
+				Target:   m.Target,
+				ReadOnly: m.ReadOnly,
+			})
+		}
+	}
+
+	if src.RestartPolicy != nil {
+		rp := src.RestartPolicy
+		dst.RestartPolicy = &domain.ServiceRestartPolicy{
+			Condition:   domain.RestartCondition(rp.Condition),
+			Delay:       rp.Delay,
+			MaxAttempts: rp.MaxAttempts,
+			Window:      rp.Window,
+		}
+	}
+
+	if src.Resources != nil {
+		dst.Resources = &domain.ResourceRequirements{}
+		if src.Resources.Limits != nil {
+			dst.Resources.Limits = &domain.Resources{
+				NanoCPUs:    src.Resources.Limits.NanoCPUs,
+				MemoryBytes: src.Resources.Limits.MemoryBytes,
+			}
+		}
+		if src.Resources.Reservations != nil {
+			dst.Resources.Reservations = &domain.Resources{
+				NanoCPUs:    src.Resources.Reservations.NanoCPUs,
+				MemoryBytes: src.Resources.Reservations.MemoryBytes,
+			}
+		}
+	}
+
+	for _, n := range src.Networks {
+		dst.Networks = append(dst.Networks, domain.NetworkAttachment{
+			Target:  n.Target,
+			Aliases: n.Aliases,
+		})
+	}
+
+	if src.Placement != nil {
+		dst.Placement = &domain.Placement{
+			Constraints: src.Placement.Constraints,
+		}
+		for _, pref := range src.Placement.Preferences {
+			dp := domain.PlacementPreference{}
+			if pref.Spread != nil {
+				dp.Spread = &domain.SpreadOver{
+					SpreadDescriptor: pref.Spread.SpreadDescriptor,
+				}
+			}
+			dst.Placement.Preferences = append(dst.Placement.Preferences, dp)
+		}
+	}
+
+	if src.LogDriver != nil {
+		dst.LogDriver = &domain.LogDriver{
+			Name:    src.LogDriver.Name,
+			Options: src.LogDriver.Options,
+		}
+	}
 }
 
 func convertFromSwarmTask(task *swarm.Task) domain.Task {
