@@ -421,3 +421,134 @@ func TestServiceSpec_RoundTrip_RestartConditionNone(t *testing.T) {
 	assert.Nil(t, rp.Delay, "unset Delay should stay nil")
 	assert.Nil(t, rp.Window, "unset Window should stay nil")
 }
+
+func TestServiceSpec_RoundTrip_Placement(t *testing.T) {
+	t.Parallel()
+
+	original := &domain.ServiceSpec{
+		Name: "placement-rt",
+		TaskTemplate: domain.TaskSpec{
+			ContainerSpec: domain.ContainerSpec{
+				Image: "nginx:latest",
+			},
+			Placement: &domain.Placement{
+				Constraints: []string{"node.role==worker", "node.labels.zone==us-east"},
+				Preferences: []domain.PlacementPreference{
+					{Spread: &domain.SpreadOver{SpreadDescriptor: "node.labels.zone"}},
+				},
+			},
+		},
+	}
+
+	// toSwarm direction
+	swarmSpec := convertToSwarmSpec(original)
+	require.NotNil(t, swarmSpec.TaskTemplate.Placement, "toSwarm should convert Placement")
+	assert.Equal(t, []string{"node.role==worker", "node.labels.zone==us-east"}, swarmSpec.TaskTemplate.Placement.Constraints)
+	require.Len(t, swarmSpec.TaskTemplate.Placement.Preferences, 1)
+	require.NotNil(t, swarmSpec.TaskTemplate.Placement.Preferences[0].Spread)
+	assert.Equal(t, "node.labels.zone", swarmSpec.TaskTemplate.Placement.Preferences[0].Spread.SpreadDescriptor)
+
+	// Full round-trip
+	result := roundTripServiceSpec(original)
+	require.NotNil(t, result)
+
+	p := result.Spec.TaskTemplate.Placement
+	require.NotNil(t, p, "Placement should survive round-trip")
+	assert.Equal(t, []string{"node.role==worker", "node.labels.zone==us-east"}, p.Constraints)
+	require.Len(t, p.Preferences, 1)
+	require.NotNil(t, p.Preferences[0].Spread)
+	assert.Equal(t, "node.labels.zone", p.Preferences[0].Spread.SpreadDescriptor)
+}
+
+func TestServiceSpec_RoundTrip_LogDriver(t *testing.T) {
+	t.Parallel()
+
+	original := &domain.ServiceSpec{
+		Name: "logdriver-rt",
+		TaskTemplate: domain.TaskSpec{
+			ContainerSpec: domain.ContainerSpec{
+				Image: "nginx:latest",
+			},
+			LogDriver: &domain.LogDriver{
+				Name:    "json-file",
+				Options: map[string]string{"max-size": "10m", "max-file": "3"},
+			},
+		},
+	}
+
+	// toSwarm direction
+	swarmSpec := convertToSwarmSpec(original)
+	require.NotNil(t, swarmSpec.TaskTemplate.LogDriver, "toSwarm should convert LogDriver")
+	assert.Equal(t, "json-file", swarmSpec.TaskTemplate.LogDriver.Name)
+	assert.Equal(t, map[string]string{"max-size": "10m", "max-file": "3"}, swarmSpec.TaskTemplate.LogDriver.Options)
+
+	// Full round-trip
+	result := roundTripServiceSpec(original)
+	require.NotNil(t, result)
+
+	ld := result.Spec.TaskTemplate.LogDriver
+	require.NotNil(t, ld, "LogDriver should survive round-trip")
+	assert.Equal(t, "json-file", ld.Name)
+	assert.Equal(t, map[string]string{"max-size": "10m", "max-file": "3"}, ld.Options)
+}
+
+func TestServiceSpec_RoundTrip_EndpointSpec(t *testing.T) {
+	t.Parallel()
+
+	original := &domain.ServiceSpec{
+		Name: "endpoint-rt",
+		TaskTemplate: domain.TaskSpec{
+			ContainerSpec: domain.ContainerSpec{
+				Image: "nginx:latest",
+			},
+		},
+		EndpointSpec: &domain.EndpointSpec{
+			Mode: domain.ResolutionModeVIP,
+			Ports: []domain.PortConfig{
+				{
+					Name:          "http",
+					Protocol:      domain.PortProtocolTCP,
+					TargetPort:    80,
+					PublishedPort: 8080,
+					PublishMode:   domain.PortPublishModeIngress,
+				},
+				{
+					Name:          "https",
+					Protocol:      domain.PortProtocolTCP,
+					TargetPort:    443,
+					PublishedPort: 8443,
+					PublishMode:   domain.PortPublishModeHost,
+				},
+			},
+		},
+	}
+
+	// toSwarm direction
+	swarmSpec := convertToSwarmSpec(original)
+	require.NotNil(t, swarmSpec.EndpointSpec, "toSwarm should convert EndpointSpec")
+	assert.Equal(t, swarm.ResolutionModeVIP, swarmSpec.EndpointSpec.Mode)
+	require.Len(t, swarmSpec.EndpointSpec.Ports, 2)
+	assert.Equal(t, "http", swarmSpec.EndpointSpec.Ports[0].Name)
+	assert.Equal(t, swarm.PortConfigProtocolTCP, swarmSpec.EndpointSpec.Ports[0].Protocol)
+	assert.Equal(t, uint32(80), swarmSpec.EndpointSpec.Ports[0].TargetPort)
+	assert.Equal(t, uint32(8080), swarmSpec.EndpointSpec.Ports[0].PublishedPort)
+	assert.Equal(t, swarm.PortConfigPublishModeIngress, swarmSpec.EndpointSpec.Ports[0].PublishMode)
+
+	// Full round-trip
+	result := roundTripServiceSpec(original)
+	require.NotNil(t, result)
+
+	ep := result.Spec.EndpointSpec
+	require.NotNil(t, ep, "EndpointSpec should survive round-trip")
+	assert.Equal(t, domain.ResolutionModeVIP, ep.Mode)
+	require.Len(t, ep.Ports, 2)
+	assert.Equal(t, "http", ep.Ports[0].Name)
+	assert.Equal(t, domain.PortProtocolTCP, ep.Ports[0].Protocol)
+	assert.Equal(t, uint32(80), ep.Ports[0].TargetPort)
+	assert.Equal(t, uint32(8080), ep.Ports[0].PublishedPort)
+	assert.Equal(t, domain.PortPublishModeIngress, ep.Ports[0].PublishMode)
+	assert.Equal(t, "https", ep.Ports[1].Name)
+	assert.Equal(t, uint32(443), ep.Ports[1].TargetPort)
+	assert.Equal(t, uint32(8443), ep.Ports[1].PublishedPort)
+	assert.Equal(t, domain.PortPublishModeHost, ep.Ports[1].PublishMode)
+}

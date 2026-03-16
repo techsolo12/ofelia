@@ -238,6 +238,30 @@ func convertToSwarmSpec(spec *domain.ServiceSpec) swarm.ServiceSpec {
 		}
 	}
 
+	// Convert placement
+	if spec.TaskTemplate.Placement != nil {
+		swarmSpec.TaskTemplate.Placement = &swarm.Placement{
+			Constraints: spec.TaskTemplate.Placement.Constraints,
+		}
+		for _, pref := range spec.TaskTemplate.Placement.Preferences {
+			sp := swarm.PlacementPreference{}
+			if pref.Spread != nil {
+				sp.Spread = &swarm.SpreadOver{
+					SpreadDescriptor: pref.Spread.SpreadDescriptor,
+				}
+			}
+			swarmSpec.TaskTemplate.Placement.Preferences = append(swarmSpec.TaskTemplate.Placement.Preferences, sp)
+		}
+	}
+
+	// Convert log driver
+	if spec.TaskTemplate.LogDriver != nil {
+		swarmSpec.TaskTemplate.LogDriver = &swarm.Driver{
+			Name:    spec.TaskTemplate.LogDriver.Name,
+			Options: spec.TaskTemplate.LogDriver.Options,
+		}
+	}
+
 	// Convert networks from both ServiceSpec and TaskTemplate levels.
 	// buildService() writes to TaskTemplate.Networks; both locations are valid.
 	for _, n := range spec.Networks {
@@ -263,6 +287,22 @@ func convertToSwarmSpec(spec *domain.ServiceSpec) swarm.ServiceSpec {
 	} else if spec.Mode.Global != nil {
 		swarmSpec.Mode = swarm.ServiceMode{
 			Global: &swarm.GlobalService{},
+		}
+	}
+
+	// Convert endpoint spec
+	if spec.EndpointSpec != nil {
+		swarmSpec.EndpointSpec = &swarm.EndpointSpec{
+			Mode: swarm.ResolutionMode(spec.EndpointSpec.Mode),
+		}
+		for _, p := range spec.EndpointSpec.Ports {
+			swarmSpec.EndpointSpec.Ports = append(swarmSpec.EndpointSpec.Ports, swarm.PortConfig{
+				Name:          p.Name,
+				Protocol:      swarm.PortConfigProtocol(p.Protocol),
+				TargetPort:    p.TargetPort,
+				PublishedPort: p.PublishedPort,
+				PublishMode:   swarm.PortConfigPublishMode(p.PublishMode),
+			})
 		}
 	}
 
@@ -349,6 +389,30 @@ func convertFromSwarmService(svc *swarm.Service) *domain.Service {
 		})
 	}
 
+	// Convert placement
+	if svc.Spec.TaskTemplate.Placement != nil {
+		service.Spec.TaskTemplate.Placement = &domain.Placement{
+			Constraints: svc.Spec.TaskTemplate.Placement.Constraints,
+		}
+		for _, pref := range svc.Spec.TaskTemplate.Placement.Preferences {
+			dp := domain.PlacementPreference{}
+			if pref.Spread != nil {
+				dp.Spread = &domain.SpreadOver{
+					SpreadDescriptor: pref.Spread.SpreadDescriptor,
+				}
+			}
+			service.Spec.TaskTemplate.Placement.Preferences = append(service.Spec.TaskTemplate.Placement.Preferences, dp)
+		}
+	}
+
+	// Convert log driver
+	if svc.Spec.TaskTemplate.LogDriver != nil {
+		service.Spec.TaskTemplate.LogDriver = &domain.LogDriver{
+			Name:    svc.Spec.TaskTemplate.LogDriver.Name,
+			Options: svc.Spec.TaskTemplate.LogDriver.Options,
+		}
+	}
+
 	// Convert mode
 	if svc.Spec.Mode.Replicated != nil {
 		service.Spec.Mode.Replicated = &domain.ReplicatedService{
@@ -356,6 +420,22 @@ func convertFromSwarmService(svc *swarm.Service) *domain.Service {
 		}
 	} else if svc.Spec.Mode.Global != nil {
 		service.Spec.Mode.Global = &domain.GlobalService{}
+	}
+
+	// Convert endpoint spec
+	if svc.Spec.EndpointSpec != nil {
+		service.Spec.EndpointSpec = &domain.EndpointSpec{
+			Mode: domain.ResolutionMode(svc.Spec.EndpointSpec.Mode),
+		}
+		for _, p := range svc.Spec.EndpointSpec.Ports {
+			service.Spec.EndpointSpec.Ports = append(service.Spec.EndpointSpec.Ports, domain.PortConfig{
+				Name:          p.Name,
+				Protocol:      domain.PortProtocol(p.Protocol),
+				TargetPort:    p.TargetPort,
+				PublishedPort: p.PublishedPort,
+				PublishMode:   domain.PortPublishMode(p.PublishMode),
+			})
+		}
 	}
 
 	return service
