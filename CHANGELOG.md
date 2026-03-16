@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix `job-service-run` network not attached to service ([#525](https://github.com/netresearch/ofelia/pull/525), closes [#524](https://github.com/netresearch/ofelia/issues/524))
+  - `convertToSwarmSpec` now reads networks from both `ServiceSpec.Networks` and `TaskTemplate.Networks`
+  - `convertFromSwarmService` now converts Mounts, RestartPolicy, Resources, Networks, Mode, Placement, LogDriver, and EndpointSpec
+
 ## [0.21.3] - 2026-03-15
 
 ### Fixed
