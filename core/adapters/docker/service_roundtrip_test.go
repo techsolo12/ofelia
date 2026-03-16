@@ -8,9 +8,10 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/swarm"
-	"github.com/netresearch/ofelia/core/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netresearch/ofelia/core/domain"
 )
 
 // roundTripServiceSpec converts domain->swarm->domain and returns the result.
