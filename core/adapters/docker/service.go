@@ -240,8 +240,13 @@ func convertToSwarmSpec(spec *domain.ServiceSpec) swarm.ServiceSpec {
 
 	// Convert networks from both ServiceSpec and TaskTemplate levels.
 	// buildService() writes to TaskTemplate.Networks; both locations are valid.
-	allNetworks := append(spec.Networks, spec.TaskTemplate.Networks...)
-	for _, n := range allNetworks {
+	for _, n := range spec.Networks {
+		swarmSpec.TaskTemplate.Networks = append(swarmSpec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{
+			Target:  n.Target,
+			Aliases: n.Aliases,
+		})
+	}
+	for _, n := range spec.TaskTemplate.Networks {
 		swarmSpec.TaskTemplate.Networks = append(swarmSpec.TaskTemplate.Networks, swarm.NetworkAttachmentConfig{
 			Target:  n.Target,
 			Aliases: n.Aliases,

@@ -8,10 +8,9 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/netresearch/ofelia/core/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/netresearch/ofelia/core/domain"
 )
 
 // roundTripServiceSpec converts domain->swarm->domain and returns the result.
@@ -66,9 +65,7 @@ func TestServiceSpec_RoundTrip_ContainerSpec(t *testing.T) {
 	assert.True(t, cs.TTY, "TTY should survive round-trip")
 	assert.True(t, cs.OpenStdin, "OpenStdin should survive round-trip")
 
-	// Mounts are set via ContainerSpec -- convertFromSwarmService does NOT convert mounts,
-	// so this assertion documents the known bug.
-	require.Len(t, cs.Mounts, 2, "Mounts should survive round-trip (BUG: convertFromSwarmService does not convert mounts)")
+	require.Len(t, cs.Mounts, 2, "Mounts should survive round-trip")
 	assert.Equal(t, domain.MountTypeBind, cs.Mounts[0].Type)
 	assert.Equal(t, "/host/data", cs.Mounts[0].Source)
 	assert.Equal(t, "/data", cs.Mounts[0].Target)
@@ -87,8 +84,7 @@ func TestServiceSpec_RoundTrip_TaskTemplateNetworks(t *testing.T) {
 	t.Parallel()
 
 	// This mimics how buildService() populates networks: on TaskTemplate.Networks.
-	// BUG: convertToSwarmSpec reads from spec.Networks, NOT spec.TaskTemplate.Networks,
-	// so networks set on TaskTemplate are silently dropped during the toSwarm direction.
+	// convertToSwarmSpec reads from both spec.Networks and spec.TaskTemplate.Networks.
 	original := &domain.ServiceSpec{
 		Name: "task-net-rt",
 		TaskTemplate: domain.TaskSpec{
@@ -106,7 +102,7 @@ func TestServiceSpec_RoundTrip_TaskTemplateNetworks(t *testing.T) {
 	// in the swarm spec's TaskTemplate.Networks.
 	swarmSpec := convertToSwarmSpec(original)
 	require.Len(t, swarmSpec.TaskTemplate.Networks, 2,
-		"BUG: convertToSwarmSpec ignores TaskTemplate.Networks -- only reads spec.Networks")
+		"convertToSwarmSpec should include TaskTemplate.Networks")
 	assert.Equal(t, "frontend-net", swarmSpec.TaskTemplate.Networks[0].Target)
 	assert.Equal(t, []string{"web", "proxy"}, swarmSpec.TaskTemplate.Networks[0].Aliases)
 	assert.Equal(t, "backend-net", swarmSpec.TaskTemplate.Networks[1].Target)
@@ -149,11 +145,8 @@ func TestServiceSpec_RoundTrip_ServiceSpecNetworks(t *testing.T) {
 	result := roundTripServiceSpec(original)
 	require.NotNil(t, result)
 
-	// BUG: convertFromSwarmService does NOT convert networks at all.
-	// Networks should appear in either spec.Networks or spec.TaskTemplate.Networks.
 	allNetworks := append(result.Spec.Networks, result.Spec.TaskTemplate.Networks...)
-	require.Len(t, allNetworks, 2,
-		"BUG: convertFromSwarmService does not convert networks back to domain")
+	require.Len(t, allNetworks, 2, "Networks should survive round-trip")
 	assert.Equal(t, "overlay-1", allNetworks[0].Target)
 	assert.Equal(t, []string{"svc-a"}, allNetworks[0].Aliases)
 	assert.Equal(t, "overlay-2", allNetworks[1].Target)
@@ -187,10 +180,8 @@ func TestServiceSpec_RoundTrip_RestartPolicy(t *testing.T) {
 	result := roundTripServiceSpec(original)
 	require.NotNil(t, result)
 
-	// BUG: convertFromSwarmService does NOT convert RestartPolicy.
 	rp := result.Spec.TaskTemplate.RestartPolicy
-	require.NotNil(t, rp,
-		"BUG: convertFromSwarmService does not convert RestartPolicy back to domain")
+	require.NotNil(t, rp, "RestartPolicy should survive round-trip")
 	assert.Equal(t, domain.RestartConditionOnFailure, rp.Condition)
 	require.NotNil(t, rp.Delay)
 	assert.Equal(t, 10*time.Second, *rp.Delay)
@@ -215,8 +206,8 @@ func TestServiceSpec_RoundTrip_Resources(t *testing.T) {
 					MemoryBytes: 1073741824, // 1 GiB
 				},
 				Reservations: &domain.Resources{
-					NanoCPUs:    500000000,  // 0.5 CPU
-					MemoryBytes: 268435456,  // 256 MiB
+					NanoCPUs:    500000000, // 0.5 CPU
+					MemoryBytes: 268435456, // 256 MiB
 				},
 			},
 		},
@@ -236,10 +227,8 @@ func TestServiceSpec_RoundTrip_Resources(t *testing.T) {
 	result := roundTripServiceSpec(original)
 	require.NotNil(t, result)
 
-	// BUG: convertFromSwarmService does NOT convert Resources.
 	res := result.Spec.TaskTemplate.Resources
-	require.NotNil(t, res,
-		"BUG: convertFromSwarmService does not convert Resources back to domain")
+	require.NotNil(t, res, "Resources should survive round-trip")
 	require.NotNil(t, res.Limits, "Resource Limits should survive round-trip")
 	assert.Equal(t, int64(2000000000), res.Limits.NanoCPUs)
 	assert.Equal(t, int64(1073741824), res.Limits.MemoryBytes)
@@ -275,9 +264,7 @@ func TestServiceSpec_RoundTrip_ModeReplicated(t *testing.T) {
 	result := roundTripServiceSpec(original)
 	require.NotNil(t, result)
 
-	// BUG: convertFromSwarmService does NOT convert Mode.
-	require.NotNil(t, result.Spec.Mode.Replicated,
-		"BUG: convertFromSwarmService does not convert Mode.Replicated back to domain")
+	require.NotNil(t, result.Spec.Mode.Replicated, "Mode.Replicated should survive round-trip")
 	require.NotNil(t, result.Spec.Mode.Replicated.Replicas)
 	assert.Equal(t, uint64(3), *result.Spec.Mode.Replicated.Replicas)
 	assert.Nil(t, result.Spec.Mode.Global, "Global should be nil for replicated mode")
@@ -307,9 +294,7 @@ func TestServiceSpec_RoundTrip_ModeGlobal(t *testing.T) {
 	result := roundTripServiceSpec(original)
 	require.NotNil(t, result)
 
-	// BUG: convertFromSwarmService does NOT convert Mode.
-	require.NotNil(t, result.Spec.Mode.Global,
-		"BUG: convertFromSwarmService does not convert Mode.Global back to domain")
+	require.NotNil(t, result.Spec.Mode.Global, "Mode.Global should survive round-trip")
 	assert.Nil(t, result.Spec.Mode.Replicated, "Replicated should be nil for global mode")
 }
 
@@ -353,10 +338,8 @@ func TestServiceSpec_RoundTrip_Mounts(t *testing.T) {
 	result := roundTripServiceSpec(original)
 	require.NotNil(t, result)
 
-	// BUG: convertFromSwarmService does NOT convert Mounts.
 	mounts := result.Spec.TaskTemplate.ContainerSpec.Mounts
-	require.Len(t, mounts, 2,
-		"BUG: convertFromSwarmService does not convert Mounts back to domain")
+	require.Len(t, mounts, 2, "Mounts should survive round-trip")
 	assert.Equal(t, domain.MountTypeBind, mounts[0].Type)
 	assert.Equal(t, "/etc/config", mounts[0].Source)
 	assert.Equal(t, "/app/config", mounts[0].Target)
