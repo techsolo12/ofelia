@@ -5,6 +5,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"runtime/debug"
 	"strings"
 )
@@ -39,10 +40,9 @@ func VersionString() string {
 	for _, s := range info.Settings {
 		switch s.Key {
 		case "vcs.revision":
-			if len(s.Value) > 7 {
-				vcsRev = s.Value[:7]
-			} else {
-				vcsRev = s.Value
+			vcsRev = s.Value
+			if len(vcsRev) > 7 {
+				vcsRev = vcsRev[:7]
 			}
 		case "vcs.modified":
 			if s.Value == "true" {
@@ -65,6 +65,6 @@ type VersionCommand struct{}
 
 // Execute prints the version string.
 func (c *VersionCommand) Execute(_ []string) error {
-	fmt.Println(VersionString())
+	_, _ = fmt.Fprintln(os.Stdout, VersionString())
 	return nil
 }

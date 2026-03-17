@@ -48,8 +48,8 @@ func main() {
 
 	// Handle --version flag before parser setup
 	for _, arg := range os.Args[1:] {
-		if arg == "--version" || arg == "-v" {
-			fmt.Println(cli.VersionString())
+		if arg == "--version" {
+			_, _ = fmt.Fprintln(os.Stdout, cli.VersionString())
 			return
 		}
 	}

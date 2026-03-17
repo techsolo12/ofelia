@@ -9,9 +9,7 @@ import (
 )
 
 func TestVersionString_WithLdflags(t *testing.T) {
-	t.Parallel()
-
-	// Save and restore
+	// Not parallel — mutates package-level globals Version/Build.
 	origV, origB := Version, Build
 	t.Cleanup(func() { Version, Build = origV, origB })
 
@@ -25,8 +23,7 @@ func TestVersionString_WithLdflags(t *testing.T) {
 }
 
 func TestVersionString_VersionOnly(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel — mutates package-level globals Version/Build.
 	origV, origB := Version, Build
 	t.Cleanup(func() { Version, Build = origV, origB })
 
@@ -40,8 +37,7 @@ func TestVersionString_VersionOnly(t *testing.T) {
 }
 
 func TestVersionString_DevBuild(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel — mutates package-level globals Version/Build.
 	origV, origB := Version, Build
 	t.Cleanup(func() { Version, Build = origV, origB })
 
