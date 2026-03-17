@@ -1,0 +1,70 @@
+// Copyright (c) 2025-2026 Netresearch DTT GmbH
+// SPDX-License-Identifier: MIT
+
+package cli
+
+import (
+	"fmt"
+	"runtime/debug"
+	"strings"
+)
+
+// Version info set via ldflags at build time.
+var (
+	Version string // e.g. "v0.21.4" or "main"
+	Build   string // e.g. "abc1234" or "03-17-2026_12_00_00"
+)
+
+// VersionString returns a human-readable version string.
+// For release builds (ldflags set), it returns "ofelia v0.21.4 (abc1234)".
+// For dev builds (no ldflags), it uses runtime/debug.BuildInfo for Go version and VCS info.
+func VersionString() string {
+	if Version != "" {
+		if Build != "" {
+			return fmt.Sprintf("ofelia %s (%s)", Version, Build)
+		}
+		return fmt.Sprintf("ofelia %s", Version)
+	}
+
+	// Dev build — extract info from Go's embedded build info
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "ofelia dev"
+	}
+
+	var parts []string
+	parts = append(parts, info.GoVersion)
+
+	var vcsRev, vcsModified string
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			if len(s.Value) > 7 {
+				vcsRev = s.Value[:7]
+			} else {
+				vcsRev = s.Value
+			}
+		case "vcs.modified":
+			if s.Value == "true" {
+				vcsModified = "dirty"
+			}
+		}
+	}
+	if vcsRev != "" {
+		parts = append(parts, vcsRev)
+	}
+	if vcsModified != "" {
+		parts = append(parts, vcsModified)
+	}
+
+	return fmt.Sprintf("ofelia dev (%s)", strings.Join(parts, ", "))
+}
+
+// VersionCommand prints version information.
+type VersionCommand struct{}
+
+// Execute prints the version string.
+func (c *VersionCommand) Execute(_ []string) error {
+	fmt.Println(VersionString())
+	return nil
+}

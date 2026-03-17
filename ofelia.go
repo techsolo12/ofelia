@@ -43,6 +43,17 @@ func buildLogger(level string) (*slog.Logger, *slog.LevelVar) {
 }
 
 func main() {
+	cli.Version = version
+	cli.Build = build
+
+	// Handle --version flag before parser setup
+	for _, arg := range os.Args[1:] {
+		if arg == "--version" || arg == "-v" {
+			fmt.Println(cli.VersionString())
+			return
+		}
+	}
+
 	// Pre-parse log-level flag to configure logger early
 	var pre struct {
 		LogLevel   string `long:"log-level"`
@@ -100,6 +111,12 @@ func main() {
 		"",
 		&cli.HashPasswordCommand{Logger: logger, LevelVar: levelVar, LogLevel: pre.LogLevel},
 	)
+	_, _ = parser.AddCommand(
+		"version",
+		"print version information",
+		"",
+		&cli.VersionCommand{},
+	)
 
 	if _, err := parser.ParseArgs(args); err != nil {
 		if flags.WroteHelp(err) {
@@ -109,8 +126,7 @@ func main() {
 		var flagErr *flags.Error
 		if errors.As(err, &flagErr) {
 			parser.WriteHelp(os.Stdout)
-			// forbidigo: avoid fmt.Printf; use logger-like output to stdout instead
-			_, _ = fmt.Fprintf(os.Stdout, "\nBuild information\n  commit: %s\n  date:%s\n", version, build)
+			_, _ = fmt.Fprintf(os.Stdout, "\n%s\n", cli.VersionString())
 		}
 
 		logger.Error("Command failed to execute")
