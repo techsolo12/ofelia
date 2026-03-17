@@ -45,7 +45,7 @@ func VersionString() string {
 				vcsRev = vcsRev[:7]
 			}
 		case "vcs.modified":
-			if s.Value == "true" {
+			if s.Value != "false" && s.Value != "" {
 				vcsModified = "dirty"
 			}
 		}
