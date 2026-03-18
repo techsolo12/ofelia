@@ -291,7 +291,7 @@ func TestGetKnownKeysForJobType(t *testing.T) {
 		},
 		{
 			jobType:    "job-service-run",
-			expectKeys: []string{"schedule", "command", "image", "environment", "hostname", "dir"},
+			expectKeys: []string{"schedule", "command", "image", "environment", "hostname", "dir", "volume"},
 		},
 		{
 			jobType:    "job-compose",

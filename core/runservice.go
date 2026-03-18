@@ -36,6 +36,7 @@ type RunServiceJob struct {
 	Network     string        `hash:"true"`
 	Hostname    string        `hash:"true"`
 	Dir         string        `hash:"true"`
+	Volume      []string      `hash:"true"`
 	Environment []string      `mapstructure:"environment" hash:"true"`
 	Annotations []string      `mapstructure:"annotations" hash:"true"`
 	MaxRuntime  time.Duration `gcfg:"max-runtime" mapstructure:"max-runtime"`
@@ -111,6 +112,16 @@ func (j *RunServiceJob) buildService(ctx context.Context) (string, error) {
 				MaxAttempts: &maxAttempts,
 			},
 		},
+	}
+
+	// Convert volume bind strings to service mounts
+	for _, v := range j.Volume {
+		m, err := parseVolumeMount(v)
+		if err != nil {
+			return "", fmt.Errorf("volume config: %w", err)
+		}
+		spec.TaskTemplate.ContainerSpec.Mounts = append(
+			spec.TaskTemplate.ContainerSpec.Mounts, m)
 	}
 
 	// For a service to interact with other services in a stack,
@@ -267,4 +278,32 @@ func isNotFoundError(err error) bool {
 	// Check for common "not found" error patterns
 	errStr := strings.ToLower(err.Error())
 	return strings.Contains(errStr, "not found") || strings.Contains(errStr, "no such") || strings.Contains(errStr, "404")
+}
+
+// parseVolumeMount parses a Docker volume string (source:target[:ro|rw])
+// into a domain.ServiceMount. Returns an error for malformed input.
+// Sources starting with / or . are bind mounts; others are named volumes.
+func parseVolumeMount(bind string) (domain.ServiceMount, error) {
+	parts := strings.SplitN(bind, ":", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return domain.ServiceMount{}, fmt.Errorf("%w: %q", ErrInvalidVolume, bind)
+	}
+
+	m := domain.ServiceMount{
+		Type:   domain.MountTypeBind,
+		Source: parts[0],
+		Target: parts[1],
+	}
+	if len(parts) >= 3 {
+		for _, opt := range strings.Split(parts[2], ",") {
+			if opt == "ro" {
+				m.ReadOnly = true
+			}
+		}
+	}
+	// Paths (absolute or relative) are bind mounts; bare names are volumes
+	if !strings.HasPrefix(m.Source, "/") && !strings.HasPrefix(m.Source, ".") {
+		m.Type = domain.MountTypeVolume
+	}
+	return m, nil
 }
