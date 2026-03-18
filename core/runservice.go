@@ -36,6 +36,7 @@ type RunServiceJob struct {
 	Network     string        `hash:"true"`
 	Hostname    string        `hash:"true"`
 	Dir         string        `hash:"true"`
+	Volume      []string      `hash:"true"`
 	Environment []string      `mapstructure:"environment" hash:"true"`
 	Annotations []string      `mapstructure:"annotations" hash:"true"`
 	MaxRuntime  time.Duration `gcfg:"max-runtime" mapstructure:"max-runtime"`
@@ -111,6 +112,12 @@ func (j *RunServiceJob) buildService(ctx context.Context) (string, error) {
 				MaxAttempts: &maxAttempts,
 			},
 		},
+	}
+
+	// Convert volume bind strings to service mounts
+	for _, v := range j.Volume {
+		spec.TaskTemplate.ContainerSpec.Mounts = append(
+			spec.TaskTemplate.ContainerSpec.Mounts, parseBindMount(v))
 	}
 
 	// For a service to interact with other services in a stack,
@@ -267,4 +274,26 @@ func isNotFoundError(err error) bool {
 	// Check for common "not found" error patterns
 	errStr := strings.ToLower(err.Error())
 	return strings.Contains(errStr, "not found") || strings.Contains(errStr, "no such") || strings.Contains(errStr, "404")
+}
+
+// parseBindMount parses a Docker bind-mount string (source:target[:options])
+// into a domain.ServiceMount. Named volumes (source without leading /) get
+// MountTypeVolume; paths get MountTypeBind.
+func parseBindMount(bind string) domain.ServiceMount {
+	parts := strings.SplitN(bind, ":", 3)
+	m := domain.ServiceMount{
+		Type:   domain.MountTypeBind,
+		Source: parts[0],
+	}
+	if len(parts) >= 2 {
+		m.Target = parts[1]
+	}
+	if len(parts) >= 3 {
+		m.ReadOnly = strings.Contains(parts[2], "ro")
+	}
+	// Named volumes don't start with /
+	if !strings.HasPrefix(m.Source, "/") {
+		m.Type = domain.MountTypeVolume
+	}
+	return m
 }

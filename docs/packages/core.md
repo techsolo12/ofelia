@@ -92,7 +92,7 @@ Runs jobs as Docker Swarm services.
 type RunServiceJob struct {
     BareJob
     // Deployed as a one-shot Swarm service
-    // Supports: Image, Network, Environment, Hostname, Dir,
+    // Supports: Image, Network, Environment, Hostname, Dir, Volume,
     // User, TTY, Delete, Annotations, MaxRuntime
 }
 ```

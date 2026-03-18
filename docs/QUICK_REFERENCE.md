@@ -147,6 +147,7 @@ network = swarm_network         # Required for swarm
 environment = FOO=bar           # Optional, repeatable
 hostname = my-worker            # Optional
 dir = /app                      # Optional working directory
+volume = /host:/container:ro    # Optional, repeatable
 user = nobody                   # Optional (default: nobody)
 no-overlap = true               # Optional
 max-runtime = 24h               # Optional

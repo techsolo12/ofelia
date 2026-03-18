@@ -264,6 +264,11 @@ This job can be used to:
   - Hostname for the service container.
 - `dir`: string
   - Working directory inside the service container.
+- `volume`
+  - Mount host directories or named volumes into the service container. Same format as `-v` flag within `docker run`.
+  - For example: `/host/path:/container/path:ro` or `myvolume:/data`
+    - **INI config**: `Volume` setting can be provided multiple times for multiple mounts.
+    - **Labels config**: multiple mounts must be provided as JSON array: `["/host:/container:ro", "data:/data"]`
 - `annotations`
   - Service annotations for metadata tracking and observability. Stored as service labels in Docker Swarm.
   - Format: `key=value` strings. For example: `team=platform`, `environment=staging`
@@ -303,6 +308,7 @@ environment = PGPASSWORD=secret
 environment = PGHOST=db.internal
 hostname = backup-worker
 dir = /var/backups
+volume = /backups:/backups:rw
 annotations = team=data-platform
 annotations = environment=staging
 annotations = service-tier=backend
