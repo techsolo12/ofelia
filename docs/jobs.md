@@ -265,8 +265,8 @@ This job can be used to:
 - `dir`: string
   - Working directory inside the service container.
 - `volume`
-  - Mount host directories or named volumes into the service container. Same format as `-v` flag within `docker run`.
-  - For example: `/host/path:/container/path:ro` or `myvolume:/data`
+  - Mount host directories or named volumes into the service container.
+  - Format: `source:target[:ro|rw]`. For example: `/host/path:/container/path:ro` or `myvolume:/data`
     - **INI config**: `Volume` setting can be provided multiple times for multiple mounts.
     - **Labels config**: multiple mounts must be provided as JSON array: `["/host:/container:ro", "data:/data"]`
 - `annotations`

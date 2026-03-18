@@ -9,7 +9,7 @@ import (
 	"github.com/netresearch/ofelia/core/domain"
 )
 
-func TestParseBindMount(t *testing.T) {
+func TestParseVolumeMount(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -26,7 +26,6 @@ func TestParseBindMount(t *testing.T) {
 			wantType:   domain.MountTypeBind,
 			wantSource: "/host/path",
 			wantTarget: "/container/path",
-			wantRO:     false,
 		},
 		{
 			name:       "bind mount read-only",
@@ -42,7 +41,6 @@ func TestParseBindMount(t *testing.T) {
 			wantType:   domain.MountTypeBind,
 			wantSource: "/host/path",
 			wantTarget: "/container/path",
-			wantRO:     false,
 		},
 		{
 			name:       "named volume",
@@ -50,7 +48,6 @@ func TestParseBindMount(t *testing.T) {
 			wantType:   domain.MountTypeVolume,
 			wantSource: "myvolume",
 			wantTarget: "/app/data",
-			wantRO:     false,
 		},
 		{
 			name:       "named volume read-only",
@@ -66,14 +63,31 @@ func TestParseBindMount(t *testing.T) {
 			wantType:   domain.MountTypeBind,
 			wantSource: "/host/script.sh",
 			wantTarget: "/script.sh",
-			wantRO:     false,
+		},
+		{
+			name:       "relative path is bind mount",
+			input:      "./data:/data",
+			wantType:   domain.MountTypeBind,
+			wantSource: "./data",
+			wantTarget: "/data",
+		},
+		{
+			name:       "dot-dot relative path is bind mount",
+			input:      "../config:/config:ro",
+			wantType:   domain.MountTypeBind,
+			wantSource: "../config",
+			wantTarget: "/config",
+			wantRO:     true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			m := parseBindMount(tc.input)
+			m, err := parseVolumeMount(tc.input)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 			if m.Type != tc.wantType {
 				t.Errorf("Type: want %q, got %q", tc.wantType, m.Type)
 			}
@@ -85,6 +99,31 @@ func TestParseBindMount(t *testing.T) {
 			}
 			if m.ReadOnly != tc.wantRO {
 				t.Errorf("ReadOnly: want %v, got %v", tc.wantRO, m.ReadOnly)
+			}
+		})
+	}
+}
+
+func TestParseVolumeMount_Invalid(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{"empty string", ""},
+		{"no target", "/host/path"},
+		{"empty source", ":/container"},
+		{"empty target", "/host:"},
+		{"only colon", ":"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := parseVolumeMount(tc.input)
+			if err == nil {
+				t.Errorf("expected error for invalid volume %q, got nil", tc.input)
 			}
 		})
 	}

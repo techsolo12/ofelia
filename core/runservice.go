@@ -116,8 +116,12 @@ func (j *RunServiceJob) buildService(ctx context.Context) (string, error) {
 
 	// Convert volume bind strings to service mounts
 	for _, v := range j.Volume {
+		m, err := parseVolumeMount(v)
+		if err != nil {
+			return "", fmt.Errorf("volume config: %w", err)
+		}
 		spec.TaskTemplate.ContainerSpec.Mounts = append(
-			spec.TaskTemplate.ContainerSpec.Mounts, parseBindMount(v))
+			spec.TaskTemplate.ContainerSpec.Mounts, m)
 	}
 
 	// For a service to interact with other services in a stack,
@@ -276,24 +280,26 @@ func isNotFoundError(err error) bool {
 	return strings.Contains(errStr, "not found") || strings.Contains(errStr, "no such") || strings.Contains(errStr, "404")
 }
 
-// parseBindMount parses a Docker bind-mount string (source:target[:options])
-// into a domain.ServiceMount. Named volumes (source without leading /) get
-// MountTypeVolume; paths get MountTypeBind.
-func parseBindMount(bind string) domain.ServiceMount {
+// parseVolumeMount parses a Docker volume string (source:target[:ro|rw])
+// into a domain.ServiceMount. Returns an error for malformed input.
+// Sources starting with / or . are bind mounts; others are named volumes.
+func parseVolumeMount(bind string) (domain.ServiceMount, error) {
 	parts := strings.SplitN(bind, ":", 3)
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return domain.ServiceMount{}, fmt.Errorf("invalid volume %q: expected source:target[:ro|rw]", bind)
+	}
+
 	m := domain.ServiceMount{
 		Type:   domain.MountTypeBind,
 		Source: parts[0],
-	}
-	if len(parts) >= 2 {
-		m.Target = parts[1]
+		Target: parts[1],
 	}
 	if len(parts) >= 3 {
 		m.ReadOnly = strings.Contains(parts[2], "ro")
 	}
-	// Named volumes don't start with /
-	if !strings.HasPrefix(m.Source, "/") {
+	// Paths (absolute or relative) are bind mounts; bare names are volumes
+	if !strings.HasPrefix(m.Source, "/") && !strings.HasPrefix(m.Source, ".") {
 		m.Type = domain.MountTypeVolume
 	}
-	return m
+	return m, nil
 }
