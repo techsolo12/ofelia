@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.5] - 2026-03-18
+
 ### Added
 
-- `job-service-run` now supports `volume` for mounting host directories and named volumes (closes [#527](https://github.com/netresearch/ofelia/issues/527))
+- `ofelia version` command and `--version` flag ([#528](https://github.com/netresearch/ofelia/pull/528))
+- `job-service-run` now supports `volume` for mounting host directories and named volumes ([#529](https://github.com/netresearch/ofelia/pull/529), closes [#527](https://github.com/netresearch/ofelia/issues/527))
 
 ## [0.21.4] - 2026-03-17
 
