@@ -79,6 +79,14 @@ func TestParseVolumeMount(t *testing.T) {
 			wantTarget: "/config",
 			wantRO:     true,
 		},
+		{
+			name:       "ro is exact token not substring",
+			input:      "/prometheus:/data:rw",
+			wantType:   domain.MountTypeBind,
+			wantSource: "/prometheus",
+			wantTarget: "/data",
+			wantRO:     false,
+		},
 	}
 
 	for _, tc := range tests {

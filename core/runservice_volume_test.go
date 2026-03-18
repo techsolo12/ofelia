@@ -5,6 +5,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/netresearch/ofelia/core/domain"
@@ -90,6 +91,22 @@ func TestRunServiceJob_BuildService_VolumeNamedVolume(t *testing.T) {
 	}
 	if mounts[0].Target != "/app/data" {
 		t.Errorf("expected target %q, got %q", "/app/data", mounts[0].Target)
+	}
+}
+
+// TestRunServiceJob_BuildService_VolumeInvalid verifies that an invalid volume
+// string causes buildService to return an error.
+func TestRunServiceJob_BuildService_VolumeInvalid(t *testing.T) {
+	t.Parallel()
+	k := newTestRunServiceKit(t)
+	k.job.Volume = []string{"invalid-no-target"}
+
+	_, err := k.job.buildService(context.Background())
+	if err == nil {
+		t.Fatal("expected error for invalid volume string")
+	}
+	if !strings.Contains(err.Error(), "volume config") {
+		t.Errorf("expected error to contain %q, got %q", "volume config", err.Error())
 	}
 }
 

@@ -295,7 +295,11 @@ func parseVolumeMount(bind string) (domain.ServiceMount, error) {
 		Target: parts[1],
 	}
 	if len(parts) >= 3 {
-		m.ReadOnly = strings.Contains(parts[2], "ro")
+		for _, opt := range strings.Split(parts[2], ",") {
+			if opt == "ro" {
+				m.ReadOnly = true
+			}
+		}
 	}
 	// Paths (absolute or relative) are bind mounts; bare names are volumes
 	if !strings.HasPrefix(m.Source, "/") && !strings.HasPrefix(m.Source, ".") {
