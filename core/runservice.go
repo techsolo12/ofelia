@@ -286,7 +286,7 @@ func isNotFoundError(err error) bool {
 func parseVolumeMount(bind string) (domain.ServiceMount, error) {
 	parts := strings.SplitN(bind, ":", 3)
 	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		return domain.ServiceMount{}, fmt.Errorf("invalid volume %q: expected source:target[:ro|rw]", bind)
+		return domain.ServiceMount{}, fmt.Errorf("%w: %q", ErrInvalidVolume, bind)
 	}
 
 	m := domain.ServiceMount{

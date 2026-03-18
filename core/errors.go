@@ -44,6 +44,7 @@ var (
 	ErrUnsupportedFieldType = errors.New("unsupported field type")
 	ErrImageOrContainer     = errors.New("job-run requires either 'image' or 'container'")
 	ErrImageRequired        = errors.New("job-service-run requires 'image' to create a new swarm service")
+	ErrInvalidVolume        = errors.New("invalid volume: expected source:target[:ro|rw]")
 
 	// Scheduler errors
 	ErrSchedulerTimeout        = errors.New("scheduler stop timed out")
