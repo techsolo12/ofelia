@@ -14,6 +14,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Dependencies
 
 - Bump `aquasecurity/trivy-action` from 0.28.0 to v0.35.0 (fix yanked `setup-trivy@v0.2.1` dependency)
+- Bump `step-security/harden-runner` from v2.12.0 to v2.16.0
+- Bump `codecov/codecov-action` from v5.5.2 to v5.5.3
+- Bump `go.opentelemetry.io/otel` from v1.40.0 to v1.42.0
+- Bump `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` from v0.65.0 to v0.67.0
 
 ## [0.21.5] - 2026-03-18
 
