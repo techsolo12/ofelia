@@ -7,20 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-03-20
+
 ### Added
 
-- Environment variable substitution in INI config files with `${VAR}` and `${VAR:-default}` syntax (closes [#362](https://github.com/netresearch/ofelia/issues/362))
+- Environment variable substitution in INI config files with `${VAR}` and `${VAR:-default}` syntax ([#532](https://github.com/netresearch/ofelia/pull/532), closes [#362](https://github.com/netresearch/ofelia/issues/362))
 
 ### Dependencies
 
-- Bump `aquasecurity/trivy-action` from 0.28.0 to v0.35.0 (fix yanked `setup-trivy@v0.2.1` dependency)
-- Bump `step-security/harden-runner` from v2.12.0 to v2.16.0
-- Bump `codecov/codecov-action` from v5.5.2 to v5.5.3
-- Bump `go.opentelemetry.io/otel` from v1.40.0 to v1.42.0
-- Bump `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` from v1.38.0 to v1.42.0
-- Bump `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` from v0.65.0 to v0.67.0
-- Bump `go.opentelemetry.io/proto/otlp` from v1.9.0 to v1.10.0
-- Bump `google.golang.org/protobuf` from v1.36.10 to v1.36.11
+- Bump `aquasecurity/trivy-action` from 0.28.0 to v0.35.0 ([#532](https://github.com/netresearch/ofelia/pull/532))
+- Bump `step-security/harden-runner` from v2.12.0 to v2.16.0 ([#533](https://github.com/netresearch/ofelia/pull/533))
+- Bump `codecov/codecov-action` from v5.5.2 to v5.5.3 ([#533](https://github.com/netresearch/ofelia/pull/533))
+- Bump `go.opentelemetry.io/otel` from v1.40.0 to v1.42.0 ([#533](https://github.com/netresearch/ofelia/pull/533))
+- Bump `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` from v1.38.0 to v1.42.0 ([#533](https://github.com/netresearch/ofelia/pull/533))
+- Bump `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` from v0.65.0 to v0.67.0 ([#533](https://github.com/netresearch/ofelia/pull/533))
+- Bump `go.opentelemetry.io/proto/otlp` from v1.9.0 to v1.10.0 ([#533](https://github.com/netresearch/ofelia/pull/533))
+- Bump `google.golang.org/protobuf` from v1.36.10 to v1.36.11 ([#533](https://github.com/netresearch/ofelia/pull/533))
+- Bump `google.golang.org/grpc` from v1.77.0 to v1.79.3 ([#531](https://github.com/netresearch/ofelia/pull/531))
 
 ## [0.21.5] - 2026-03-18
 
