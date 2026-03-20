@@ -11,10 +11,10 @@ func TestExpandEnvVars(t *testing.T) {
 	// Not parallel — mutates environment variables.
 
 	tests := []struct {
-		name   string
-		input  string
-		env    map[string]string
-		want   string
+		name  string
+		input string
+		env   map[string]string
+		want  string
 	}{
 		{
 			name:  "defined var",

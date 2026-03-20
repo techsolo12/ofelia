@@ -39,11 +39,12 @@ command = echo hello
 }
 
 func TestBuildFromString_EnvSubstitutionDefault(t *testing.T) {
-	// DB_HOST is not set — should use default
+	// Ensure var is unset so default is used
+	t.Setenv("OFELIA_TEST_DFLT_IMG_362", "")
 	configStr := `
 [job-run "default-test"]
 schedule = @daily
-image = ${DB_IMAGE:-postgres:15}
+image = ${OFELIA_TEST_DFLT_IMG_362:-postgres:15}
 command = pg_dump
 `
 	cfg, err := BuildFromString(configStr, test.NewTestLogger())
@@ -61,11 +62,13 @@ command = pg_dump
 }
 
 func TestBuildFromString_EnvSubstitutionUndefined(t *testing.T) {
-	// Undefined var stays literal — image will be "${NONEXISTENT_IMG_VAR}"
+	// Use a var name that will never be set in any environment
+	const varName = "OFELIA_TEST_UNDEF_362_XYZZY"
+	_ = os.Unsetenv(varName)
 	configStr := `
 [job-run "undef-test"]
 schedule = @daily
-image = ${NONEXISTENT_IMG_VAR}
+image = ${` + varName + `}
 command = echo test
 `
 	cfg, err := BuildFromString(configStr, test.NewTestLogger())
@@ -77,7 +80,7 @@ command = echo test
 	if !ok {
 		t.Fatal("expected job 'undef-test' to exist")
 	}
-	if job.Image != "${NONEXISTENT_IMG_VAR}" {
+	if job.Image != "${"+varName+"}" {
 		t.Errorf("expected undefined var to stay literal, got %q", job.Image)
 	}
 }

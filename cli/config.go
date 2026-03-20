@@ -132,7 +132,7 @@ func BuildFromFile(filename string, logger *slog.Logger) (*Config, error) {
 	allUsedKeys := make(map[string]bool)
 
 	for _, f := range files {
-		data, err := os.ReadFile(f)
+		data, err := os.ReadFile(f) // #nosec G304 -- file path from user config flag, not external input
 		if err != nil {
 			//nolint:revive // Error message intentionally verbose for UX (actionable troubleshooting hints)
 			return nil, fmt.Errorf("failed to load config file %q: %w\n  → Check file exists and is readable: ls -l %q\n  → Verify file path is correct\n  → Check file permissions (should be readable)", f, err, f)

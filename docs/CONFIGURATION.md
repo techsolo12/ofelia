@@ -236,8 +236,9 @@ command = pg_dump ${DB_NAME:-mydb}
 
 **Notes:**
 - Only `${VAR}` syntax is supported — `$VAR` without braces is **not** substituted, keeping cron expressions and shell commands safe.
+- Substitution happens in **all** config values, including `command`. If your command uses `${VAR}` shell syntax, Ofelia will substitute it before the shell sees it. Use `$VAR` (without braces) in commands if you want shell expansion instead of Ofelia expansion.
 - Undefined variables without a default stay as the literal string `${VAR}`, making typos visible in logs.
-- Defaults can contain special characters including colons: `${IMG:-nginx:1.25-alpine}`.
+- Defaults can contain special characters including colons (`${IMG:-nginx:1.25-alpine}`) but not closing braces (`}`).
 
 > **Tip:** If you need advanced substitution features (error on undefined, conditional replacement), use Docker Compose's own variable substitution to set environment variables on the Ofelia container, then reference those variables in the INI config:
 >
