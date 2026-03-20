@@ -17,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Bump `step-security/harden-runner` from v2.12.0 to v2.16.0
 - Bump `codecov/codecov-action` from v5.5.2 to v5.5.3
 - Bump `go.opentelemetry.io/otel` from v1.40.0 to v1.42.0
+- Bump `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` from v1.38.0 to v1.42.0
 - Bump `go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp` from v0.65.0 to v0.67.0
+- Bump `go.opentelemetry.io/proto/otlp` from v1.9.0 to v1.10.0
+- Bump `google.golang.org/protobuf` from v1.36.10 to v1.36.11
 
 ## [0.21.5] - 2026-03-18
 
