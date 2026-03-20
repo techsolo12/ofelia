@@ -132,10 +132,15 @@ func BuildFromFile(filename string, logger *slog.Logger) (*Config, error) {
 	allUsedKeys := make(map[string]bool)
 
 	for _, f := range files {
-		cfg, err := ini.LoadSources(ini.LoadOptions{AllowShadows: true, InsensitiveKeys: true}, f)
+		data, err := os.ReadFile(f)
 		if err != nil {
 			//nolint:revive // Error message intentionally verbose for UX (actionable troubleshooting hints)
 			return nil, fmt.Errorf("failed to load config file %q: %w\n  → Check file exists and is readable: ls -l %q\n  → Verify file path is correct\n  → Check file permissions (should be readable)", f, err, f)
+		}
+		cfg, err := ini.LoadSources(ini.LoadOptions{AllowShadows: true, InsensitiveKeys: true}, []byte(expandEnvVars(string(data))))
+		if err != nil {
+			//nolint:revive // Error message intentionally verbose for UX (actionable troubleshooting hints)
+			return nil, fmt.Errorf("failed to parse config file %q: %w\n  → Check INI syntax is valid\n  → Verify environment variable substitutions resolve correctly", f, err)
 		}
 		parseRes, parseErr := parseIni(cfg, c)
 		if parseErr != nil {
@@ -257,7 +262,7 @@ var newDockerHandler = NewDockerHandler
 
 func BuildFromString(configStr string, logger *slog.Logger) (*Config, error) {
 	c := NewConfig(logger)
-	cfg, err := ini.LoadSources(ini.LoadOptions{AllowShadows: true, InsensitiveKeys: true}, []byte(configStr))
+	cfg, err := ini.LoadSources(ini.LoadOptions{AllowShadows: true, InsensitiveKeys: true}, []byte(expandEnvVars(configStr)))
 	if err != nil {
 		return nil, fmt.Errorf("load ini from string: %w", err)
 	}
