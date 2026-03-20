@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Environment variable substitution in INI config files with `${VAR}` and `${VAR:-default}` syntax (closes [#362](https://github.com/netresearch/ofelia/issues/362))
+
+### Dependencies
+
+- Bump `aquasecurity/trivy-action` from 0.28.0 to v0.35.0 (fix yanked `setup-trivy@v0.2.1` dependency)
+
 ## [0.21.5] - 2026-03-18
 
 ### Added

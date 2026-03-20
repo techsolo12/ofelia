@@ -214,6 +214,48 @@ You can enable `include-stopped` via the env var **`OFELIA_DOCKER_INCLUDE_STOPPE
 
 ## INI Configuration
 
+### Environment Variable Substitution
+
+INI config files support `${VAR}` syntax for environment variable substitution. Variables are resolved before the INI file is parsed.
+
+| Syntax | Behavior |
+|---|---|
+| `${VAR}` | Replaced with env value if defined and non-empty; kept as literal `${VAR}` if undefined |
+| `${VAR:-default}` | Replaced with env value if defined and non-empty; uses `default` if undefined or empty |
+
+```ini
+[global]
+smtp-host = ${SMTP_HOST:-mail.example.com}
+smtp-password = ${SMTP_PASS}
+
+[job-run "backup"]
+schedule = @daily
+image = ${BACKUP_IMAGE:-postgres:15}
+command = pg_dump ${DB_NAME:-mydb}
+```
+
+**Notes:**
+- Only `${VAR}` syntax is supported — `$VAR` without braces is **not** substituted, keeping cron expressions and shell commands safe.
+- Substitution happens in **all** config values, including `command`. If your command uses `${VAR}` shell syntax, Ofelia will substitute it before the shell sees it. Use `$VAR` (without braces) in commands if you want shell expansion instead of Ofelia expansion.
+- Undefined variables without a default stay as the literal string `${VAR}`, making typos visible in logs.
+- Defaults can contain special characters including colons (`${IMG:-nginx:1.25-alpine}`) but not closing braces (`}`).
+
+> **Tip:** If you need advanced substitution features (error on undefined, conditional replacement), use Docker Compose's own variable substitution to set environment variables on the Ofelia container, then reference those variables in the INI config:
+>
+> ```yaml
+> # compose.yml — Compose handles validation
+> services:
+>   ofelia:
+>     environment:
+>       - SMTP_PASS=${SMTP_PASS:?SMTP_PASS must be set}
+>       - DB_HOST=${DB_HOST:-localhost}
+> ```
+>
+> ```ini
+> # ofelia.ini — Ofelia handles simple substitution
+> smtp-password = ${SMTP_PASS}
+> ```
+
 ### Basic Structure
 
 ```ini
