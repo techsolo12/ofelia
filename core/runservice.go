@@ -38,6 +38,8 @@ type RunServiceJob struct {
 	Dir         string        `hash:"true"`
 	Volume      []string      `hash:"true"`
 	Environment []string      `mapstructure:"environment" hash:"true"`
+	EnvFile     []string      `gcfg:"env-file" mapstructure:"env-file," hash:"true"`
+	EnvFrom     []string      `gcfg:"env-from" mapstructure:"env-from," hash:"true"`
 	Annotations []string      `mapstructure:"annotations" hash:"true"`
 	MaxRuntime  time.Duration `gcfg:"max-runtime" mapstructure:"max-runtime"`
 }
@@ -96,12 +98,18 @@ func (j *RunServiceJob) buildService(ctx context.Context) (string, error) {
 	defaults := getDefaultAnnotations(j.Name, "service")
 	annotations := mergeAnnotations(j.Annotations, defaults)
 
+	// Resolve environment from env-file, env-from, and explicit environment
+	mergedEnv, err := ResolveJobEnvironment(ctx, j.EnvFile, j.EnvFrom, j.Environment, j.Provider, nil)
+	if err != nil {
+		return "", err
+	}
+
 	spec := domain.ServiceSpec{
 		Labels: annotations,
 		TaskTemplate: domain.TaskSpec{
 			ContainerSpec: domain.ContainerSpec{
 				Image:    j.Image,
-				Env:      j.Environment,
+				Env:      mergedEnv,
 				User:     j.User,
 				Hostname: j.Hostname,
 				Dir:      j.Dir,
