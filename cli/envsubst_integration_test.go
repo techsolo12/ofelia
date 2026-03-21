@@ -110,32 +110,6 @@ command = echo ok
 	}
 }
 
-func TestBuildFromString_EnvSubstitutionPreservesHashCharacters(t *testing.T) {
-	t.Setenv("SCHEDULER_MAIL_PASS", "secret-characters#some-other-secret-characters")
-
-	configStr := `
-[global]
-smtp-host = smtp.example.org
-smtp-port = 465
-smtp-user = me@example.com
-smtp-password = "${SCHEDULER_MAIL_PASS}"
-
-[job-exec "test"]
-schedule = @daily
-container = app
-command = echo ok
-`
-	cfg, err := BuildFromString(configStr, test.NewTestLogger())
-	if err != nil {
-		t.Fatalf("BuildFromString failed: %v", err)
-	}
-
-	want := "secret-characters#some-other-secret-characters"
-	if cfg.Global.SMTPPassword != want {
-		t.Errorf("expected SMTP password %q, got %q", want, cfg.Global.SMTPPassword)
-	}
-}
-
 func TestBuildFromFile_EnvSubstitution(t *testing.T) {
 	t.Setenv("FILE_TEST_IMAGE", "nginx:latest")
 
@@ -162,5 +136,52 @@ command = echo ok
 	}
 	if job.Image != "nginx:latest" {
 		t.Errorf("expected image %q, got %q", "nginx:latest", job.Image)
+	}
+}
+
+func TestBuildFromString_EnvSubstitutionPreservesSpecialChars(t *testing.T) {
+	t.Setenv("SMTP_PASS", "p@ss#w0rd;foo")
+
+	configStr := `
+[global]
+smtp-host = smtp.example.org
+smtp-port = 465
+smtp-user = me@example.com
+smtp-password = ${SMTP_PASS}
+
+[job-exec "test"]
+schedule = @daily
+container = app
+command = echo ok
+`
+	cfg, err := BuildFromString(configStr, test.NewTestLogger())
+	if err != nil {
+		t.Fatalf("BuildFromString failed: %v", err)
+	}
+
+	want := "p@ss#w0rd;foo"
+	if cfg.Global.SMTPPassword != want {
+		t.Errorf("expected SMTP password %q, got %q", want, cfg.Global.SMTPPassword)
+	}
+}
+
+func TestBuildFromString_InlineCommentsStillWork(t *testing.T) {
+	configStr := `
+[global]
+smtp-host = smtp.example.org  # this is a comment
+
+[job-exec "test"]
+schedule = @daily
+container = app
+command = echo ok
+`
+	cfg, err := BuildFromString(configStr, test.NewTestLogger())
+	if err != nil {
+		t.Fatalf("BuildFromString failed: %v", err)
+	}
+
+	want := "smtp.example.org"
+	if cfg.Global.SMTPHost != want {
+		t.Errorf("expected smtp-host %q, got %q", want, cfg.Global.SMTPHost)
 	}
 }
