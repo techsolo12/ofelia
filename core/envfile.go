@@ -27,7 +27,7 @@ type ContainerInspector interface {
 // Skips blank lines, lines starting with #, and lines without =.
 // Strips optional "export " prefix and surrounding quotes from values.
 func ParseEnvFile(path string) ([]string, error) {
-	f, err := os.Open(path) //nolint:gosec // G304: path is user-configured, intentional
+	f, err := os.Open(path) // #nosec G304 -- path is user-configured env-file, intentional
 	if err != nil {
 		return nil, fmt.Errorf("open env file: %w", err)
 	}
