@@ -9,9 +9,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/netresearch/ofelia/core/domain"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netresearch/ofelia/core/domain"
 )
 
 // --- ParseEnvFile tests ---

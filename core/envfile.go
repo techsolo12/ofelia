@@ -6,12 +6,16 @@ package core
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/netresearch/ofelia/core/domain"
 )
+
+// ErrNilContainerInspector is returned when ResolveEnvFrom is called with a nil provider.
+var ErrNilContainerInspector = errors.New("container inspector is nil")
 
 // ContainerInspector is a narrow interface for inspecting containers.
 // Satisfied by DockerProvider.
@@ -23,7 +27,7 @@ type ContainerInspector interface {
 // Skips blank lines, lines starting with #, and lines without =.
 // Strips optional "export " prefix and surrounding quotes from values.
 func ParseEnvFile(path string) ([]string, error) {
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // G304: path is user-configured, intentional
 	if err != nil {
 		return nil, fmt.Errorf("open env file: %w", err)
 	}
@@ -74,7 +78,7 @@ func ParseEnvFile(path string) ([]string, error) {
 // ResolveEnvFrom inspects a running Docker container and returns its env vars.
 func ResolveEnvFrom(ctx context.Context, provider ContainerInspector, containerName string) ([]string, error) {
 	if provider == nil {
-		return nil, fmt.Errorf("resolve env from container %q: container inspector is nil", containerName)
+		return nil, fmt.Errorf("resolve env from container %q: %w", containerName, ErrNilContainerInspector)
 	}
 
 	container, err := provider.InspectContainer(ctx, containerName)
@@ -96,7 +100,7 @@ func MergeEnvironments(envFiles, envFrom, explicit []string) []string {
 		return nil
 	}
 
-	seen := make(map[string]int)  // key -> index in result
+	seen := make(map[string]int) // key -> index in result
 	var result []string
 
 	add := func(entries []string) {

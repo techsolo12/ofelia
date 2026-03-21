@@ -8,9 +8,10 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/netresearch/ofelia/test"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/netresearch/ofelia/test"
 )
 
 func TestBuildFromString_EnvFileShadowKeys(t *testing.T) {
