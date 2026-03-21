@@ -1246,11 +1246,11 @@ func sectionToMap(section *ini.Section) map[string]any {
 		case len(vals) > 1:
 			cp := make([]string, len(vals))
 			for i, v := range vals {
-				cp[i] = expandEnvVars(v)
+				cp[i] = ExpandEnvVars(v)
 			}
 			m[key.Name()] = cp
 		case len(vals) == 1:
-			m[key.Name()] = expandEnvVars(vals[0])
+			m[key.Name()] = ExpandEnvVars(vals[0])
 		default:
 			// Handle empty values
 			m[key.Name()] = ""

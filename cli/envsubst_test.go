@@ -172,9 +172,9 @@ command = echo $HOME`,
 			// Unset any vars that should be undefined
 			// (t.Setenv handles cleanup automatically)
 
-			got := expandEnvVars(tc.input)
+			got := ExpandEnvVars(tc.input)
 			if got != tc.want {
-				t.Errorf("expandEnvVars(%q)\n  got:  %q\n  want: %q", tc.input, got, tc.want)
+				t.Errorf("ExpandEnvVars(%q)\n  got:  %q\n  want: %q", tc.input, got, tc.want)
 			}
 		})
 	}

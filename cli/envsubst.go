@@ -13,14 +13,14 @@ import (
 // Only matches valid variable names: letter or underscore, then alphanumeric/underscore.
 var envVarPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-[^}]*)?\}`)
 
-// expandEnvVars substitutes ${VAR} and ${VAR:-default} in the input string
+// ExpandEnvVars substitutes ${VAR} and ${VAR:-default} in the input string
 // with environment variable values.
 //
 // Behavior:
 //   - ${VAR}: replaced with env value if defined and non-empty; kept literal otherwise
 //   - ${VAR:-default}: replaced with env value if defined and non-empty; uses default otherwise
 //   - $VAR (without braces): not substituted — safe for cron expressions and shell commands
-func expandEnvVars(s string) string {
+func ExpandEnvVars(s string) string {
 	return envVarPattern.ReplaceAllStringFunc(s, func(match string) string {
 		groups := envVarPattern.FindStringSubmatch(match)
 		varName := groups[1]
