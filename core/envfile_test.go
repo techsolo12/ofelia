@@ -77,6 +77,14 @@ func TestParseEnvFile_FileNotFound(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestParseEnvFile_EmptyKey(t *testing.T) {
+	// Lines like "=value" should be skipped (empty key)
+	f := writeEnvFile(t, "=value\nFOO=bar\n")
+	got, err := ParseEnvFile(f)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"FOO=bar"}, got)
+}
+
 func TestParseEnvFile_LineWithoutEquals(t *testing.T) {
 	// Lines without = are skipped (just a key name, no value assignment)
 	f := writeEnvFile(t, "FOO=bar\nINVALID_LINE\nBAZ=qux\n")
@@ -174,6 +182,11 @@ func TestResolveEnvFrom_NilConfig(t *testing.T) {
 	got, err := ResolveEnvFrom(context.Background(), provider, "my-container")
 	require.NoError(t, err)
 	assert.Empty(t, got)
+}
+
+func TestResolveEnvFrom_NilProvider(t *testing.T) {
+	_, err := ResolveEnvFrom(context.Background(), nil, "my-container")
+	require.Error(t, err)
 }
 
 // --- ResolveJobEnvironment tests ---

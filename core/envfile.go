@@ -31,6 +31,8 @@ func ParseEnvFile(path string) ([]string, error) {
 
 	var result []string
 	scanner := bufio.NewScanner(f)
+	buf := make([]byte, 64*1024)
+	scanner.Buffer(buf, 1024*1024) // Support long values (certs, JSON blobs)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 
@@ -44,8 +46,8 @@ func ParseEnvFile(path string) ([]string, error) {
 
 		// Must contain = to be a valid env assignment
 		idx := strings.IndexByte(line, '=')
-		if idx < 0 {
-			continue
+		if idx <= 0 {
+			continue // skip lines without = or with empty key (e.g., "=value")
 		}
 
 		key := line[:idx]
@@ -71,6 +73,10 @@ func ParseEnvFile(path string) ([]string, error) {
 
 // ResolveEnvFrom inspects a running Docker container and returns its env vars.
 func ResolveEnvFrom(ctx context.Context, provider ContainerInspector, containerName string) ([]string, error) {
+	if provider == nil {
+		return nil, fmt.Errorf("resolve env from container %q: container inspector is nil", containerName)
+	}
+
 	container, err := provider.InspectContainer(ctx, containerName)
 	if err != nil {
 		return nil, fmt.Errorf("inspect container %q: %w", containerName, err)
