@@ -110,6 +110,32 @@ command = echo ok
 	}
 }
 
+func TestBuildFromString_EnvSubstitutionPreservesHashCharacters(t *testing.T) {
+	t.Setenv("SCHEDULER_MAIL_PASS", "secret-characters#some-other-secret-characters")
+
+	configStr := `
+[global]
+smtp-host = smtp.example.org
+smtp-port = 465
+smtp-user = me@example.com
+smtp-password = "${SCHEDULER_MAIL_PASS}"
+
+[job-exec "test"]
+schedule = @daily
+container = app
+command = echo ok
+`
+	cfg, err := BuildFromString(configStr, test.NewTestLogger())
+	if err != nil {
+		t.Fatalf("BuildFromString failed: %v", err)
+	}
+
+	want := "secret-characters#some-other-secret-characters"
+	if cfg.Global.SMTPPassword != want {
+		t.Errorf("expected SMTP password %q, got %q", want, cfg.Global.SMTPPassword)
+	}
+}
+
 func TestBuildFromFile_EnvSubstitution(t *testing.T) {
 	t.Setenv("FILE_TEST_IMAGE", "nginx:latest")
 
