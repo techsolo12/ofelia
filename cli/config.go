@@ -1235,7 +1235,8 @@ func decodeJob[T jobConfig](section *ini.Section, job T, set func(string, T), pr
 func parseJobName(section, prefix string) string {
 	s := strings.TrimPrefix(section, prefix)
 	s = strings.TrimSpace(s)
-	return strings.Trim(s, "\"")
+	s = strings.Trim(s, "\"")
+	return ExpandEnvVars(s)
 }
 
 func sectionToMap(section *ini.Section) map[string]any {

@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	ini "gopkg.in/ini.v1"
+
 	"github.com/netresearch/ofelia/core"
 	"github.com/netresearch/ofelia/middlewares"
 	"github.com/netresearch/ofelia/test"
@@ -797,5 +799,26 @@ func TestBuildWebhookConfigsFromLabels_NilWebhookConfigs(t *testing.T) {
 	}
 	if wh.Name != "slack-alerts" {
 		t.Errorf("Expected name 'slack-alerts', got %q", wh.Name)
+	}
+}
+
+func TestParseWebhookConfig_EnvExpansion(t *testing.T) {
+	t.Setenv("WH_SECRET", "s3cr#t;val")
+	t.Setenv("WH_URL", "https://hooks.example.com/abc")
+
+	f := ini.Empty()
+	sec, _ := f.NewSection(`webhook "test"`)
+	sec.NewKey("secret", "${WH_SECRET}")
+	sec.NewKey("url", "${WH_URL}")
+
+	config := middlewares.DefaultWebhookConfig()
+	if err := parseWebhookConfig(sec, config); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if config.Secret != "s3cr#t;val" {
+		t.Errorf("Expected expanded secret, got %q", config.Secret)
+	}
+	if config.URL != "https://hooks.example.com/abc" {
+		t.Errorf("Expected expanded URL, got %q", config.URL)
 	}
 }
