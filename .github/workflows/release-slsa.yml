@@ -1,4 +1,4 @@
-name: Release (SLSA Level 3)
+name: Release
 
 on:
   release:
@@ -23,34 +23,52 @@ jobs:
         id: tag
         run: echo "tag=${{ github.event.release.tag_name }}" >> "$GITHUB_OUTPUT"
 
-  # SLSA Level 3 builds with provenance
+  # Build binaries with provenance attestation via org-wide reusable workflow (SLSA L3)
   build:
     name: Build ${{ matrix.target }}
+    needs: [resolve-tag]
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - linux-386
-          - linux-amd64
-          - linux-arm64
-          - linux-armv6
-          - linux-armv7
-          - darwin-amd64
-          - darwin-arm64
-          - windows-amd64
+        include:
+          - target: linux-386
+            goos: linux
+            goarch: "386"
+          - target: linux-amd64
+            goos: linux
+            goarch: amd64
+          - target: linux-arm64
+            goos: linux
+            goarch: arm64
+          - target: linux-armv6
+            goos: linux
+            goarch: arm
+            goarm: "6"
+          - target: linux-armv7
+            goos: linux
+            goarch: arm
+            goarm: "7"
+          - target: darwin-amd64
+            goos: darwin
+            goarch: amd64
+          - target: darwin-arm64
+            goos: darwin
+            goarch: arm64
+          - target: windows-amd64
+            goos: windows
+            goarch: amd64
     permissions:
       id-token: write
       contents: write
-      actions: read
-    uses: slsa-framework/slsa-github-generator/.github/workflows/builder_go_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
+      attestations: write
+    uses: netresearch/.github/.github/workflows/build-go-attest.yml@main
     with:
-      go-version-file: go.mod
-      config-file: .slsa-goreleaser/${{ matrix.target }}.yml
-      evaluated-envs: "VERSION:${{ github.ref_name }}, COMMIT:${{ github.sha }}"
-      upload-assets: true
-      draft-release: false
-      # Workaround for SLSA builder bug detecting public repos as private (see slsa-framework/slsa-github-generator#942)
-      private-repository: true
+      binary-name: ofelia-${{ matrix.target }}
+      goos: ${{ matrix.goos }}
+      goarch: ${{ matrix.goarch }}
+      goarm: ${{ matrix.goarm || '' }}
+      ldflags: "-s -w -X main.version=${{ needs.resolve-tag.outputs.tag }} -X main.build=${{ github.sha }}"
+      release-tag: ${{ needs.resolve-tag.outputs.tag }}
 
   # Generate SBOMs for all binaries
   sbom:
@@ -84,7 +102,7 @@ jobs:
         run: |
           set -euo pipefail
           for binary in dist/ofelia-*; do
-            if [[ ! "$binary" =~ \.intoto\.jsonl$ ]] && [[ ! "$binary" =~ \.sbom\.json$ ]]; then
+            if [[ ! "$binary" =~ \.sbom\.json$ ]]; then
               echo "Generating SBOM for $binary"
               syft "$binary" -o spdx-json="${binary}.sbom.json"
             fi
@@ -134,9 +152,8 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          # Only checksum actual binaries (exclude provenance and SBOM metadata)
+          # Only checksum actual binaries (exclude SBOM metadata)
           find . -maxdepth 1 -type f -name "ofelia-*" \
-            ! -name "*.intoto.jsonl" \
             ! -name "*.sbom.json" \
             -exec sha256sum {} + > checksums.txt
           cat checksums.txt
@@ -201,13 +218,12 @@ jobs:
             echo ""
             echo "## Verification"
             echo ""
-            echo "All binaries include SLSA Level 3 provenance attestations."
+            echo "All binaries include provenance attestations stored in GitHub's attestation store."
             echo ""
             echo "### Verify binary provenance"
             echo '```bash'
-            echo "slsa-verifier verify-artifact ofelia-linux-amd64 \\"
-            echo "  --provenance-path ofelia-linux-amd64.intoto.jsonl \\"
-            echo "  --source-uri github.com/netresearch/ofelia"
+            echo "gh attestation verify ofelia-linux-amd64 \\"
+            echo "  --repo netresearch/ofelia"
             echo '```'
             echo ""
             echo "### Verify checksums signature"
