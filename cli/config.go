@@ -137,7 +137,7 @@ func BuildFromFile(filename string, logger *slog.Logger) (*Config, error) {
 			//nolint:revive // Error message intentionally verbose for UX (actionable troubleshooting hints)
 			return nil, fmt.Errorf("failed to load config file %q: %w\n  → Check file exists and is readable: ls -l %q\n  → Verify file path is correct\n  → Check file permissions (should be readable)", f, err, f)
 		}
-		cfg, err := ini.LoadSources(ini.LoadOptions{AllowShadows: true, InsensitiveKeys: true}, []byte(expandEnvVars(string(data))))
+		cfg, err := ini.LoadSources(ini.LoadOptions{AllowShadows: true, InsensitiveKeys: true}, data)
 		if err != nil {
 			//nolint:revive // Error message intentionally verbose for UX (actionable troubleshooting hints)
 			return nil, fmt.Errorf("failed to parse config file %q: %w\n  → Check INI syntax is valid\n  → Verify environment variable substitutions resolve correctly", f, err)
@@ -262,7 +262,7 @@ var newDockerHandler = NewDockerHandler
 
 func BuildFromString(configStr string, logger *slog.Logger) (*Config, error) {
 	c := NewConfig(logger)
-	cfg, err := ini.LoadSources(ini.LoadOptions{AllowShadows: true, InsensitiveKeys: true}, []byte(expandEnvVars(configStr)))
+	cfg, err := ini.LoadSources(ini.LoadOptions{AllowShadows: true, InsensitiveKeys: true}, []byte(configStr))
 	if err != nil {
 		return nil, fmt.Errorf("load ini from string: %w", err)
 	}
@@ -1235,7 +1235,8 @@ func decodeJob[T jobConfig](section *ini.Section, job T, set func(string, T), pr
 func parseJobName(section, prefix string) string {
 	s := strings.TrimPrefix(section, prefix)
 	s = strings.TrimSpace(s)
-	return strings.Trim(s, "\"")
+	s = strings.Trim(s, "\"")
+	return ExpandEnvVars(s)
 }
 
 func sectionToMap(section *ini.Section) map[string]any {
@@ -1245,10 +1246,12 @@ func sectionToMap(section *ini.Section) map[string]any {
 		switch {
 		case len(vals) > 1:
 			cp := make([]string, len(vals))
-			copy(cp, vals)
+			for i, v := range vals {
+				cp[i] = ExpandEnvVars(v)
+			}
 			m[key.Name()] = cp
 		case len(vals) == 1:
-			m[key.Name()] = vals[0]
+			m[key.Name()] = ExpandEnvVars(vals[0])
 		default:
 			// Handle empty values
 			m[key.Name()] = ""

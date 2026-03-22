@@ -205,6 +205,15 @@ func TestParseJobName(t *testing.T) {
 	}
 }
 
+// TestParseJobName_EnvExpansion verifies ${VAR} in section names are expanded
+func TestParseJobName_EnvExpansion(t *testing.T) {
+	t.Setenv("JOB_NAME_TEST_VAR", "my-env-job")
+	result := parseJobName(`job-exec "${JOB_NAME_TEST_VAR}"`, "job-exec")
+	if result != "my-env-job" {
+		t.Errorf("Expected %q, got %q", "my-env-job", result)
+	}
+}
+
 // TestBuildFromString_ErrorRecovery tests error handling in BuildFromString
 func TestBuildFromString_ErrorRecovery(t *testing.T) {
 	t.Parallel()

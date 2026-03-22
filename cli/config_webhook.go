@@ -104,23 +104,23 @@ func parseWebhookName(sectionName string) string {
 //nolint:unparam // error return kept for future validation additions
 func parseWebhookConfig(section *ini.Section, config *middlewares.WebhookConfig) error {
 	if key, err := section.GetKey("preset"); err == nil {
-		config.Preset = key.String()
+		config.Preset = ExpandEnvVars(key.String())
 	}
 
 	if key, err := section.GetKey("id"); err == nil {
-		config.ID = key.String()
+		config.ID = ExpandEnvVars(key.String())
 	}
 
 	if key, err := section.GetKey("secret"); err == nil {
-		config.Secret = key.String()
+		config.Secret = ExpandEnvVars(key.String())
 	}
 
 	if key, err := section.GetKey("url"); err == nil {
-		config.URL = key.String()
+		config.URL = ExpandEnvVars(key.String())
 	}
 
 	if key, err := section.GetKey("trigger"); err == nil {
-		config.Trigger = middlewares.TriggerType(key.String())
+		config.Trigger = middlewares.TriggerType(ExpandEnvVars(key.String()))
 	}
 
 	if key, err := section.GetKey("timeout"); err == nil {
@@ -142,11 +142,11 @@ func parseWebhookConfig(section *ini.Section, config *middlewares.WebhookConfig)
 	}
 
 	if key, err := section.GetKey("link"); err == nil {
-		config.Link = key.String()
+		config.Link = ExpandEnvVars(key.String())
 	}
 
 	if key, err := section.GetKey("link-text"); err == nil {
-		config.LinkText = key.String()
+		config.LinkText = ExpandEnvVars(key.String())
 	}
 
 	return nil
@@ -159,7 +159,7 @@ func parseGlobalWebhookConfig(section *ini.Section, c *Config) {
 	}
 
 	if key, err := section.GetKey("webhooks"); err == nil {
-		c.WebhookConfigs.Global.Webhooks = key.String()
+		c.WebhookConfigs.Global.Webhooks = ExpandEnvVars(key.String())
 	}
 
 	if key, err := section.GetKey("allow-remote-presets"); err == nil {
@@ -167,7 +167,7 @@ func parseGlobalWebhookConfig(section *ini.Section, c *Config) {
 	}
 
 	if key, err := section.GetKey("trusted-preset-sources"); err == nil {
-		c.WebhookConfigs.Global.TrustedPresetSources = key.String()
+		c.WebhookConfigs.Global.TrustedPresetSources = ExpandEnvVars(key.String())
 	}
 
 	if key, err := section.GetKey("preset-cache-ttl"); err == nil {
@@ -177,12 +177,12 @@ func parseGlobalWebhookConfig(section *ini.Section, c *Config) {
 	}
 
 	if key, err := section.GetKey("preset-cache-dir"); err == nil {
-		c.WebhookConfigs.Global.PresetCacheDir = key.String()
+		c.WebhookConfigs.Global.PresetCacheDir = ExpandEnvVars(key.String())
 	}
 
 	// Host whitelist: "*" = allow all (default), specific list = whitelist mode
 	if key, err := section.GetKey("webhook-allowed-hosts"); err == nil {
-		c.WebhookConfigs.Global.AllowedHosts = key.String()
+		c.WebhookConfigs.Global.AllowedHosts = ExpandEnvVars(key.String())
 	}
 }
 

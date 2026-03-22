@@ -67,7 +67,7 @@ func main() {
 		cfg, err := ini.LoadSources(ini.LoadOptions{AllowShadows: true, InsensitiveKeys: true}, pre.ConfigFile)
 		if err == nil {
 			if sec, err := cfg.GetSection("global"); err == nil {
-				pre.LogLevel = sec.Key("log-level").String()
+				pre.LogLevel = cli.ExpandEnvVars(sec.Key("log-level").String())
 			}
 		}
 	}
