@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-03-22
+
+### Added
+
+- `env-file` support: load environment variables from files for all job types, like Docker's `--env-file` ([#540](https://github.com/netresearch/ofelia/pull/540), closes [#314](https://github.com/netresearch/ofelia/issues/314))
+- `env-from` support: copy environment variables from a running Docker container at job execution time ([#540](https://github.com/netresearch/ofelia/pull/540), closes [#336](https://github.com/netresearch/ofelia/issues/336), [#351](https://github.com/netresearch/ofelia/issues/351))
+
+### Fixed
+
+- Environment variable substitutions containing `#` or `;` were parsed as INI inline comments, truncating values like SMTP passwords ([#539](https://github.com/netresearch/ofelia/pull/539), fixes [#538](https://github.com/netresearch/ofelia/issues/538))
+- Environment variable expansion now works in webhook config values (`secret`, `url`, etc.) and section names ([#539](https://github.com/netresearch/ofelia/pull/539))
+- `log-level` config value now supports `${VAR}` expansion in the pre-parse path ([#539](https://github.com/netresearch/ofelia/pull/539))
+
+### Security
+
+- SHA-pin all GitHub Actions and add Dependabot for actions updates ([#536](https://github.com/netresearch/ofelia/pull/536))
+
+### Dependencies
+
+- Bump the github-actions group with 20 updates ([#537](https://github.com/netresearch/ofelia/pull/537))
+
 ## [0.22.0] - 2026-03-20
 
 ### Added
