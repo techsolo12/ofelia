@@ -4,6 +4,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,6 +16,8 @@ type LocalJob struct {
 	BareJob     `mapstructure:",squash"`
 	Dir         string   `hash:"true"`
 	Environment []string `mapstructure:"environment" hash:"true"`
+	EnvFile     []string `gcfg:"env-file" mapstructure:"env-file," hash:"true"`
+	EnvFrom     []string `gcfg:"env-from" mapstructure:"env-from," hash:"true"`
 }
 
 func NewLocalJob() *LocalJob {
@@ -47,6 +50,14 @@ func (j *LocalJob) buildCommand(ctx *Context) (*exec.Cmd, error) {
 		return nil, fmt.Errorf("look path %q: %w", cmdArgs[0], err)
 	}
 
+	// Resolve environment from env-file, env-from, and explicit environment
+	mergedEnv, err := ResolveJobEnvironment(context.Background(), j.EnvFile, j.EnvFrom, j.Environment, nil, func(msg string) {
+		ctx.Warn(msg)
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &exec.Cmd{
 		Path:   bin,
 		Args:   cmdArgs,
@@ -54,7 +65,7 @@ func (j *LocalJob) buildCommand(ctx *Context) (*exec.Cmd, error) {
 		Stderr: ctx.Execution.ErrorStream,
 		// add custom env variables to the existing ones
 		// instead of overwriting them
-		Env: append(os.Environ(), j.Environment...),
+		Env: append(os.Environ(), mergedEnv...),
 		Dir: j.Dir,
 	}, nil
 }

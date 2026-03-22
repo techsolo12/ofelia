@@ -23,6 +23,8 @@ type ExecJob struct {
 	User        string   `hash:"true"`
 	TTY         bool     `default:"false" hash:"true"`
 	Environment []string `mapstructure:"environment" hash:"true"`
+	EnvFile     []string `gcfg:"env-file" mapstructure:"env-file," hash:"true"`
+	EnvFrom     []string `gcfg:"env-from" mapstructure:"env-from," hash:"true"`
 	WorkingDir  string   `mapstructure:"working-dir" hash:"true"`
 	Privileged  bool     `default:"false" hash:"true"`
 }
@@ -45,10 +47,16 @@ func (j *ExecJob) Run(ctx *Context) error {
 		runCtx = context.Background()
 	}
 
+	// Resolve environment from env-file, env-from, and explicit environment
+	mergedEnv, err := ResolveJobEnvironment(runCtx, j.EnvFile, j.EnvFrom, j.Environment, j.Provider, nil)
+	if err != nil {
+		return err
+	}
+
 	// Use RunExec for a simpler, unified approach
 	config := &domain.ExecConfig{
 		Cmd:          args.GetArgs(j.Command),
-		Env:          j.Environment,
+		Env:          mergedEnv,
 		WorkingDir:   j.WorkingDir,
 		User:         j.User,
 		AttachStdin:  false,
@@ -82,9 +90,14 @@ func (j *ExecJob) Run(ctx *Context) error {
 // RunWithStreams runs the exec job with custom output streams.
 // This is useful for testing or when custom stream handling is needed.
 func (j *ExecJob) RunWithStreams(ctx context.Context, stdout, stderr io.Writer) (int, error) {
+	mergedEnv, err := ResolveJobEnvironment(ctx, j.EnvFile, j.EnvFrom, j.Environment, j.Provider, nil)
+	if err != nil {
+		return 0, err
+	}
+
 	config := &domain.ExecConfig{
 		Cmd:          args.GetArgs(j.Command),
-		Env:          j.Environment,
+		Env:          mergedEnv,
 		WorkingDir:   j.WorkingDir,
 		User:         j.User,
 		AttachStdin:  false,

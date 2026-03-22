@@ -46,6 +46,8 @@ type RunJob struct {
 	Volume      []string `hash:"true"`
 	VolumesFrom []string `gcfg:"volumes-from" mapstructure:"volumes-from," hash:"true"`
 	Environment []string `mapstructure:"environment" hash:"true"`
+	EnvFile     []string `gcfg:"env-file" mapstructure:"env-file," hash:"true"`
+	EnvFrom     []string `gcfg:"env-from" mapstructure:"env-from," hash:"true"`
 	WorkingDir  string   `gcfg:"working-dir" mapstructure:"working-dir" hash:"true"`
 	Annotations []string `mapstructure:"annotations" hash:"true"`
 
@@ -209,12 +211,18 @@ func (j *RunJob) buildContainer(ctx context.Context) (string, error) {
 	defaults := getDefaultAnnotations(j.Name, "run")
 	annotations := mergeAnnotations(j.Annotations, defaults)
 
+	// Resolve environment from env-file, env-from, and explicit environment
+	mergedEnv, err := ResolveJobEnvironment(ctx, j.EnvFile, j.EnvFrom, j.Environment, j.Provider, nil)
+	if err != nil {
+		return "", err
+	}
+
 	// Build container configuration using domain types
 	config := &domain.ContainerConfig{
 		Image:        j.Image,
 		Cmd:          args.GetArgs(j.Command),
 		Entrypoint:   entrypointSlice(j.Entrypoint),
-		Env:          j.Environment,
+		Env:          mergedEnv,
 		WorkingDir:   j.WorkingDir,
 		User:         j.User,
 		Hostname:     j.Hostname,

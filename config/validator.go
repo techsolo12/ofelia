@@ -426,6 +426,7 @@ func (cv *Validator2) isOptionalField(path string) bool {
 		"container", "service", "image", "user", "network",
 		"environment", "secrets", "volumes", "working_dir",
 		"log-level", // Has default value "info"
+		"env-file", "env-from",
 	}
 
 	for _, field := range optionalFields {
