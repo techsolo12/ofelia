@@ -165,11 +165,10 @@ jobs:
         run: |
           set -euo pipefail
           cosign sign-blob --yes \
-            --output-certificate dist/checksums.txt.pem \
-            --output-signature dist/checksums.txt.sig \
+            --bundle dist/checksums.txt.bundle \
             dist/checksums.txt
 
-      - name: Upload checksums and signatures
+      - name: Upload checksums and signature bundle
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ needs.resolve-tag.outputs.tag }}
@@ -177,8 +176,7 @@ jobs:
           set -euo pipefail
           gh release upload "$RELEASE_TAG" \
             dist/checksums.txt \
-            dist/checksums.txt.pem \
-            dist/checksums.txt.sig \
+            dist/checksums.txt.bundle \
             --clobber
 
   # Append verification instructions to release notes
@@ -229,8 +227,7 @@ jobs:
             echo "### Verify checksums signature"
             echo '```bash'
             echo "cosign verify-blob \\"
-            echo "  --certificate checksums.txt.pem \\"
-            echo "  --signature checksums.txt.sig \\"
+            echo "  --bundle checksums.txt.bundle \\"
             echo "  --certificate-identity \"https://github.com/netresearch/ofelia/.github/workflows/release-slsa.yml@refs/tags/${RELEASE_TAG}\" \\"
             echo "  --certificate-oidc-issuer \"https://token.actions.githubusercontent.com\" \\"
             echo "  checksums.txt"
