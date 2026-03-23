@@ -13,10 +13,10 @@ require (
 	github.com/emersion/go-smtp v0.24.0
 	github.com/go-mail/mail/v2 v2.3.0
 	github.com/go-playground/validator/v10 v10.30.1
+	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/gobs/args v0.0.0-20210311043657-b8c0b223be93
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/manifoldco/promptui v0.9.0
-	github.com/mitchellh/mapstructure v1.5.0
 	github.com/netresearch/go-cron v0.13.1
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/stretchr/testify v1.11.1
@@ -27,9 +27,6 @@ require (
 	gopkg.in/ini.v1 v1.67.1
 	gopkg.in/yaml.v3 v3.0.1
 )
-
-// mitchellh/mapstructure is archived; redirect to the actively maintained fork.
-replace github.com/mitchellh/mapstructure v1.5.0 => github.com/go-viper/mapstructure v1.6.0
 
 require (
 	github.com/Microsoft/go-winio v0.6.2 // indirect
