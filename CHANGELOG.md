@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.23.1] - 2026-03-23
+
+### Fixed
+
+- Migrate release pipeline from `slsa-github-generator` to `actions/attest-build-provenance` via org-wide reusable workflow — fixes release builds blocked by SHA-pinning ruleset ([#542](https://github.com/netresearch/ofelia/pull/542))
+
+### Security
+
+- Migrate `go-viper/mapstructure` v1 to v2.4.0 — fixes GO-2025-3787 and GO-2025-3900 (sensitive information leak in logs) ([#544](https://github.com/netresearch/ofelia/pull/544))
+
 ## [0.23.0] - 2026-03-22
 
 ### Added
