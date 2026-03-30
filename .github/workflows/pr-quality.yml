@@ -45,8 +45,14 @@ jobs:
     needs: quality-gate
     if: >-
       github.event.pull_request.draft == false &&
-      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) &&
-      github.event.pull_request.head.repo.full_name == github.repository
+      (
+        github.event.pull_request.user.login == 'dependabot[bot]' ||
+        github.event.pull_request.user.login == 'renovate[bot]' ||
+        (
+          contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.pull_request.author_association) &&
+          github.event.pull_request.head.repo.full_name == github.repository
+        )
+      )
 
     steps:
       - name: Harden Runner
@@ -59,22 +65,25 @@ jobs:
         with:
           script: |
             const author = context.payload.pull_request.user.login;
+            const knownBots = ['dependabot[bot]', 'renovate[bot]'];
 
-            // Only auto-approve PRs from repo collaborators with write access or above
-            try {
-              const { data: permLevel } = await github.rest.repos.getCollaboratorPermissionLevel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                username: author,
-              });
-              const permission = permLevel.permission;
-              if (!['admin', 'maintain', 'write'].includes(permission)) {
-                core.info(`Skipping auto-approve: author ${author} has '${permission}' permission (need write+)`);
+            if (!knownBots.includes(author)) {
+              // Only call getCollaboratorPermissionLevel for human contributors, not bot accounts
+              try {
+                const { data: permLevel } = await github.rest.repos.getCollaboratorPermissionLevel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  username: author,
+                });
+                const permission = permLevel.permission;
+                if (!['admin', 'maintain', 'write'].includes(permission)) {
+                  core.info(`Skipping auto-approve: author ${author} has '${permission}' permission (need write+)`);
+                  return;
+                }
+              } catch (e) {
+                core.info(`Skipping auto-approve: could not verify permissions for ${author}: ${e.message}`);
                 return;
               }
-            } catch (e) {
-              core.info(`Skipping auto-approve: could not verify permissions for ${author}: ${e.message}`);
-              return;
             }
 
             await github.rest.pulls.createReview({

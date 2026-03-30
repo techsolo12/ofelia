@@ -1,22 +1,19 @@
-name: Auto-merge dependency updates
+name: Auto-merge dependency PRs
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
-permissions: read-all
+permissions:
+  contents: write
+  pull-requests: write
 
 jobs:
   auto-merge:
-    name: Auto-merge Dependabot/Renovate PRs
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      pull-requests: write
-    # Only run for dependency update bots
     if: >-
-      github.actor == 'dependabot[bot]' ||
-      github.actor == 'renovate[bot]'
+      github.event.pull_request.user.login == 'dependabot[bot]' ||
+      github.event.pull_request.user.login == 'renovate[bot]'
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
@@ -24,13 +21,20 @@ jobs:
           egress-policy: audit
 
       - name: Auto-approve PR
-        run: gh pr review --approve "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh pr review --approve "$PR_URL"
 
       - name: Enable auto-merge
-        run: gh pr merge --auto "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          STRATEGY=$(gh api "repos/$REPO" --jq '
+            if .allow_squash_merge then "--squash"
+            elif .allow_merge_commit then "--merge"
+            elif .allow_rebase_merge then "--rebase"
+            else "--merge" end')
+          gh pr merge --auto "$STRATEGY" "$PR_URL"
