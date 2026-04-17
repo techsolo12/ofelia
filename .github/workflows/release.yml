@@ -133,7 +133,7 @@ jobs:
     needs: [create-release, finalize]
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       issues: write
       pull-requests: write
     env:
@@ -156,7 +156,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          PREV_TAG=$(gh release list --json tagName --jq '.[].tagName' | grep -A1 "^${RELEASE_TAG}$" | tail -1)
+          # -F for fixed-string match (tags contain dots which are regex metacharacters).
+          # -x for full-line match, which replaces the old ^...$ anchors.
+          PREV_TAG=$(gh release list --json tagName --jq '.[].tagName' | grep -Fx -A1 "${RELEASE_TAG}" | tail -1)
           if [[ -z "$PREV_TAG" || "$PREV_TAG" == "$RELEASE_TAG" ]]; then
             echo "No previous release found, using first commit"
             PREV_TAG=$(gh api "repos/${REPO}/commits" --jq '.[0].sha' | head -1)
