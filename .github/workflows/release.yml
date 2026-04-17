@@ -1,0 +1,227 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to (re)build (e.g. v0.23.2)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  create-release:
+    name: Create GitHub Release
+    uses: netresearch/.github/.github/workflows/create-release.yml@main
+    permissions:
+      contents: write
+    with:
+      tag: ${{ inputs.tag || '' }}
+
+  binaries:
+    name: Build ${{ matrix.target }}
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-386, goos: linux, goarch: "386" }
+          - { target: linux-amd64, goos: linux, goarch: amd64 }
+          - { target: linux-arm64, goos: linux, goarch: arm64 }
+          - { target: linux-armv6, goos: linux, goarch: arm, goarm: "6" }
+          - { target: linux-armv7, goos: linux, goarch: arm, goarm: "7" }
+          - { target: darwin-amd64, goos: darwin, goarch: amd64 }
+          - { target: darwin-arm64, goos: darwin, goarch: arm64 }
+          - { target: windows-amd64, goos: windows, goarch: amd64 }
+    uses: netresearch/.github/.github/workflows/build-go-attest.yml@main
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    with:
+      binary-name: ofelia-${{ matrix.target }}
+      goos: ${{ matrix.goos }}
+      goarch: ${{ matrix.goarch }}
+      goarm: ${{ matrix.goarm || '' }}
+      ldflags: "-s -w -X main.version=${{ needs.create-release.outputs.tag }} -X main.build=${{ needs.create-release.outputs.sha }}"
+      ref: ${{ needs.create-release.outputs.tag }}
+      release-tag: ${{ needs.create-release.outputs.tag }}
+      sbom: true
+
+  container:
+    name: Build container image
+    needs: [create-release, binaries]
+    uses: netresearch/.github/.github/workflows/build-container.yml@main
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      id-token: write
+      attestations: write
+    with:
+      image-name: ofelia
+      ref: ${{ needs.create-release.outputs.tag }}
+      platforms: "linux/386,linux/amd64,linux/arm/v6,linux/arm/v7,linux/arm64"
+      sign: true
+      attest: true
+      pre-build-command: |
+        mkdir -p bin
+        for suffix in linux-386 linux-amd64 linux-arm64 linux-armv6 linux-armv7; do
+          gh release download "${{ needs.create-release.outputs.tag }}" \
+            --pattern "ofelia-${suffix}" --dir bin
+          chmod +x "bin/ofelia-${suffix}"
+        done
+
+  per-arch-tags:
+    name: Tag per-architecture images
+    needs: [create-release, container]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository_owner }}/ofelia
+      VERSION: ${{ needs.create-release.outputs.version }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
+        with:
+          egress-policy: audit
+
+      - name: Log in to ghcr.io
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4.1.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install crane
+        uses: imjasonh/setup-crane@6da1ae018866400525525ce74ff892880c099987 # v0.5
+
+      - name: Tag each platform
+        run: |
+          set -euo pipefail
+          for platform in linux/386 linux/amd64 linux/arm/v6 linux/arm/v7 linux/arm64; do
+            suffix=$(echo "$platform" | sed 's|linux/||; s|/|-|g')
+            digest=$(crane manifest "$IMAGE:$VERSION" | jq -r \
+              ".manifests[] | select(.platform.os + \"/\" + .platform.architecture + (if .platform.variant then \"/\" + .platform.variant else \"\" end) == \"$platform\") | .digest")
+            if [ -n "$digest" ] && [ "$digest" != "null" ]; then
+              echo "Tagging ${IMAGE}:${VERSION}-${suffix} from ${digest}"
+              crane tag "${IMAGE}@${digest}" "${VERSION}-${suffix}"
+              crane tag "${IMAGE}@${digest}" "latest-${suffix}"
+            fi
+          done
+
+  finalize:
+    name: Finalize release
+    needs: [create-release, binaries, container, per-arch-tags]
+    uses: netresearch/.github/.github/workflows/finalize-release.yml@main
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    with:
+      tag: ${{ needs.create-release.outputs.tag }}
+      image-ref: ghcr.io/${{ github.repository_owner }}/ofelia
+
+  notify-released:
+    name: Notify Released PRs/Issues
+    needs: [create-release, finalize]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    env:
+      RELEASE_TAG: ${{ needs.create-release.outputs.tag }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@6c3c2f2c1c457b00c10c4848d6f5491db3b629df # v2.18.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Label and comment on released PRs/Issues
+        run: |
+          set -euo pipefail
+
+          # -F for fixed-string match (tags contain dots which are regex metacharacters).
+          # -x for full-line match, which replaces the old ^...$ anchors.
+          PREV_TAG=$(gh release list --json tagName --jq '.[].tagName' | grep -Fx -A1 "${RELEASE_TAG}" | tail -1)
+          if [[ -z "$PREV_TAG" || "$PREV_TAG" == "$RELEASE_TAG" ]]; then
+            echo "No previous release found, using first commit"
+            PREV_TAG=$(gh api "repos/${REPO}/commits" --jq '.[0].sha' | head -1)
+          fi
+
+          echo "Processing PRs between $PREV_TAG and $RELEASE_TAG"
+
+          gh label create "released:${RELEASE_TAG}" \
+            --color "0e8a16" \
+            --description "Included in ${RELEASE_TAG} release" 2>/dev/null || true
+
+          PR_NUMBERS=$(gh api "repos/${REPO}/compare/${PREV_TAG}...${RELEASE_TAG}" \
+            --jq '[.commits[].commit.message | capture("#(?<n>[0-9]+)"; "g") | .n] | unique | .[]' 2>/dev/null || echo "")
+
+          RELEASE_URL="https://github.com/${REPO}/releases/tag/${RELEASE_TAG}"
+
+          for pr in $PR_NUMBERS; do
+            PR_STATE=$(gh pr view "$pr" --json state --jq '.state' 2>/dev/null || echo "")
+            if [[ "$PR_STATE" != "MERGED" ]]; then
+              continue
+            fi
+            if gh pr view "$pr" --json labels --jq '.labels[].name' 2>/dev/null | grep -q "^released:${RELEASE_TAG}$"; then
+              continue
+            fi
+            echo "Processing PR #${pr}"
+            gh pr edit "$pr" --add-label "released:${RELEASE_TAG}" 2>/dev/null || true
+            {
+              echo "🚀 **Released in [${RELEASE_TAG}](${RELEASE_URL})**"
+              echo ""
+              echo "Thank you for your contribution! 🙏"
+            } > /tmp/pr_comment.md
+            gh pr comment "$pr" --body-file /tmp/pr_comment.md 2>/dev/null || true
+
+            LINKED_ISSUES=$(gh pr view "$pr" --json closingIssuesReferences --jq '.closingIssuesReferences[].number' 2>/dev/null || echo "")
+            for issue in $LINKED_ISSUES; do
+              if gh issue view "$issue" --json labels --jq '.labels[].name' 2>/dev/null | grep -q "^released:${RELEASE_TAG}$"; then
+                continue
+              fi
+              echo "Processing Issue #${issue}"
+              gh issue edit "$issue" --add-label "released:${RELEASE_TAG}" 2>/dev/null || true
+              {
+                echo "🚀 **Released in [${RELEASE_TAG}](${RELEASE_URL})**"
+                echo ""
+                echo "Thank you for reporting this! 🙏"
+              } > /tmp/issue_comment.md
+              gh issue comment "$issue" --body-file /tmp/issue_comment.md 2>/dev/null || true
+            done
+          done
+
+      - name: Append issues link to release notes
+        run: |
+          set -euo pipefail
+          gh release view "$RELEASE_TAG" --json body --jq '.body // ""' > /tmp/notes.md
+          if grep -q "## Included in this release" /tmp/notes.md; then
+            exit 0
+          fi
+          FILTER_URL="${{ github.server_url }}/${REPO}/issues?q=label%3Areleased%3A${RELEASE_TAG}+is%3Aclosed"
+          {
+            echo ""
+            echo "---"
+            echo ""
+            echo "## Included in this release"
+            echo ""
+            echo "[View all PRs and Issues included in this release](${FILTER_URL})"
+          } >> /tmp/notes.md
+          gh release edit "$RELEASE_TAG" --notes-file /tmp/notes.md
