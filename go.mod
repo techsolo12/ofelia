@@ -19,7 +19,7 @@ require (
 	github.com/gobs/args v0.0.0-20210311043657-b8c0b223be93
 	github.com/jessevdk/go-flags v1.6.1
 	github.com/manifoldco/promptui v0.9.0
-	github.com/netresearch/go-cron v0.13.4
+	github.com/netresearch/go-cron v0.14.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/crypto v0.50.0
