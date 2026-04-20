@@ -16,15 +16,37 @@ import (
 	"time"
 )
 
+// dockerConfigOnce returns an INI fragment that schedules a single one-shot
+// execution of the given job: far-future cron + `run-on-startup = true`.
+// This is important because we set `delete = false` + a fixed container-name
+// so we can inspect the container's logs afterwards — a repeating schedule
+// would try to create a second container with the same name on tick #2 and
+// produce spurious `name already in use` failures in the logs.
+func dockerConfigOnce(jobName, containerName, image, command string) string {
+	return fmt.Sprintf(`[global]
+  log-level = info
+
+[job-run %q]
+  # 2099-01-01 — effectively never fires; the run-on-startup trigger is
+  # what drives this test. Single execution → deterministic state.
+  schedule = 0 0 1 1 1
+  run-on-startup = true
+  image = %s
+  container-name = %q
+  delete = false
+  command = %s
+`, jobName, image, containerName, command)
+}
+
 // TestE2E_DockerRunJob_SpawnsContainer is the canonical end-to-end docker
 // scenario: ofelia runs a real alpine container, the container prints a
 // marker, and the container logs contain that marker (verified via the
 // docker CLI).
 //
-// We force `delete = false` so the container persists after exit and we can
-// inspect its logs. A unique `container-name` makes cleanup deterministic.
-// The test is skipped automatically when docker is not available, so it
-// remains runnable on laptops without docker-in-docker.
+// Configured for a single execution (see `dockerConfigOnce`) because we
+// preserve the container (`delete = false`) to read its logs — repeating
+// schedules would collide on the fixed container name.
+// Skipped automatically when docker is not available.
 func TestE2E_DockerRunJob_SpawnsContainer(t *testing.T) {
 	t.Parallel()
 
@@ -45,23 +67,17 @@ func TestE2E_DockerRunJob_SpawnsContainer(t *testing.T) {
 	containerName := fmt.Sprintf("ofelia-e2e-run-%d", time.Now().UnixNano())
 	t.Cleanup(func() { dockerRemove(t, containerName) })
 
-	configBody := fmt.Sprintf(`[global]
-  log-level = info
-
-[job-run "e2e-docker"]
-  schedule = @every 1s
-  image = alpine:3.20
-  container-name = %q
-  delete = false
-  command = sh -c "echo OFELIA_E2E_DOCKER_MARKER"
-`, containerName)
-
-	configPath := writeConfig(t, configBody)
+	configPath := writeConfig(t, dockerConfigOnce(
+		"e2e-docker",
+		containerName,
+		"alpine:3.20",
+		`sh -c "echo OFELIA_E2E_DOCKER_MARKER"`,
+	))
 	daemon := startDaemon(t, configPath)
 	t.Cleanup(func() { daemon.shutdown(t, 30*time.Second) })
 
-	// Wait for the job to finish at least once; the log line appears after
-	// image resolve + container run + log collection, so allow 30s.
+	// Wait for the job to finish; the log line appears after image resolve +
+	// container run + log collection, so allow 30s on cold runners.
 	if err := daemon.waitForLog(`Job \"e2e-docker\"`, 30*time.Second); err != nil {
 		t.Fatalf("no docker execution log observed: %v\nstdout=%s",
 			err, daemon.stdout.String())
@@ -105,18 +121,12 @@ func TestE2E_DockerRunJob_FailingContainerMarkedFailed(t *testing.T) {
 	containerName := fmt.Sprintf("ofelia-e2e-fail-%d", time.Now().UnixNano())
 	t.Cleanup(func() { dockerRemove(t, containerName) })
 
-	configBody := fmt.Sprintf(`[global]
-  log-level = info
-
-[job-run "e2e-docker-fail"]
-  schedule = @every 1s
-  image = alpine:3.20
-  container-name = %q
-  delete = false
-  command = sh -c "exit 42"
-`, containerName)
-
-	configPath := writeConfig(t, configBody)
+	configPath := writeConfig(t, dockerConfigOnce(
+		"e2e-docker-fail",
+		containerName,
+		"alpine:3.20",
+		`sh -c "exit 42"`,
+	))
 	daemon := startDaemon(t, configPath)
 	t.Cleanup(func() { daemon.shutdown(t, 30*time.Second) })
 

@@ -187,19 +187,41 @@ func (p *daemonProcess) signal(sig os.Signal) error {
 	return p.cmd.Process.Signal(sig)
 }
 
+// killProcessGroup sends `sig` to the entire process group we created for
+// the daemon (via Setpgid=true in startDaemon). Falls back to signaling
+// the daemon's PID directly if the pgid lookup fails. Using the group
+// ensures we reap any short-lived children the daemon may have spawned
+// (e.g. local-exec `sh` subprocesses that were caught mid-run by SIGKILL).
+func (p *daemonProcess) killProcessGroup(sig syscall.Signal) error {
+	if p.cmd.Process == nil {
+		return errors.New("daemon process is nil")
+	}
+	pgid, err := syscall.Getpgid(p.cmd.Process.Pid)
+	if err != nil {
+		// Fallback: signal the main process directly.
+		return p.cmd.Process.Signal(sig)
+	}
+	// Negative PID ⇒ deliver to process group (see kill(2)).
+	return syscall.Kill(-pgid, sig)
+}
+
 // shutdown sends SIGTERM and waits for the process to exit. Safe to call
-// multiple times. If the daemon doesn't exit within `timeout`, it is killed.
+// multiple times. If the daemon doesn't exit within `timeout`, it is killed
+// along with any children it spawned.
 func (p *daemonProcess) shutdown(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	p.waitOnce.Do(func() {
 		if !p.exited() {
+			// Only the daemon itself needs SIGTERM for a graceful exit —
+			// the shutdown manager will then stop any in-flight jobs.
 			_ = p.signal(syscall.SIGTERM)
 		}
 		select {
 		case <-p.done:
 		case <-time.After(timeout):
-			t.Logf("daemon did not exit within %s after SIGTERM; sending SIGKILL", timeout)
-			_ = p.signal(syscall.SIGKILL)
+			t.Logf("daemon did not exit within %s after SIGTERM; SIGKILLing process group", timeout)
+			// Reap the entire group so stray job subprocesses don't leak.
+			_ = p.killProcessGroup(syscall.SIGKILL)
 			<-p.done
 		}
 	})
