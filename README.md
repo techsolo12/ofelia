@@ -1,5 +1,8 @@
 # Ofelia - a job scheduler
 
+[![Template Drift](https://github.com/netresearch/ofelia/actions/workflows/check-template-drift.yml/badge.svg)](https://github.com/netresearch/ofelia/actions/workflows/check-template-drift.yml)
+[![managed by netresearch/.github templates](https://img.shields.io/badge/template-netresearch%2F.github-2F99A4?logo=github)](https://github.com/netresearch/.github/tree/main/templates/go-app)
+
 [![Go Reference](https://pkg.go.dev/badge/github.com/netresearch/ofelia.svg)](https://pkg.go.dev/github.com/netresearch/ofelia)
 [![CI](https://github.com/netresearch/ofelia/actions/workflows/ci.yml/badge.svg)](https://github.com/netresearch/ofelia/actions/workflows/ci.yml)
 [![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json&style=flat&label=benchmarks&logo=codspeed)](https://codspeed.io/netresearch/ofelia)
