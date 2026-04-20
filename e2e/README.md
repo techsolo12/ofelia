@@ -2,50 +2,92 @@
 
 ## Overview
 
-E2E tests verify the complete Ofelia scheduler system behavior in real scenarios with actual Docker containers.
+E2E tests verify Ofelia's behavior at the process boundary: they build the
+real `ofelia` binary, spawn it as a child process with an INI config, and
+assert on its stdout/stderr, file system side-effects and, for Docker jobs,
+on real container state. They complement the `integration` tests (which run
+in-process with the Docker SDK wired directly) by exercising the full
+pipeline:
 
-## Running E2E Tests
-
-```bash
-# Run all E2E tests
-go test -tags=e2e -v ./e2e/
-
-# Run specific test
-go test -tags=e2e -v -run TestScheduler_BasicLifecycle ./e2e/
-
-# Run with timeout
-go test -tags=e2e -v -timeout 5m ./e2e/
+```
+parse INI → configure scheduler → fire tick → spawn job → collect output →
+handle signal → graceful shutdown
 ```
 
-## Test Coverage
+## Running
 
-### Scheduler Lifecycle Tests
-- **TestScheduler_BasicLifecycle**: Tests start, schedule, execute, stop cycle with real Docker containers
-- **TestScheduler_MultipleJobsConcurrent**: Tests concurrent job execution (3 jobs running simultaneously)
-- **TestScheduler_JobFailureHandling**: Tests failure resilience and error handling
+```bash
+# All e2e tests
+go test -tags=e2e -race -v ./e2e/...
 
-These E2E tests provide comprehensive coverage of scheduler lifecycle behavior that was previously attempted with flaky unit tests using mocks. Real Docker integration provides more reliable and realistic testing.
+# Single test
+go test -tags=e2e -race -v -run TestE2E_LocalJob_RunsOnSchedule ./e2e/
+
+# Increase timeout for slow CI runners
+go test -tags=e2e -race -v -timeout=10m ./e2e/...
+```
 
 ## Prerequisites
 
-- Docker daemon running
-- `alpine:latest` image available
-- Network connectivity to Docker socket
+- Go toolchain matching `go.mod`
+- Docker daemon (Docker tests skip automatically when unavailable)
+- `alpine:3.20` image is pulled on demand by the Docker tests
 
-## Test Structure
+## What is covered
 
-Each E2E test follows this pattern:
-1. Setup: Create test containers
-2. Configure: Create jobs and scheduler
-3. Execute: Start scheduler and let jobs run
-4. Verify: Check execution history and results
-5. Cleanup: Stop scheduler and remove containers
+### Binary-level scheduling
+- `TestE2E_LocalJob_RunsOnSchedule` — schedule a local-exec job, assert it
+  fires at least once and its side-effect (file marker) is visible.
+- `TestE2E_LocalJob_RunOnStartup` — `run-on-startup = true` fires immediately
+  without waiting for the cron tick.
+- `TestE2E_LocalJob_SurvivesMultipleExecutions` — scheduler stays healthy
+  under repeated fast-cadence ticks.
 
-## Future E2E Tests
+### Real Docker execution
+- `TestE2E_DockerRunJob_SpawnsContainer` — pulls alpine, runs a real
+  container, verifies the marker via `docker logs`.
+- `TestE2E_DockerRunJob_FailingContainerMarkedFailed` — non-zero container
+  exit is surfaced as `failed: true` in Ofelia's log.
 
-Planned but not yet implemented:
-- Config reload scenarios (SIGHUP handling)
-- Label-based job discovery
-- Multi-container workflows
-- Job dependency chains
-- Stress tests for concurrent execution
+### Configuration surface
+- `TestE2E_Validate_MalformedINI` — malformed INI produces a useful error.
+- `TestE2E_Validate_MissingConfigFile` — missing file path is reported.
+- `TestE2E_Validate_AcceptsValidConfig` — happy path, structured JSON dump
+  includes declared jobs.
+
+### Signal handling
+- `TestE2E_GracefulShutdown_SIGTERM` — SIGTERM during a scheduling window
+  produces a clean exit; shutdown banner is logged.
+- `TestE2E_GracefulShutdown_SIGINT` — SIGINT (Ctrl+C) path covered
+  independently of SIGTERM.
+
+### Legacy (mock-backed) lifecycle tests
+- `TestScheduler_BasicLifecycle` / `TestScheduler_MultipleJobsConcurrent` /
+  `TestScheduler_JobFailureHandling` in `scheduler_lifecycle_test.go` —
+  use an in-process mock Docker provider for fast feedback on scheduler
+  state-machine behavior. Kept as-is for backwards compatibility.
+
+## Out of scope
+
+Deliberately *not* covered by e2e (owned by integration or unit tests):
+- Job types that need a running compose stack (`job-compose`).
+- Swarm-only `job-service-run` (requires a Swarm manager).
+- Docker label discovery (owned by `cli/docker_handler_integration_test.go`).
+- Web UI auth flows (owned by `web/` tests).
+- Full config-reload/SIGHUP semantics.
+
+## How the harness works
+
+`helpers_test.go` exposes a small set of utilities:
+
+| Helper | Purpose |
+|--------|---------|
+| `buildBinary(t)` | `go build -race` once per test process, cached. |
+| `startDaemon(t, configPath)` | Spawn `ofelia daemon --config=...`, wait for boot banner. |
+| `daemonProcess.waitForLog` | Poll captured stdout for a substring with timeout. |
+| `daemonProcess.shutdown` | SIGTERM + wait, SIGKILL on timeout. |
+| `runCommand(t, args...)` | One-shot command invocation for `validate`-style tests. |
+| `dockerAvailable(t)` / `dockerLogs` / `dockerRemove` | Thin `docker` CLI wrappers. |
+
+Every test uses `t.TempDir()` for config files and marker outputs, so parallel
+execution is safe (tests are `t.Parallel()` wherever possible).
