@@ -6,3 +6,6 @@ intentional-drift:
 - path: .github/workflows/container.yml
   reason: "GHCR package name is 'ofelia' (short form), not 'netresearch/ofelia' \u2014\
     \ pre-dates template; renaming would break existing image consumers."
+- path: .github/workflows/ci.yml
+  reason: "enable-integration-tests: true \u2014 repo has integration tests (12 files)\
+    \ that run in CI with -tags=integration"
