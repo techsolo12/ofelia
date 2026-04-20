@@ -3,9 +3,6 @@
 # Record explicit exceptions under intentional-drift[] to unblock.
 template: go-app
 intentional-drift:
-- path: .github/workflows/container.yml
-  reason: "GHCR package name is 'ofelia' (short form), not 'netresearch/ofelia' \u2014\
-    \ pre-dates template; renaming would break existing image consumers."
 - path: .github/workflows/ci.yml
   reason: "enable-integration-tests: true and enable-e2e-tests: true \u2014 repo has\
     \ integration tests (12 files, -tags=integration) and e2e tests (10 tests under\
