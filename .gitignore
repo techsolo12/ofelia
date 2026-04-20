@@ -3,7 +3,7 @@
 .chunkhound/*.json
 .chunkhound/**
 .vscode
-ofelia
+/ofelia
 debug
 build/
 bin/
