@@ -482,26 +482,37 @@ func TestRateLimiter_RefillCapBoundary(t *testing.T) {
 	}
 }
 
-// TestRateLimiter_RefillDoesNotExceedCapacity ensures tokens are capped exactly at capacity,
-// not capacity-1 (which would happen if > is mutated to >=).
+// TestRateLimiter_RefillDoesNotExceedCapacity ensures tokens are
+// capped exactly at capacity, not capacity-1 (which would happen if
+// `>` is mutated to `>=` in refill()).
+//
+// The test is fully deterministic: it simulates elapsed time by
+// rewinding lastRefill under the limiter's own mutex and then calling
+// refill() directly, so no scheduler jitter or time.Sleep is involved.
 func TestRateLimiter_RefillDoesNotExceedCapacity(t *testing.T) {
 	t.Parallel()
 
-	rl := NewRateLimiter(10000.0, 3) // fast refill
-	// Use all tokens
-	rl.AllowN(3)
+	rl := NewRateLimiter(10.0, 3)
 
-	// Wait for refill to exceed capacity
-	time.Sleep(10 * time.Millisecond) // would add 100 tokens, capped to 3
-
-	// Should be able to use exactly 3
+	// Drain to zero. Asserting the drain succeeds also guards the
+	// constructor mutation where the bucket starts with the wrong
+	// number of tokens.
 	if !rl.AllowN(3) {
-		t.Error("expected AllowN(3) to succeed after refill to capacity=3")
+		t.Fatal("fresh limiter should start with capacity=3 tokens")
 	}
 
-	// Next should fail
-	if rl.AllowN(1) {
-		t.Error("expected AllowN(1) to fail when tokens are exhausted")
+	// Simulate 500 ms of elapsed time. At 10 tok/sec that would refill
+	// 5 tokens; the capping logic must pin tokens to exactly capacity=3.
+	rl.mu.Lock()
+	rl.lastRefill = rl.lastRefill.Add(-500 * time.Millisecond)
+	rl.refill()
+	got := rl.tokens
+	rl.mu.Unlock()
+
+	if got != float64(rl.capacity) {
+		t.Errorf("refill exceeded or fell short of capacity: tokens=%v capacity=%d "+
+			"(if this is capacity-1, the > mutation to >= slipped through)",
+			got, rl.capacity)
 	}
 }
 
