@@ -12,7 +12,6 @@
 package e2e
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"errors"
@@ -145,12 +144,14 @@ func startDaemon(t *testing.T, configPath string, extraArgs ...string) *daemonPr
 }
 
 // waitForLog polls the combined stdout for a substring until it appears or
-// the timeout elapses.
+// the timeout elapses. It searches under the buffer's lock rather than
+// snapshotting the full bytes on every iteration, so the cost stays O(N)
+// per poll instead of O(N²) over the lifetime of the test.
 func (p *daemonProcess) waitForLog(needle string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
+	needleBytes := []byte(needle)
 	for time.Now().Before(deadline) {
-		if bytes.Contains(p.stdout.Bytes(), []byte(needle)) ||
-			bytes.Contains(p.stderr.Bytes(), []byte(needle)) {
+		if p.stdout.Contains(needleBytes) || p.stderr.Contains(needleBytes) {
 			return nil
 		}
 		if p.exited() {
@@ -162,17 +163,10 @@ func (p *daemonProcess) waitForLog(needle string, timeout time.Duration) error {
 }
 
 // countLogOccurrences counts how many times the given substring appears in
-// the captured stdout.
+// the captured stdout. Uses bytes.Count under the buffer's lock so no
+// intermediate copy is needed.
 func (p *daemonProcess) countLogOccurrences(needle string) int {
-	data := p.stdout.Bytes()
-	n := 0
-	scanner := bufio.NewScanner(bytes.NewReader(data))
-	for scanner.Scan() {
-		if bytes.Contains(scanner.Bytes(), []byte(needle)) {
-			n++
-		}
-	}
-	return n
+	return p.stdout.Count([]byte(needle))
 }
 
 // exited reports whether the daemon process has already terminated.
@@ -233,6 +227,23 @@ func (s *syncBuffer) Write(p []byte) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.buf.Write(p)
+}
+
+// Contains performs a needle search against the buffer while holding its
+// lock, avoiding the slice copy that `Bytes()` would trigger on each call.
+func (s *syncBuffer) Contains(needle []byte) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return bytes.Contains(s.buf.Bytes(), needle)
+}
+
+// Count returns the number of non-overlapping occurrences of needle in the
+// buffer. Uses bytes.Count, which is faster than scanning line-by-line and
+// avoids bufio.Scanner's per-line allocations.
+func (s *syncBuffer) Count(needle []byte) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return bytes.Count(s.buf.Bytes(), needle)
 }
 
 func (s *syncBuffer) Bytes() []byte {

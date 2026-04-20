@@ -57,15 +57,27 @@ func TestE2E_LocalJob_RunsOnSchedule(t *testing.T) {
 			err, daemon.stdout.String())
 	}
 
-	// Give a little time for the file write to finalize.
-	time.Sleep(500 * time.Millisecond)
-
-	data, err := os.ReadFile(markerFile)
-	if err != nil {
-		t.Fatalf("read marker file %s: %v", markerFile, err)
+	// Poll for the marker to show up in the file rather than using a fixed
+	// sleep — loaded CI runners can exhibit multi-second fs-sync latency.
+	var (
+		data        []byte
+		readErr     error
+		markerLines int
+	)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		data, readErr = os.ReadFile(markerFile)
+		if readErr == nil {
+			markerLines = strings.Count(string(data), "OFELIA_E2E_LOCAL_MARKER")
+			if markerLines > 0 {
+				break
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
-
-	markerLines := strings.Count(string(data), "OFELIA_E2E_LOCAL_MARKER")
+	if readErr != nil {
+		t.Fatalf("read marker file %s: %v", markerFile, readErr)
+	}
 	if markerLines == 0 {
 		t.Fatalf("marker not found in file; job likely did not execute.\n"+
 			"file contents: %q\nstdout=%s",
