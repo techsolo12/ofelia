@@ -482,33 +482,37 @@ func TestRateLimiter_RefillCapBoundary(t *testing.T) {
 	}
 }
 
-// TestRateLimiter_RefillDoesNotExceedCapacity ensures tokens are capped exactly at capacity,
-// not capacity-1 (which would happen if > is mutated to >=).
+// TestRateLimiter_RefillDoesNotExceedCapacity ensures tokens are
+// capped exactly at capacity, not capacity-1 (which would happen if
+// `>` is mutated to `>=` in refill()).
 //
-// The rate is deliberately modest (10 tok/sec) so the microsecond gap
-// between the AllowN(3) and AllowN(1) calls below refills <<1 token —
-// any higher rate (e.g. 10 000 tok/sec) would let even nanosecond-scale
-// scheduler jitter top up a whole token and flake the second assert.
+// The test is fully deterministic: it simulates elapsed time by
+// rewinding lastRefill under the limiter's own mutex and then calling
+// refill() directly, so no scheduler jitter or time.Sleep is involved.
 func TestRateLimiter_RefillDoesNotExceedCapacity(t *testing.T) {
 	t.Parallel()
 
 	rl := NewRateLimiter(10.0, 3)
-	// Use all tokens.
-	rl.AllowN(3)
 
-	// Wait long enough that refill WOULD add more than capacity
-	// (500 ms × 10 tok/sec = 5 tokens, must be capped to 3).
-	time.Sleep(500 * time.Millisecond)
-
-	// Should be able to use exactly 3 (the cap), not capacity-1.
+	// Drain to zero. Asserting the drain succeeds also guards the
+	// constructor mutation where the bucket starts with the wrong
+	// number of tokens.
 	if !rl.AllowN(3) {
-		t.Error("expected AllowN(3) to succeed after refill to capacity=3")
+		t.Fatal("fresh limiter should start with capacity=3 tokens")
 	}
 
-	// Next should fail — at 10 tok/sec the intra-call refill between
-	// this call and the previous one is well below 1 token.
-	if rl.AllowN(1) {
-		t.Error("expected AllowN(1) to fail when tokens are exhausted")
+	// Simulate 500 ms of elapsed time. At 10 tok/sec that would refill
+	// 5 tokens; the capping logic must pin tokens to exactly capacity=3.
+	rl.mu.Lock()
+	rl.lastRefill = rl.lastRefill.Add(-500 * time.Millisecond)
+	rl.refill()
+	got := rl.tokens
+	rl.mu.Unlock()
+
+	if got != float64(rl.capacity) {
+		t.Errorf("refill exceeded or fell short of capacity: tokens=%v capacity=%d "+
+			"(if this is capacity-1, the > mutation to >= slipped through)",
+			got, rl.capacity)
 	}
 }
 
