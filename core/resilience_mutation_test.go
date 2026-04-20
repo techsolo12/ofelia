@@ -484,22 +484,29 @@ func TestRateLimiter_RefillCapBoundary(t *testing.T) {
 
 // TestRateLimiter_RefillDoesNotExceedCapacity ensures tokens are capped exactly at capacity,
 // not capacity-1 (which would happen if > is mutated to >=).
+//
+// The rate is deliberately modest (10 tok/sec) so the microsecond gap
+// between the AllowN(3) and AllowN(1) calls below refills <<1 token —
+// any higher rate (e.g. 10 000 tok/sec) would let even nanosecond-scale
+// scheduler jitter top up a whole token and flake the second assert.
 func TestRateLimiter_RefillDoesNotExceedCapacity(t *testing.T) {
 	t.Parallel()
 
-	rl := NewRateLimiter(10000.0, 3) // fast refill
-	// Use all tokens
+	rl := NewRateLimiter(10.0, 3)
+	// Use all tokens.
 	rl.AllowN(3)
 
-	// Wait for refill to exceed capacity
-	time.Sleep(10 * time.Millisecond) // would add 100 tokens, capped to 3
+	// Wait long enough that refill WOULD add more than capacity
+	// (500 ms × 10 tok/sec = 5 tokens, must be capped to 3).
+	time.Sleep(500 * time.Millisecond)
 
-	// Should be able to use exactly 3
+	// Should be able to use exactly 3 (the cap), not capacity-1.
 	if !rl.AllowN(3) {
 		t.Error("expected AllowN(3) to succeed after refill to capacity=3")
 	}
 
-	// Next should fail
+	// Next should fail — at 10 tok/sec the intra-call refill between
+	// this call and the previous one is well below 1 token.
 	if rl.AllowN(1) {
 		t.Error("expected AllowN(1) to fail when tokens are exhausted")
 	}
