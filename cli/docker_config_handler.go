@@ -316,7 +316,7 @@ func (c *DockerHandler) GetDockerContainers() ([]DockerContainerInfo, error) {
 		}
 		ofeliaLabels := make(map[string]string)
 		for k, v := range cont.Labels {
-			if strings.HasPrefix(k, labelPrefix) {
+			if strings.HasPrefix(k, labelPrefix) || k == dockerComposeServiceLabel {
 				ofeliaLabels[k] = v
 			}
 		}

@@ -217,7 +217,7 @@ func TestGetDockerContainersNoContainers(t *testing.T) {
 	assert.Equal(t, ErrNoContainerWithOfeliaEnabled, err)
 }
 
-// TestGetDockerContainersValid verifies that GetDockerContainers filters and returns only ofelia-prefixed labels
+// TestGetDockerContainersValid verifies that GetDockerContainers filters and returns only ofelia-prefixed labels as well as "com.docker.compose.service"
 func TestGetDockerContainersValid(t *testing.T) {
 	t.Parallel()
 	// Mock provider returning one container with mixed labels
@@ -233,6 +233,7 @@ func TestGetDockerContainersValid(t *testing.T) {
 					"ofelia.job-exec.foo.schedule": "@every 1s",
 					"ofelia.job-run.bar.schedule":  "@every 2s",
 					"other.label":                  "ignore",
+					"com.docker.compose.service":   "test-service",
 				},
 			},
 		},
@@ -249,6 +250,7 @@ func TestGetDockerContainersValid(t *testing.T) {
 			"ofelia.enabled":               "true",
 			"ofelia.job-exec.foo.schedule": "@every 1s",
 			"ofelia.job-run.bar.schedule":  "@every 2s",
+			"com.docker.compose.service":   "test-service",
 		},
 	}}
 	assert.Equal(t, expected, labels)
