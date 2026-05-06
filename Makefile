@@ -96,9 +96,8 @@ security-check:
 		echo "✅ Security check passed"; \
 	else \
 		echo "❌ gosec not found. Install with:"; \
-		echo "   - Snap: sudo snap install gosec"; \
-		echo "   - Binary: https://github.com/securecodewarrior/gosec/releases"; \
-		echo "   - Or run: make dev-setup"; \
+		echo "   go install github.com/securego/gosec/v2/cmd/gosec@latest"; \
+		echo "   Or run: make dev-setup"; \
 		exit 1; \
 	fi
 
@@ -214,14 +213,9 @@ dev-setup:
 	@if command -v gosec >/dev/null 2>&1; then \
 		echo "✅ gosec already available"; \
 	else \
-		echo "📥 Installing gosec via snap..."; \
-		if command -v snap >/dev/null 2>&1; then \
-			sudo snap install gosec; \
-		else \
-			echo "⚠️  gosec not found and snap unavailable. Install manually:"; \
-			echo "   - Snap: sudo snap install gosec"; \
-			echo "   - Binary: https://github.com/securecodewarrior/gosec/releases"; \
-		fi; \
+		echo "📥 Installing gosec..."; \
+		go install github.com/securego/gosec/v2/cmd/gosec@latest; \
+		echo "✅ gosec installed"; \
 	fi
 	@go install github.com/daixiang0/gci@latest
 	@echo "✅ gci installed"
@@ -297,7 +291,7 @@ help:
 	@echo "  ci                 - Run CI checks locally"
 	@echo "  tidy               - Tidy Go modules"
 	@echo ""
-	@echo "📊 Current Test Coverage: 60.1%"
+	@echo "📊 Test Coverage: run 'make test-coverage' for current numbers"
 	@echo "🎯 Quality: 45+ linting rules, security scanning, pre-commit hooks"
 
 build:

@@ -170,8 +170,12 @@ post-checkout:
           echo ""
         fi
 
-        # Check if hooks are installed (in case this is first checkout)
-        if [ ! -f .git/hooks/pre-commit ] || ! grep -q "lefthook" .git/hooks/pre-commit 2>/dev/null; then
+        # Check if hooks are installed (in case this is first checkout).
+        # Use git rev-parse so this works in worktrees, where .git is a file
+        # pointing at the worktree's gitdir rather than a directory.
+        hooks_dir=$(git rev-parse --git-path hooks 2>/dev/null || true)
+        hook_file="${hooks_dir:+$hooks_dir/pre-commit}"
+        if [ -z "$hook_file" ] || [ ! -f "$hook_file" ] || ! grep -q "lefthook" "$hook_file" 2>/dev/null; then
           echo ""
           echo "⚠️  Git hooks not installed! Run:"
           echo "   make setup"
