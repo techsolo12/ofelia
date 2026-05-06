@@ -54,14 +54,14 @@ tidy:
 .PHONY: lint
 lint:
 	@mkdir -p $(BUILD_PATH)/.tools
-	@GOTOOLCHAIN=go1.26.2 GOBIN=$(BUILD_PATH)/.tools go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@GOTOOLCHAIN=go1.26.2 GOBIN=$(BUILD_PATH)/.tools go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 	@$(BUILD_PATH)/.tools/golangci-lint version || true
 	@$(BUILD_PATH)/.tools/golangci-lint run --timeout=5m
 
 .PHONY: lint-fix
 lint-fix:
 	@mkdir -p $(BUILD_PATH)/.tools
-	@GOTOOLCHAIN=go1.26.2 GOBIN=$(BUILD_PATH)/.tools go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@GOTOOLCHAIN=go1.26.2 GOBIN=$(BUILD_PATH)/.tools go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 	@$(BUILD_PATH)/.tools/golangci-lint run --fix --timeout=5m
 
 .PHONY: lint-full
@@ -208,7 +208,7 @@ setup: dev-setup
 dev-setup:
 	@echo "🔧 Setting up development environment..."
 	@echo "📦 Installing required tools..."
-	@go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
 	@echo "✅ golangci-lint installed"
 	@if command -v gosec >/dev/null 2>&1; then \
 		echo "✅ gosec already available"; \
