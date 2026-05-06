@@ -29,6 +29,15 @@ const (
 	LogLevelCritical = "critical"
 )
 
+// validLogLevels lists every log level string ApplyLogLevel accepts, in
+// the order they're shown to users when an invalid value is supplied.
+// Canonical slog levels first, then logrus-era aliases.
+var validLogLevels = []string{
+	LogLevelDebug, LogLevelInfo, LogLevelWarn, LogLevelError,
+	LogLevelTrace, LogLevelNotice, LogLevelWarning,
+	LogLevelFatal, LogLevelPanic, LogLevelCritical,
+}
+
 // ApplyLogLevel sets the logging level if level is valid.
 // Returns an error if the level is invalid, with a list of valid options.
 func ApplyLogLevel(level string, lv *slog.LevelVar) error {
@@ -48,7 +57,8 @@ func ApplyLogLevel(level string, lv *slog.LevelVar) error {
 	case LogLevelError, LogLevelFatal, LogLevelPanic, LogLevelCritical:
 		l = slog.LevelError
 	default:
-		return fmt.Errorf("%w: %q (valid levels are debug, info, warn, error)", ErrInvalidLogLevel, level)
+		return fmt.Errorf("%w: %q (valid levels are %s)",
+			ErrInvalidLogLevel, level, strings.Join(validLogLevels, ", "))
 	}
 
 	if lv != nil {
