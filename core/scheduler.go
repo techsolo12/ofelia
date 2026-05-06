@@ -19,19 +19,12 @@ var (
 	ErrEmptySchedule  = errors.New("unable to add a job with an empty schedule")
 )
 
-// TriggeredSchedule is a special schedule keyword for jobs that should only run
-// when triggered by another job's on-success/on-failure, or manually via RunJob().
-// go-cron natively handles these schedules: the parser recognizes @triggered,
-// @manual, and @none and creates a TriggeredSchedule whose Next() always returns
-// zero time, so the scheduler never fires them automatically. Jobs can still be
-// triggered on demand via TriggerEntryByName().
-const TriggeredSchedule = "@triggered"
-
 // IsTriggeredSchedule returns true if the schedule string indicates the job
 // should only run when triggered (not on a time-based schedule). This is a
 // convenience wrapper around string comparison for the three recognized keywords.
+// See schedule_keywords.go for the full list of recognized schedule strings.
 func IsTriggeredSchedule(schedule string) bool {
-	return schedule == TriggeredSchedule || schedule == "@manual" || schedule == "@none"
+	return schedule == TriggeredSchedule || schedule == ManualSchedule || schedule == NoneSchedule
 }
 
 type Scheduler struct {

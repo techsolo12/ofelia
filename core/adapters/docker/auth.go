@@ -106,11 +106,20 @@ func (p *ConfigAuthProvider) logWarning(format string, args ...any) {
 	}
 }
 
+// Docker Hub registry hostnames. Both "docker.io" (newer convention) and
+// "index.docker.io" (legacy) point at Docker Hub; clients receive any of the
+// three forms and need to fold them to one canonical credential bucket.
+const (
+	dockerHubRegistry       = "docker.io"
+	dockerHubRegistryLegacy = "index.docker.io"
+	dockerHubAuthEndpoint   = "https://index.docker.io/v1/"
+)
+
 // normalizeRegistry normalizes a registry address for credential lookup.
 func normalizeRegistry(registry string) string {
 	// Docker Hub special cases
-	if registry == "" || registry == "docker.io" || registry == "index.docker.io" {
-		return "https://index.docker.io/v1/"
+	if registry == "" || registry == dockerHubRegistry || registry == dockerHubRegistryLegacy {
+		return dockerHubAuthEndpoint
 	}
 	return registry
 }
@@ -134,7 +143,7 @@ func ExtractRegistry(image string) string {
 	named, err := reference.ParseNormalizedNamed(image)
 	if err != nil {
 		// Fallback to Docker Hub for unparseable images
-		return "docker.io"
+		return dockerHubRegistry
 	}
 
 	// reference.Domain returns the registry domain

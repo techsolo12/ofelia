@@ -19,6 +19,15 @@ import (
 	"github.com/netresearch/ofelia/web"
 )
 
+// Default listen addresses for the web UI and pprof server. These mirror
+// the `default:` struct-tag values below; we keep them as named constants
+// so the "is the user still on the default?" comparisons elsewhere don't
+// hardcode the same literal.
+const (
+	defaultWebAddr   = ":8081"
+	defaultPprofAddr = "127.0.0.1:8080"
+)
+
 // DaemonCommand daemon process
 type DaemonCommand struct {
 	ConfigFile           string         `long:"config" env:"OFELIA_CONFIG" description:"Config file path" default:"/etc/ofelia/config.ini"`
@@ -291,7 +300,7 @@ func (c *DaemonCommand) applyWebOptions(config *Config) {
 	if c.EnableWeb {
 		config.Global.EnableWeb = true
 	}
-	if c.WebAddr != ":8081" {
+	if c.WebAddr != defaultWebAddr {
 		config.Global.WebAddr = c.WebAddr
 	}
 }
@@ -324,7 +333,7 @@ func (c *DaemonCommand) applyServerOptions(config *Config) {
 	if c.EnablePprof {
 		config.Global.EnablePprof = true
 	}
-	if c.PprofAddr != "127.0.0.1:8080" {
+	if c.PprofAddr != defaultPprofAddr {
 		config.Global.PprofAddr = c.PprofAddr
 	}
 	if c.LogLevel != "" {
@@ -347,7 +356,7 @@ func (c *DaemonCommand) applyWebDefaults(config *Config) {
 	if !c.EnableWeb {
 		c.EnableWeb = config.Global.EnableWeb
 	}
-	if c.WebAddr == ":8081" && config.Global.WebAddr != "" {
+	if c.WebAddr == defaultWebAddr && config.Global.WebAddr != "" {
 		c.WebAddr = config.Global.WebAddr
 	}
 }
@@ -380,7 +389,7 @@ func (c *DaemonCommand) applyServerDefaults(config *Config) {
 	if !c.EnablePprof {
 		c.EnablePprof = config.Global.EnablePprof
 	}
-	if c.PprofAddr == "127.0.0.1:8080" && config.Global.PprofAddr != "" {
+	if c.PprofAddr == defaultPprofAddr && config.Global.PprofAddr != "" {
 		c.PprofAddr = config.Global.PprofAddr
 	}
 }

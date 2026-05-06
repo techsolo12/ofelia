@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/go-playground/validator/v10"
+
+	"github.com/netresearch/ofelia/core"
 )
 
 // ErrValidationFailed is returned when struct validation fails.
@@ -96,9 +98,9 @@ func validateCron(fl validator.FieldLevel) bool {
 	// Allow special expressions
 	if strings.HasPrefix(value, "@") {
 		validSpecial := []string{
-			"@yearly", "@annually", "@monthly", "@weekly",
-			"@daily", "@midnight", "@hourly",
-			"@triggered", "@manual", "@none",
+			core.YearlySchedule, core.AnnuallySchedule, core.MonthlySchedule, core.WeeklySchedule,
+			core.DailySchedule, core.MidnightSchedule, core.HourlySchedule,
+			core.TriggeredSchedule, core.ManualSchedule, core.NoneSchedule,
 		}
 
 		if slices.Contains(validSpecial, value) {

@@ -32,6 +32,18 @@ func parseAnnotations(annotations []string) map[string]string {
 // Defaults to "dev" if not set.
 var Version = "dev"
 
+// Default annotation keys that Ofelia attaches to every job execution.
+// These are stable wire-level identifiers consumed by downstream tooling
+// (logging pipelines, dashboards). Don't change without coordinating with
+// consumers.
+const (
+	AnnotationKeyJobName       = "ofelia.job.name"
+	AnnotationKeyJobType       = "ofelia.job.type"
+	AnnotationKeyExecutionTime = "ofelia.execution.time"
+	AnnotationKeySchedulerHost = "ofelia.scheduler.host"
+	AnnotationKeyVersion       = "ofelia.version"
+)
+
 // getDefaultAnnotations returns default annotations that Ofelia automatically adds.
 // User-provided annotations take precedence over these defaults.
 func getDefaultAnnotations(jobName, jobType string) map[string]string {
@@ -46,11 +58,11 @@ func getDefaultAnnotations(jobName, jobType string) map[string]string {
 	}
 
 	return map[string]string{
-		"ofelia.job.name":       jobName,
-		"ofelia.job.type":       jobType,
-		"ofelia.execution.time": time.Now().UTC().Format(time.RFC3339),
-		"ofelia.scheduler.host": hostname,
-		"ofelia.version":        version,
+		AnnotationKeyJobName:       jobName,
+		AnnotationKeyJobType:       jobType,
+		AnnotationKeyExecutionTime: time.Now().UTC().Format(time.RFC3339),
+		AnnotationKeySchedulerHost: hostname,
+		AnnotationKeyVersion:       version,
 	}
 }
 

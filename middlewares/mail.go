@@ -118,8 +118,8 @@ func (m *Mail) sendMail(ctx *core.Context) error {
 
 	msg.Attach(base+".stderr.json", mail.SetCopyFunc(func(w io.Writer) error {
 		js, _ := json.MarshalIndent(map[string]any{
-			"Job":       ctx.Job,
-			"Execution": ctx.Execution,
+			notificationVarJob:       ctx.Job,
+			notificationVarExecution: ctx.Execution,
 		}, "", "  ")
 
 		if _, err := w.Write(js); err != nil {
@@ -195,11 +195,11 @@ func init() {
 }
 
 func executionLabel(e *core.Execution) string {
-	status := "successful"
+	status := statusSuccessful
 	if e.Skipped {
-		status = "skipped"
+		status = statusSkipped
 	} else if e.Failed {
-		status = "failed"
+		status = statusFailed
 	}
 
 	return status

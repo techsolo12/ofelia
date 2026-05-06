@@ -20,6 +20,11 @@ import (
 
 var ErrNoContainerWithOfeliaEnabled = errors.New("couldn't find containers with label 'ofelia.enabled=true'")
 
+// dockerEventTypeContainer is the Docker event filter "type" value for
+// container-scoped events (vs. image, network, volume, etc.). Docker's API
+// transports these as plain strings.
+const dockerEventTypeContainer = "container"
+
 type DockerHandler struct {
 	ctx            context.Context //nolint:containedctx // holds lifecycle for background goroutines
 	cancel         context.CancelFunc
@@ -386,7 +391,7 @@ func (c *DockerHandler) watchEvents() {
 
 		eventCh, errCh := c.dockerProvider.SubscribeEvents(c.ctx, domain.EventFilter{
 			Filters: map[string][]string{
-				"type":  {"container"},
+				"type":  {dockerEventTypeContainer},
 				"label": {"ofelia.enabled=true"},
 				"event": {
 					// Lifecycle events
