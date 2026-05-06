@@ -17,6 +17,8 @@ import (
 	"github.com/netresearch/go-cron"
 	"golang.org/x/crypto/bcrypt"
 	"gopkg.in/ini.v1"
+
+	"github.com/netresearch/ofelia/core"
 )
 
 // InitCommand creates an interactive wizard for generating Ofelia configuration
@@ -197,7 +199,7 @@ func (c *InitCommand) promptGlobalSettings(global *globalConfig) error {
 
 	logLevelPrompt := promptui.Select{
 		Label:     "Log level",
-		Items:     []string{"panic", "fatal", "error", "warning", "info", "debug", "trace"},
+		Items:     []string{LogLevelPanic, LogLevelFatal, LogLevelError, LogLevelWarning, LogLevelInfo, LogLevelDebug, LogLevelTrace},
 		CursorPos: 4,
 	}
 	_, global.LogLevel, err = logLevelPrompt.Run()
@@ -208,10 +210,15 @@ func (c *InitCommand) promptGlobalSettings(global *globalConfig) error {
 	return nil
 }
 
+// defaultAdminUsername is the seed username offered by the init wizard's
+// web-auth prompt. Users can override it; we keep it as a constant so tests
+// that exercise the wizard's default path don't drift if it changes.
+const defaultAdminUsername = "admin"
+
 func (c *InitCommand) promptWebAuth(global *globalConfig) error {
 	usernamePrompt := promptui.Prompt{
 		Label:   "Username",
-		Default: "admin",
+		Default: defaultAdminUsername,
 		Validate: func(input string) error {
 			if input == "" {
 				return fmt.Errorf("username cannot be empty")
@@ -345,7 +352,7 @@ func (c *InitCommand) promptRunJob() (*runJobConfig, error) {
 	// Schedule
 	schedulePrompt := promptui.Prompt{
 		Label:    "Schedule (cron or @every)",
-		Default:  "@daily",
+		Default:  core.DailySchedule,
 		Validate: validateSchedule,
 	}
 	job.Schedule, err = schedulePrompt.Run()
@@ -441,7 +448,7 @@ func (c *InitCommand) promptLocalJob() (*localJobConfig, error) {
 	// Schedule
 	schedulePrompt := promptui.Prompt{
 		Label:    "Schedule (cron or @every)",
-		Default:  "@hourly",
+		Default:  core.HourlySchedule,
 		Validate: validateSchedule,
 	}
 	job.Schedule, err = schedulePrompt.Run()
@@ -484,7 +491,10 @@ func validateSchedule(schedule string) error {
 	}
 
 	// Check for special descriptors
-	descriptors := []string{"@yearly", "@annually", "@monthly", "@weekly", "@daily", "@midnight", "@hourly"}
+	descriptors := []string{
+		core.YearlySchedule, core.AnnuallySchedule, core.MonthlySchedule, core.WeeklySchedule,
+		core.DailySchedule, core.MidnightSchedule, core.HourlySchedule,
+	}
 	if slices.Contains(descriptors, schedule) {
 		return nil
 	}

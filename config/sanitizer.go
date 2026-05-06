@@ -216,8 +216,8 @@ func (s *Sanitizer) ValidateDockerImage(image string) error {
 // standard cron expressions with optional seconds, month/day names (JAN, MON),
 // and wraparound ranges (FRI-MON).
 func (s *Sanitizer) ValidateCronExpression(expr string) error {
-	// Allow ofelia's triggered-only schedule keywords
-	if expr == "@triggered" || expr == "@manual" || expr == "@none" {
+	// Allow ofelia's triggered-only schedule keywords (see schedule_keywords.go)
+	if expr == scheduleTriggered || expr == scheduleManual || expr == scheduleNone {
 		return nil
 	}
 

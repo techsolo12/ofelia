@@ -95,10 +95,14 @@ type ParsedReference struct {
 	Digest     string
 }
 
+// DefaultImageTag is the implicit tag Docker assigns when an image
+// reference has no explicit ":tag" suffix.
+const DefaultImageTag = "latest"
+
 // ParseRepositoryTag parses a repository:tag string into its components.
 func ParseRepositoryTag(repoTag string) ParsedReference {
 	ref := ParsedReference{
-		Tag: "latest",
+		Tag: DefaultImageTag,
 	}
 
 	// Find the last @ for digest

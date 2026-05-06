@@ -136,8 +136,9 @@ func (v *Validator) ValidateCronExpression(field string, value string) {
 		return
 	}
 
-	// Allow ofelia's triggered-only schedule keywords
-	if value == "@triggered" || value == "@manual" || value == "@none" {
+	// Allow ofelia's triggered-only schedule keywords. These are duplicated
+	// in core/schedule_keywords.go but config can't depend on core (cycle).
+	if value == scheduleTriggered || value == scheduleManual || value == scheduleNone {
 		return
 	}
 
@@ -302,15 +303,18 @@ func (cv *Validator2) validateSpecificStringField(v *Validator, path string, str
 		return // Stop validation if security check fails
 	}
 
-	// Validate based on field type
+	// Validate based on field type. The case strings are user-facing INI key
+	// names; Go struct tags (gcfg:"…" / mapstructure:"…") on Config require
+	// them as literals there too, so extracting constants only relocates the
+	// duplication. Suppressing keeps the switch readable.
 	switch path {
-	case "schedule", "cron":
+	case "schedule", "cron": //nolint:goconst // see comment above switch
 		cv.validateCronField(v, path, str)
-	case "email-to", "email-from":
+	case "email-to", "email-from": //nolint:goconst // see comment above switch
 		cv.validateEmailField(v, path, str)
 	case "web-address", "pprof-address":
 		cv.validateAddressField(v, path, str)
-	case "log-level":
+	case "log-level": //nolint:goconst // see comment above switch
 		cv.validateLogLevelField(v, path, str)
 	case "command", "cmd":
 		cv.validateCommandField(v, path, str)
@@ -461,7 +465,11 @@ func (cv *Validator2) isValidAddress(addr string) bool {
 
 // isValidLogLevel checks if a log level is valid
 func (cv *Validator2) isValidLogLevel(level string) bool {
-	validLevels := []string{"debug", "trace", "info", "notice", "warn", "warning", "error", "fatal", "panic", "critical"}
+	validLevels := []string{
+		logLevelDebug, logLevelTrace, logLevelInfo, logLevelNotice,
+		logLevelWarn, logLevelWarning, logLevelError, logLevelFatal,
+		logLevelPanic, logLevelCritical,
+	}
 	level = strings.ToLower(level)
 	return slices.Contains(validLevels, level)
 }

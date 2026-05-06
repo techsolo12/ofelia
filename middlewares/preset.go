@@ -322,7 +322,7 @@ func ParsePreset(data []byte) (*Preset, error) {
 	// Default Content-Type for POST
 	if preset.Method == http.MethodPost {
 		if _, ok := preset.Headers["Content-Type"]; !ok {
-			preset.Headers["Content-Type"] = "application/json"
+			preset.Headers["Content-Type"] = contentTypeJSON
 		}
 	}
 

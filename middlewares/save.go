@@ -125,8 +125,8 @@ func (m *Save) saveToDisk(ctx *core.Context) error {
 
 func (m *Save) saveContextToDisk(ctx *core.Context, filename string) error {
 	js, _ := json.MarshalIndent(map[string]any{
-		"Job":       ctx.Job,
-		"Execution": ctx.Execution,
+		notificationVarJob:       ctx.Job,
+		notificationVarExecution: ctx.Execution,
 	}, "", "  ")
 
 	if err := m.writeFile(js, filename); err != nil {

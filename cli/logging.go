@@ -13,6 +13,22 @@ import (
 // ErrInvalidLogLevel indicates an invalid log level string was provided.
 var ErrInvalidLogLevel = errors.New("invalid log level")
 
+// Recognized log level names (canonical and legacy/logrus aliases).
+// Exported so other commands (init prompts, validators) can reference them
+// without duplicating string literals.
+const (
+	LogLevelTrace    = "trace"
+	LogLevelDebug    = "debug"
+	LogLevelInfo     = "info"
+	LogLevelNotice   = "notice"
+	LogLevelWarn     = "warn"
+	LogLevelWarning  = "warning"
+	LogLevelError    = "error"
+	LogLevelFatal    = "fatal"
+	LogLevelPanic    = "panic"
+	LogLevelCritical = "critical"
+)
+
 // ApplyLogLevel sets the logging level if level is valid.
 // Returns an error if the level is invalid, with a list of valid options.
 func ApplyLogLevel(level string, lv *slog.LevelVar) error {
@@ -23,13 +39,13 @@ func ApplyLogLevel(level string, lv *slog.LevelVar) error {
 	// Map legacy logrus level names to slog levels
 	var l slog.Level
 	switch strings.ToLower(level) {
-	case "trace", "debug":
+	case LogLevelTrace, LogLevelDebug:
 		l = slog.LevelDebug
-	case "info", "notice":
+	case LogLevelInfo, LogLevelNotice:
 		l = slog.LevelInfo
-	case "warning", "warn":
+	case LogLevelWarning, LogLevelWarn:
 		l = slog.LevelWarn
-	case "error", "fatal", "panic", "critical":
+	case LogLevelError, LogLevelFatal, LogLevelPanic, LogLevelCritical:
 		l = slog.LevelError
 	default:
 		return fmt.Errorf("%w: %q (valid levels are debug, info, warn, error)", ErrInvalidLogLevel, level)

@@ -277,11 +277,11 @@ func getJobType(job core.Job) string {
 func getExecutionStatus(e *core.Execution) string {
 	switch {
 	case e.Failed:
-		return "failed"
+		return statusFailed
 	case e.Skipped:
-		return "skipped"
+		return statusSkipped
 	default:
-		return "successful"
+		return statusSuccessful
 	}
 }
 
@@ -435,10 +435,10 @@ func (w *Webhook) buildWebhookDataWithPreset(ctx *core.Context) map[string]any {
 	}
 
 	return map[string]any{
-		"Job":       data.Job,
-		"Execution": data.Execution,
-		"Host":      data.Host,
-		"Ofelia":    data.Ofelia,
+		notificationVarJob:       data.Job,
+		notificationVarExecution: data.Execution,
+		"Host":                   data.Host,
+		"Ofelia":                 data.Ofelia,
 		"Preset": PresetDataForTemplate{
 			ID:       w.Config.ID,
 			Secret:   w.Config.Secret,

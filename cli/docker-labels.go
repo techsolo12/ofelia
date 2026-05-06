@@ -36,8 +36,8 @@ var globalLabelAllowList = map[string]bool{
 	"enable-strict-validation": true,
 
 	// Slack notifications
-	"slack-webhook":       true,
-	"slack-only-on-error": true,
+	DeprecatedSlackWebhook: true,
+	"slack-only-on-error":  true,
 
 	// Email notifications
 	"smtp-host":            true,
@@ -375,7 +375,7 @@ func (c *Config) filterGlobalLabelKey(key, value, containerName string, globalCo
 
 func hasServiceLabel(labels map[string]string) bool {
 	for k, v := range labels {
-		if k == serviceLabel && v == "true" {
+		if k == serviceLabel && v == "true" { //nolint:goconst // Docker labels are stringly-typed — value is the literal "true"
 			return true
 		}
 	}

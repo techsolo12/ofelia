@@ -11,6 +11,20 @@ import (
 	"time"
 )
 
+// Names of currently deprecated options. Exported so callers (e.g. doctor
+// reports, label allowlists) can reference the canonical name without
+// duplicating string literals.
+const (
+	DeprecatedSlackWebhook = "slack-webhook"
+	DeprecatedPollInterval = "poll-interval"
+	DeprecatedNoPoll       = "no-poll"
+
+	// Normalized key forms (lowercase, no separators) used for
+	// presence-based detection in raw config maps.
+	deprecatedPollIntervalKey = "pollinterval"
+	deprecatedNoPollKey       = "nopoll"
+)
+
 // Deprecation defines a deprecated configuration option
 type Deprecation struct {
 	// Option is the deprecated option name (e.g., "slack-webhook", "poll-interval")
@@ -56,7 +70,7 @@ var deprecationRegistry = &DeprecationRegistry{
 // Deprecations is the central list of all deprecated configuration options
 var Deprecations = []Deprecation{
 	{
-		Option:         "slack-webhook",
+		Option:         DeprecatedSlackWebhook,
 		Replacement:    "[webhook \"name\"] sections with preset=slack",
 		RemovalVersion: "v1.0.0",
 		Message: `Please migrate to the new webhook notification system:
@@ -103,11 +117,11 @@ See documentation: https://github.com/netresearch/ofelia#webhook-notifications`,
 		MigrateFunc: nil,
 	},
 	{
-		Option:         "poll-interval",
+		Option:         DeprecatedPollInterval,
 		Replacement:    "config-poll-interval and docker-poll-interval",
 		RemovalVersion: "v1.0.0",
 		Message:        "Use 'config-poll-interval' for INI file watching and 'docker-poll-interval' for container polling fallback.",
-		KeyName:        "pollinterval", // Normalized key for presence-based detection
+		KeyName:        deprecatedPollIntervalKey, // Normalized key for presence-based detection
 		CheckFunc: func(cfg *Config) bool {
 			return cfg.Docker.PollInterval > 0
 		},
@@ -130,11 +144,11 @@ See documentation: https://github.com/netresearch/ofelia#webhook-notifications`,
 		},
 	},
 	{
-		Option:         "no-poll",
+		Option:         DeprecatedNoPoll,
 		Replacement:    "docker-poll-interval=0",
 		RemovalVersion: "v1.0.0",
 		Message:        "Use 'docker-poll-interval=0' to disable container polling.",
-		KeyName:        "nopoll", // Normalized key for presence-based detection
+		KeyName:        deprecatedNoPollKey, // Normalized key for presence-based detection
 		CheckFunc: func(cfg *Config) bool {
 			return cfg.Docker.DisablePolling
 		},

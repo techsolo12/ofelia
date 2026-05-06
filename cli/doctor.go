@@ -26,6 +26,18 @@ type DoctorCommand struct {
 	configAutoDetected bool
 }
 
+// Diagnostic check category names. These appear in JSON output and the
+// human-readable doctor report, grouping individual checks by area.
+const (
+	categoryConfiguration = "Configuration"
+	categoryDocker        = "Docker"
+	categoryDockerImages  = "Docker Images"
+	categoryJobSchedules  = "Job Schedules"
+)
+
+// Recurring sub-check names within a category.
+const checkNameConnectivity = "Connectivity"
+
 // commonConfigPaths lists config file locations to search (in order of priority)
 var commonConfigPaths = []string{
 	"./ofelia.ini",
@@ -120,7 +132,7 @@ func (c *DoctorCommand) Execute(_ []string) error {
 		c.checkDockerImages(report)
 	} else {
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Docker Images",
+			Category: categoryDockerImages,
 			Name:     "Image Availability",
 			Status:   statusSkip,
 			Message:  "Skipped (Docker connectivity required)",
@@ -154,7 +166,7 @@ func (c *DoctorCommand) checkConfiguration(report *DoctorReport) {
 			}
 			hints = append(hints, "Or specify path with: --config=/path/to/config.ini")
 			report.Checks = append(report.Checks, CheckResult{
-				Category: "Configuration",
+				Category: categoryConfiguration,
 				Name:     "File Exists",
 				Status:   statusFail,
 				Message:  fmt.Sprintf("Config file not found: %s", c.ConfigFile),
@@ -164,7 +176,7 @@ func (c *DoctorCommand) checkConfiguration(report *DoctorReport) {
 		}
 		report.Healthy = false
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Configuration",
+			Category: categoryConfiguration,
 			Name:     "File Readable",
 			Status:   statusFail,
 			Message:  fmt.Sprintf("Cannot read config file: %v", err),
@@ -177,7 +189,7 @@ func (c *DoctorCommand) checkConfiguration(report *DoctorReport) {
 	}
 
 	report.Checks = append(report.Checks, CheckResult{
-		Category: "Configuration",
+		Category: categoryConfiguration,
 		Name:     "File Exists",
 		Status:   statusPass,
 		Message:  c.ConfigFile,
@@ -188,7 +200,7 @@ func (c *DoctorCommand) checkConfiguration(report *DoctorReport) {
 	if err != nil {
 		report.Healthy = false
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Configuration",
+			Category: categoryConfiguration,
 			Name:     "Valid Syntax",
 			Status:   statusFail,
 			Message:  fmt.Sprintf("Parse error: %v", err),
@@ -201,7 +213,7 @@ func (c *DoctorCommand) checkConfiguration(report *DoctorReport) {
 	}
 
 	report.Checks = append(report.Checks, CheckResult{
-		Category: "Configuration",
+		Category: categoryConfiguration,
 		Name:     "Valid Syntax",
 		Status:   statusPass,
 	})
@@ -210,7 +222,7 @@ func (c *DoctorCommand) checkConfiguration(report *DoctorReport) {
 	jobCount := len(conf.RunJobs) + len(conf.LocalJobs) +
 		len(conf.ExecJobs) + len(conf.ServiceJobs)
 	report.Checks = append(report.Checks, CheckResult{
-		Category: "Configuration",
+		Category: categoryConfiguration,
 		Name:     "Jobs Defined",
 		Status:   statusPass,
 		Message:  fmt.Sprintf("%d job(s) configured", jobCount),
@@ -221,7 +233,7 @@ func (c *DoctorCommand) checkConfiguration(report *DoctorReport) {
 	if len(deprecations) > 0 {
 		for _, dep := range deprecations {
 			report.Checks = append(report.Checks, CheckResult{
-				Category: "Configuration",
+				Category: categoryConfiguration,
 				Name:     "Deprecated Option",
 				Status:   statusFail,
 				Message:  fmt.Sprintf("'%s' is deprecated and will be removed in %s", dep.Option, dep.RemovalVersion),
@@ -234,7 +246,7 @@ func (c *DoctorCommand) checkConfiguration(report *DoctorReport) {
 		// Deprecations don't make the report unhealthy, just warn
 	} else {
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Configuration",
+			Category: categoryConfiguration,
 			Name:     "Deprecated Options",
 			Status:   statusPass,
 			Message:  "No deprecated options in use",
@@ -255,7 +267,7 @@ func (c *DoctorCommand) checkWebAuth(report *DoctorReport) {
 	if conf.Global.WebUsername == "" {
 		report.Healthy = false
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Configuration",
+			Category: categoryConfiguration,
 			Name:     "Web Auth Username",
 			Status:   statusFail,
 			Message:  "web-auth-enabled is true but web-username is not set",
@@ -270,7 +282,7 @@ func (c *DoctorCommand) checkWebAuth(report *DoctorReport) {
 	if conf.Global.WebPasswordHash == "" {
 		report.Healthy = false
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Configuration",
+			Category: categoryConfiguration,
 			Name:     "Web Auth Password",
 			Status:   statusFail,
 			Message:  "web-auth-enabled is true but web-password-hash is not set",
@@ -284,7 +296,7 @@ func (c *DoctorCommand) checkWebAuth(report *DoctorReport) {
 
 	if conf.Global.WebSecretKey == "" {
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Configuration",
+			Category: categoryConfiguration,
 			Name:     "Web Auth Secret Key",
 			Status:   statusSkip,
 			Message:  "web-secret-key not set - tokens will not survive daemon restarts",
@@ -297,7 +309,7 @@ func (c *DoctorCommand) checkWebAuth(report *DoctorReport) {
 
 	if conf.Global.WebUsername != "" && conf.Global.WebPasswordHash != "" {
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Configuration",
+			Category: categoryConfiguration,
 			Name:     "Web Auth",
 			Status:   statusPass,
 			Message:  fmt.Sprintf("Configured for user '%s'", conf.Global.WebUsername),
@@ -320,8 +332,8 @@ func (c *DoctorCommand) checkDocker(report *DoctorReport) bool {
 
 	if !hasDockerJobs {
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Docker",
-			Name:     "Connectivity",
+			Category: categoryDocker,
+			Name:     checkNameConnectivity,
 			Status:   statusSkip,
 			Message:  "No Docker-based jobs configured",
 		})
@@ -332,8 +344,8 @@ func (c *DoctorCommand) checkDocker(report *DoctorReport) bool {
 	if err := conf.initDockerHandler(); err != nil {
 		report.Healthy = false
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Docker",
-			Name:     "Connectivity",
+			Category: categoryDocker,
+			Name:     checkNameConnectivity,
 			Status:   statusFail,
 			Message:  fmt.Sprintf("Cannot connect to Docker: %v", err),
 			Hints: []string{
@@ -351,8 +363,8 @@ func (c *DoctorCommand) checkDocker(report *DoctorReport) bool {
 	if provider == nil {
 		report.Healthy = false
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Docker",
-			Name:     "Connectivity",
+			Category: categoryDocker,
+			Name:     checkNameConnectivity,
 			Status:   statusFail,
 			Message:  "Docker provider not initialized",
 			Hints: []string{
@@ -366,8 +378,8 @@ func (c *DoctorCommand) checkDocker(report *DoctorReport) bool {
 	if err := provider.Ping(context.Background()); err != nil {
 		report.Healthy = false
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Docker",
-			Name:     "Connectivity",
+			Category: categoryDocker,
+			Name:     checkNameConnectivity,
 			Status:   statusFail,
 			Message:  fmt.Sprintf("Docker ping failed: %v", err),
 			Hints: []string{
@@ -379,8 +391,8 @@ func (c *DoctorCommand) checkDocker(report *DoctorReport) bool {
 	}
 
 	report.Checks = append(report.Checks, CheckResult{
-		Category: "Docker",
-		Name:     "Connectivity",
+		Category: categoryDocker,
+		Name:     checkNameConnectivity,
 		Status:   statusPass,
 		Message:  "Docker daemon responding",
 	})
@@ -394,7 +406,7 @@ func (c *DoctorCommand) checkSchedules(report *DoctorReport) {
 	if err != nil {
 		// Config error already reported
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Job Schedules",
+			Category: categoryJobSchedules,
 			Name:     "Schedule Validation",
 			Status:   statusSkip,
 			Message:  "Skipped (configuration validation failed)",
@@ -410,7 +422,7 @@ func (c *DoctorCommand) checkSchedules(report *DoctorReport) {
 			allValid = false
 			report.Healthy = false
 			report.Checks = append(report.Checks, CheckResult{
-				Category: "Job Schedules",
+				Category: categoryJobSchedules,
 				Name:     fmt.Sprintf("job-run \"%s\"", name),
 				Status:   statusFail,
 				Message:  fmt.Sprintf("Invalid schedule \"%s\": %v", job.Schedule, err),
@@ -428,7 +440,7 @@ func (c *DoctorCommand) checkSchedules(report *DoctorReport) {
 			allValid = false
 			report.Healthy = false
 			report.Checks = append(report.Checks, CheckResult{
-				Category: "Job Schedules",
+				Category: categoryJobSchedules,
 				Name:     fmt.Sprintf("job-local \"%s\"", name),
 				Status:   statusFail,
 				Message:  fmt.Sprintf("Invalid schedule \"%s\": %v", job.Schedule, err),
@@ -446,7 +458,7 @@ func (c *DoctorCommand) checkSchedules(report *DoctorReport) {
 			allValid = false
 			report.Healthy = false
 			report.Checks = append(report.Checks, CheckResult{
-				Category: "Job Schedules",
+				Category: categoryJobSchedules,
 				Name:     fmt.Sprintf("job-exec \"%s\"", name),
 				Status:   statusFail,
 				Message:  fmt.Sprintf("Invalid schedule \"%s\": %v", job.Schedule, err),
@@ -464,7 +476,7 @@ func (c *DoctorCommand) checkSchedules(report *DoctorReport) {
 			allValid = false
 			report.Healthy = false
 			report.Checks = append(report.Checks, CheckResult{
-				Category: "Job Schedules",
+				Category: categoryJobSchedules,
 				Name:     fmt.Sprintf("job-service-run \"%s\"", name),
 				Status:   statusFail,
 				Message:  fmt.Sprintf("Invalid schedule \"%s\": %v", job.Schedule, err),
@@ -482,7 +494,7 @@ func (c *DoctorCommand) checkSchedules(report *DoctorReport) {
 			allValid = false
 			report.Healthy = false
 			report.Checks = append(report.Checks, CheckResult{
-				Category: "Job Schedules",
+				Category: categoryJobSchedules,
 				Name:     fmt.Sprintf("job-compose \"%s\"", name),
 				Status:   statusFail,
 				Message:  fmt.Sprintf("Invalid schedule \"%s\": %v", job.Schedule, err),
@@ -498,7 +510,7 @@ func (c *DoctorCommand) checkSchedules(report *DoctorReport) {
 		totalJobs := len(conf.RunJobs) + len(conf.LocalJobs) +
 			len(conf.ExecJobs) + len(conf.ServiceJobs) + len(conf.ComposeJobs)
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Job Schedules",
+			Category: categoryJobSchedules,
 			Name:     "All Schedules Valid",
 			Status:   statusPass,
 			Message:  fmt.Sprintf("%d schedule(s) validated", totalJobs),
@@ -521,7 +533,7 @@ func (c *DoctorCommand) checkDockerImages(report *DoctorReport) {
 
 	if len(imageMap) == 0 {
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Docker Images",
+			Category: categoryDockerImages,
 			Name:     "Image Availability",
 			Status:   statusSkip,
 			Message:  "No job-run jobs configured",
@@ -546,7 +558,7 @@ func (c *DoctorCommand) checkDockerImages(report *DoctorReport) {
 			allAvailable = false
 			report.Healthy = false
 			report.Checks = append(report.Checks, CheckResult{
-				Category: "Docker Images",
+				Category: categoryDockerImages,
 				Name:     image,
 				Status:   statusFail,
 				Message:  "Image not found locally",
@@ -559,7 +571,7 @@ func (c *DoctorCommand) checkDockerImages(report *DoctorReport) {
 
 	if allAvailable {
 		report.Checks = append(report.Checks, CheckResult{
-			Category: "Docker Images",
+			Category: categoryDockerImages,
 			Name:     "All Images Available",
 			Status:   statusPass,
 			Message:  fmt.Sprintf("%d image(s) found locally", len(imageMap)),
@@ -599,7 +611,7 @@ func (c *DoctorCommand) outputHuman(report *DoctorReport) error {
 
 	// Group checks by category
 	categories := make(map[string][]CheckResult)
-	categoryOrder := []string{"Configuration", "Docker", "Job Schedules", "Docker Images"}
+	categoryOrder := []string{categoryConfiguration, categoryDocker, categoryJobSchedules, categoryDockerImages}
 
 	for _, check := range report.Checks {
 		categories[check.Category] = append(categories[check.Category], check)
@@ -660,10 +672,10 @@ func (c *DoctorCommand) outputHuman(report *DoctorReport) error {
 // getCategoryIcon returns emoji for category
 func getCategoryIcon(category string) string {
 	icons := map[string]string{
-		"Configuration": "📋",
-		"Docker":        "🐳",
-		"Job Schedules": "📅",
-		"Docker Images": "🖼️",
+		categoryConfiguration: "📋",
+		categoryDocker:        "🐳",
+		categoryJobSchedules:  "📅",
+		categoryDockerImages:  "🖼️",
 	}
 	if icon, ok := icons[category]; ok {
 		return icon
