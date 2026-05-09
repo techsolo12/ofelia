@@ -256,19 +256,26 @@ func TestRetry_JitterCalculation(t *testing.T) {
 //
 // The backoff calculation: delay = min(time.Duration(float64(delay)*policy.BackoffFactor), policy.MaxDelay)
 // If * is mutated to +, /, or -, the delay progression changes.
+//
+// The intended timings are dimensioned so that CI runner jitter (~tens of ms)
+// cannot push a non-multiplicative result above the gap2 threshold:
+//
+//	BackoffFactor=3.0, InitialDelay=50ms, MaxDelay=1s
+//	gap1 expected ~50ms (lower-bounded at 40ms)
+//	gap2 expected ~150ms with *
+//	         expected ~50ms with + (50ms + 3ns ≈ 50ms)
+//	         expected ~17ms with / (50ms / 3.0)
+//	         expected ~50ms with - (50ms - 3ns ≈ 50ms)
+//
+// A gap2 floor of 110ms catches every non-* mutant even with generous CI jitter.
 func TestRetry_BackoffCalculation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	// Use BackoffFactor=3.0 and InitialDelay=10ms
-	// Expected: attempt1 delay=10ms, attempt2 delay=min(30ms, 100ms)=30ms
-	// If * became +: delay would be 10+3=13ns (wrong type mix, but effectively different)
-	// If * became /: delay would be 10/3~3ms
-	// If * became -: delay would be 10-3=7ns
 	policy := &RetryPolicy{
 		MaxAttempts:   3,
-		InitialDelay:  10 * time.Millisecond,
-		MaxDelay:      100 * time.Millisecond,
+		InitialDelay:  50 * time.Millisecond,
+		MaxDelay:      1 * time.Second,
 		BackoffFactor: 3.0,
 		JitterFactor:  0.0,
 		RetryableErrors: func(err error) bool {
@@ -286,21 +293,19 @@ func TestRetry_BackoffCalculation(t *testing.T) {
 		t.Fatalf("expected 3 attempts, got %d", len(delays))
 	}
 
-	// Between attempt 1 and 2: ~10ms delay
+	// Between attempt 1 and 2: ~50ms delay
 	gap1 := delays[1].Sub(delays[0])
-	// Between attempt 2 and 3: ~30ms delay (10ms * 3.0 backoff)
+	// Between attempt 2 and 3: ~150ms delay (50ms * 3.0 backoff)
 	gap2 := delays[2].Sub(delays[1])
 
-	// gap2 should be approximately 3x gap1 (with some tolerance)
-	if gap1 < 5*time.Millisecond {
-		t.Errorf("first delay too short: %v (expected ~10ms)", gap1)
+	// gap1 must respect InitialDelay (allowing for sleep granularity).
+	if gap1 < 40*time.Millisecond {
+		t.Errorf("first delay too short: %v (expected ~50ms)", gap1)
 	}
-	if gap2 < 15*time.Millisecond {
-		t.Errorf("second delay too short: %v (expected ~30ms, should be 3x first)", gap2)
-	}
-	// The second delay should be noticeably longer than the first
-	if gap2 < gap1*2 {
-		t.Errorf("backoff not working: gap1=%v, gap2=%v (expected gap2 ~3x gap1)", gap1, gap2)
+	// gap2 must reflect a multiplicative backoff.  Any non-* mutant produces
+	// a gap below 80ms; CI jitter cannot inflate that past 110ms.
+	if gap2 < 110*time.Millisecond {
+		t.Errorf("backoff not multiplicative: gap2=%v (expected ~150ms, ≥110ms)", gap2)
 	}
 }
 

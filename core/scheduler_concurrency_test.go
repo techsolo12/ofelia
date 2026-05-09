@@ -33,9 +33,13 @@ type MockControlledJob struct {
 }
 
 func NewMockControlledJob(name, schedule string) *MockControlledJob {
+	// startChan and finishChan are buffered so AllowStart/AllowFinish can be
+	// called before Run() reaches its receive without losing the signal.
+	// runningChan and finishedChan are buffered so Run() can signal completion
+	// even when no goroutine is currently waiting.
 	job := &MockControlledJob{
-		startChan:    make(chan struct{}),
-		finishChan:   make(chan struct{}),
+		startChan:    make(chan struct{}, 1),
+		finishChan:   make(chan struct{}, 1),
 		runningChan:  make(chan struct{}, 1),
 		finishedChan: make(chan struct{}, 1),
 	}
@@ -81,17 +85,11 @@ func (j *MockControlledJob) Run(ctx *Context) error {
 }
 
 func (j *MockControlledJob) AllowStart() {
-	select {
-	case j.startChan <- struct{}{}:
-	default:
-	}
+	j.startChan <- struct{}{}
 }
 
 func (j *MockControlledJob) AllowFinish() {
-	select {
-	case j.finishChan <- struct{}{}:
-	default:
-	}
+	j.finishChan <- struct{}{}
 }
 
 func (j *MockControlledJob) WaitForRunning() {
