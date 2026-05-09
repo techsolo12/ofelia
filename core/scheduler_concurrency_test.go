@@ -84,12 +84,24 @@ func (j *MockControlledJob) Run(ctx *Context) error {
 	return nil
 }
 
+// AllowStart signals Run() to proceed past its start gate. Idempotent:
+// the buffered channel absorbs the first send, additional calls are a no-op
+// rather than blocking. This mirrors the runningChan/finishedChan idiom
+// below.
 func (j *MockControlledJob) AllowStart() {
-	j.startChan <- struct{}{}
+	select {
+	case j.startChan <- struct{}{}:
+	default:
+	}
 }
 
+// AllowFinish signals Run() to proceed past its finish gate. Idempotent
+// for the same reason as AllowStart.
 func (j *MockControlledJob) AllowFinish() {
-	j.finishChan <- struct{}{}
+	select {
+	case j.finishChan <- struct{}{}:
+	default:
+	}
 }
 
 func (j *MockControlledJob) WaitForRunning() {
