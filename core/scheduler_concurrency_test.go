@@ -33,9 +33,13 @@ type MockControlledJob struct {
 }
 
 func NewMockControlledJob(name, schedule string) *MockControlledJob {
+	// startChan and finishChan are buffered so AllowStart/AllowFinish can be
+	// called before Run() reaches its receive without losing the signal.
+	// runningChan and finishedChan are buffered so Run() can signal completion
+	// even when no goroutine is currently waiting.
 	job := &MockControlledJob{
-		startChan:    make(chan struct{}),
-		finishChan:   make(chan struct{}),
+		startChan:    make(chan struct{}, 1),
+		finishChan:   make(chan struct{}, 1),
 		runningChan:  make(chan struct{}, 1),
 		finishedChan: make(chan struct{}, 1),
 	}
@@ -80,6 +84,10 @@ func (j *MockControlledJob) Run(ctx *Context) error {
 	return nil
 }
 
+// AllowStart signals Run() to proceed past its start gate. Idempotent:
+// the buffered channel absorbs the first send, additional calls are a no-op
+// rather than blocking. This mirrors the runningChan/finishedChan idiom
+// below.
 func (j *MockControlledJob) AllowStart() {
 	select {
 	case j.startChan <- struct{}{}:
@@ -87,6 +95,8 @@ func (j *MockControlledJob) AllowStart() {
 	}
 }
 
+// AllowFinish signals Run() to proceed past its finish gate. Idempotent
+// for the same reason as AllowStart.
 func (j *MockControlledJob) AllowFinish() {
 	select {
 	case j.finishChan <- struct{}{}:
