@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-05-10
+
+### Changed
+
+- **BREAKING:** Docker Compose service-name based job naming now works as documented. The `com.docker.compose.service` label is no longer filtered out, so the `Cross-Container Job References (Docker Compose)` feature from `docs/CONFIGURATION.md` is functional. Users who relied on the previous (incorrect) job names may see different names. ([#597](https://github.com/netresearch/ofelia/pull/597))
+
+### Added
+
+- End-to-end test harness running the compiled binary as a subprocess — covers scheduling, the `validate` command, SIGTERM/SIGINT graceful shutdown, and real Alpine container runs ([#581](https://github.com/netresearch/ofelia/pull/581))
+
+### Fixed
+
+- `log-level` invalid-value error now lists all accepted levels ([#599](https://github.com/netresearch/ofelia/pull/599))
+- `make lint` works again — `golangci-lint` is now installed via the v2 module path ([#600](https://github.com/netresearch/ofelia/pull/600))
+- `.envrc` hooks detection inside git worktrees ([#598](https://github.com/netresearch/ofelia/pull/598))
+- `.gitignore` `/ofelia` pattern is anchored so it cannot shadow source files ([#574](https://github.com/netresearch/ofelia/pull/574))
+- Stabilize flaky tests for scheduler shutdown, retry backoff, and rate limiter ([#582](https://github.com/netresearch/ofelia/pull/582), [#601](https://github.com/netresearch/ofelia/pull/601))
+
+### Security
+
+- Bump Go to 1.26.2 for stdlib security fixes ([#557](https://github.com/netresearch/ofelia/pull/557))
+
+### Dependencies
+
+- Bump `github.com/netresearch/go-cron` 0.13.1 → 0.14.0 ([#553](https://github.com/netresearch/ofelia/pull/553), [#563](https://github.com/netresearch/ofelia/pull/563))
+- Bump `github.com/docker/cli` 29.3.0 → 29.4.0 ([#548](https://github.com/netresearch/ofelia/pull/548), [#559](https://github.com/netresearch/ofelia/pull/559))
+- Bump `github.com/docker/go-connections` 0.6.0 → 0.7.0 ([#564](https://github.com/netresearch/ofelia/pull/564))
+- Bump `github.com/go-playground/validator/v10` 10.30.1 → 10.30.2 ([#552](https://github.com/netresearch/ofelia/pull/552))
+- Bump `github.com/go-viper/mapstructure/v2` 2.4.0 → 2.5.0 ([#549](https://github.com/netresearch/ofelia/pull/549))
+- Bump `go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp` 1.42.0 → 1.43.0 ([#556](https://github.com/netresearch/ofelia/pull/556))
+- Bump `golang.org/x/crypto`, `golang.org/x/term`, `golang.org/x/text` ([#558](https://github.com/netresearch/ofelia/pull/558), [#560](https://github.com/netresearch/ofelia/pull/560), [#561](https://github.com/netresearch/ofelia/pull/561))
+- Bump go-dependencies group ([#596](https://github.com/netresearch/ofelia/pull/596))
+- Bump `alpine` Docker base image ([#569](https://github.com/netresearch/ofelia/pull/569))
+- Bump GitHub Actions groups ([#550](https://github.com/netresearch/ofelia/pull/550), [#554](https://github.com/netresearch/ofelia/pull/554), [#562](https://github.com/netresearch/ofelia/pull/562))
+
+### CI / Build
+
+- Adopt unified single-build release pipeline via `netresearch/.github` reusable workflows ([#566](https://github.com/netresearch/ofelia/pull/566), [#587](https://github.com/netresearch/ofelia/pull/587))
+- Migrate auto-merge to org-level reusable workflow ([#567](https://github.com/netresearch/ofelia/pull/567))
+- Drop `integration.yml` — superseded by `go-check` ([#579](https://github.com/netresearch/ofelia/pull/579))
+- Stop Trivy FS scan from blocking PRs on pre-existing CVEs ([#555](https://github.com/netresearch/ofelia/pull/555))
+- Fix auto-merge for Dependabot/Renovate PRs ([#551](https://github.com/netresearch/ofelia/pull/551))
+- Use cosign `--bundle` for checksums signing ([#547](https://github.com/netresearch/ofelia/pull/547))
+- Grant `security-events: write` to satisfy reusable workflow ([#585](https://github.com/netresearch/ofelia/pull/585))
+
+### Refactor
+
+- Extract repeated string literals flagged by `goconst` ([#599](https://github.com/netresearch/ofelia/pull/599))
+
 ## [0.23.1] - 2026-03-23
 
 ### Fixed
