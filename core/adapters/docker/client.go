@@ -6,7 +6,9 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -16,6 +18,11 @@ import (
 
 	"github.com/netresearch/ofelia/core/ports"
 )
+
+// defaultNegotiateTimeout bounds the initial Docker API version negotiation.
+// Used both as the DefaultConfig value and as the fallback when callers pass
+// a non-positive NegotiateTimeout.
+const defaultNegotiateTimeout = 30 * time.Second
 
 // Client implements ports.DockerClient using the official Docker SDK.
 type Client struct {
@@ -77,7 +84,7 @@ func DefaultConfig() *ClientConfig {
 		IdleConnTimeout:       90 * time.Second,
 		DialTimeout:           30 * time.Second,
 		ResponseHeaderTimeout: 120 * time.Second,
-		NegotiateTimeout:      30 * time.Second,
+		NegotiateTimeout:      defaultNegotiateTimeout,
 	}
 }
 
@@ -126,11 +133,22 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 	// successful path is unaffected. See https://github.com/netresearch/ofelia/issues/608.
 	negotiateTimeout := config.NegotiateTimeout
 	if negotiateTimeout <= 0 {
-		negotiateTimeout = 30 * time.Second
+		negotiateTimeout = defaultNegotiateTimeout
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), negotiateTimeout)
 	defer cancel()
 	sdk.NegotiateAPIVersion(ctx)
+	// NegotiateAPIVersion swallows ping errors silently. Surface a deadline
+	// hit so operators can correlate startup slowness with daemon health
+	// rather than chasing phantom bugs - context cancellation is the only
+	// observable signal the SDK leaves us.
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		slog.Default().Warn(
+			"Docker API version negotiation timed out; continuing with default API version",
+			"timeout", negotiateTimeout,
+			"hint", "check Docker daemon health and DOCKER_HOST reachability",
+		)
+	}
 
 	return newClientFromSDK(sdk), nil
 }

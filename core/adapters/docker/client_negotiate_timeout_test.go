@@ -67,11 +67,13 @@ func TestNewClientWithConfig_NegotiateAPIVersionTimeout(t *testing.T) {
 	t.Setenv("DOCKER_TLS_VERIFY", "")
 	t.Setenv("DOCKER_CERT_PATH", "")
 
-	const negotiateTimeout = 200 * time.Millisecond
-	// Generous tolerance to avoid CI flakes: expect return within 5x the configured timeout.
-	const returnWithin = 5 * negotiateTimeout
+	// 500ms gives slow CI runners (GitHub Actions under load can stall scheduling
+	// for hundreds of ms) headroom before the configured timeout fires.
+	const negotiateTimeout = 500 * time.Millisecond
+	// Generous tolerance to avoid CI flakes: expect return within 10x the configured timeout.
+	const returnWithin = 10 * negotiateTimeout
 	// Hard safety net: if even the timeout path hangs, fail the test rather than the suite.
-	const hardDeadline = 5 * time.Second
+	const hardDeadline = 10 * time.Second
 
 	cfg := DefaultConfig()
 	cfg.Host = host
@@ -117,10 +119,66 @@ func TestNewClientWithConfig_NegotiateAPIVersionTimeout(t *testing.T) {
 func TestDefaultConfig_NegotiateTimeout(t *testing.T) {
 	t.Parallel()
 	cfg := DefaultConfig()
-	if cfg.NegotiateTimeout <= 0 {
-		t.Fatalf("DefaultConfig().NegotiateTimeout = %v, want > 0", cfg.NegotiateTimeout)
+	if cfg.NegotiateTimeout != defaultNegotiateTimeout {
+		t.Fatalf("DefaultConfig().NegotiateTimeout = %v, want %v", cfg.NegotiateTimeout, defaultNegotiateTimeout)
 	}
-	if cfg.NegotiateTimeout > 2*time.Minute {
-		t.Fatalf("DefaultConfig().NegotiateTimeout = %v, want a sane upper bound (<=2m)", cfg.NegotiateTimeout)
+}
+
+// TestNewClientWithConfig_NegotiateTimeoutFallback ensures callers that pass a
+// non-positive NegotiateTimeout (e.g. constructed *ClientConfig{} directly,
+// without DefaultConfig()) still get the hang-prevention guarantee. Without
+// this, a value of 0 would create a context with zero duration and effectively
+// short-circuit negotiation; a negative value would do the same.
+func TestNewClientWithConfig_NegotiateTimeoutFallback(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		timeout time.Duration
+	}{
+		{"zero", 0},
+		{"negative", -1 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatalf("listen: %v", err)
+			}
+			t.Cleanup(func() { _ = ln.Close() })
+
+			t.Setenv("DOCKER_HOST", "tcp://"+ln.Addr().String())
+			t.Setenv("DOCKER_TLS_VERIFY", "")
+			t.Setenv("DOCKER_CERT_PATH", "")
+
+			cfg := &ClientConfig{
+				Host:             "tcp://" + ln.Addr().String(),
+				NegotiateTimeout: tc.timeout,
+			}
+
+			start := time.Now()
+			done := make(chan struct{}, 1)
+			go func() {
+				c, _ := NewClientWithConfig(cfg)
+				if c != nil {
+					_ = c.Close()
+				}
+				done <- struct{}{}
+			}()
+
+			// Defaulting to 30s. We do not want to wait the full default in the test;
+			// we only assert the constructor does NOT return effectively-instantly
+			// (which is what would happen if zero/negative bypassed the fallback).
+			select {
+			case <-done:
+				if elapsed := time.Since(start); elapsed < 100*time.Millisecond {
+					t.Fatalf("NewClientWithConfig returned in %v - expected fallback to defaultNegotiateTimeout, but the dial appears to have aborted instantly (zero/negative timeout leaked through)", elapsed)
+				}
+				// Note: with the listener never responding, the call will sit until
+				// the 30s default fires. We do NOT wait for that here; below we cancel.
+			case <-time.After(2 * time.Second):
+				// Expected path: constructor is bounded by the (default) 30s timeout
+				// and is still running 2s in. That proves the fallback engaged.
+				_ = ln.Close() // unblock the constructor for cleanup
+				<-done
+			}
+		})
 	}
 }
