@@ -116,10 +116,11 @@ func NewConfig(logger *slog.Logger) *Config {
 	// NOTE: the Docker label sync path builds a scratch parsed Config via
 	// newScratchConfig, which mirrors this same alias so mapstructure-decoded
 	// label values land in the live WebhookConfigs.Global store too (#641).
-	// Label-sourced changes to SSRF-sensitive fields (webhook-allowed-hosts,
-	// webhook-preset-cache-ttl, ...) are still gated upstream by the
-	// allow-list filter in splitContainersLabelsIntoJobMapsByType / by
-	// mergeWebhookConfigs — see PR #637.
+	// mergeWebhookConfigs / syncWebhookConfigs then forward the
+	// operator-tunable, non-SSRF globals (webhook-webhooks,
+	// webhook-preset-cache-ttl) into the live config. The SSRF-sensitive
+	// globals (webhook-allowed-hosts and friends) stay INI-only by design —
+	// see #486, #640 and the comment above globalLabelAllowList.
 	c.WebhookConfigs.Global = &c.Global.WebhookGlobalConfig
 	return c
 }
@@ -414,6 +415,35 @@ func (c *Config) refreshWebhookManagerOnGlobalChange() {
 	if err := c.WebhookConfigs.InitManager(); err != nil {
 		c.logger.Error("Failed to re-initialize webhook manager during live-reload", "error", err)
 	}
+}
+
+// mergeReloadedWebhookSections copies newly added [webhook "name"] sections
+// from the reloaded INI's parsed config into the live config. Returns true
+// when at least one new webhook was added so the caller can re-init the
+// webhook manager (registering the new entries and refreshing the URL
+// validator). INI-defined webhooks already present are left untouched: a
+// rename of an existing section is treated as a separate add (the operator
+// can clear stale entries by restarting the daemon if needed). See #640.
+func (c *Config) mergeReloadedWebhookSections(parsed *Config) bool {
+	if parsed == nil || parsed.WebhookConfigs == nil {
+		return false
+	}
+	if c.WebhookConfigs == nil {
+		c.WebhookConfigs = NewWebhookConfigs()
+	}
+	if c.WebhookConfigs.iniWebhookNames == nil {
+		c.WebhookConfigs.iniWebhookNames = make(map[string]struct{})
+	}
+	added := false
+	for name, wh := range parsed.WebhookConfigs.Webhooks {
+		if _, exists := c.WebhookConfigs.Webhooks[name]; exists {
+			continue
+		}
+		c.WebhookConfigs.Webhooks[name] = wh
+		c.WebhookConfigs.iniWebhookNames[name] = struct{}{}
+		added = true
+	}
+	return added
 }
 
 func (c *Config) initDockerHandler() error {
@@ -869,6 +899,17 @@ func (c *Config) iniConfigUpdate() error {
 		if err := ApplyLogLevel(c.Global.LogLevel, c.levelVar); err != nil {
 			c.logger.Warn(fmt.Sprintf("Failed to apply global log level (using default): %v", err))
 		}
+	}
+
+	// Surface newly added [webhook "name"] sections from the reloaded INI into
+	// the live config. Without this step a brand-new webhook block has no
+	// effect until restart — only the embedded global fields benefit from the
+	// dual-store collapse from #620. INI source wins on collisions; existing
+	// entries are left untouched (label-defined entries keep their state, and
+	// a webhook re-named in the INI is treated as a removal-then-add at the
+	// next reconcile rather than a silent overwrite). See #640.
+	if c.mergeReloadedWebhookSections(parsed) {
+		c.refreshWebhookManagerOnGlobalChange()
 	}
 
 	execPrep := func(name string, j *ExecJobConfig) {
