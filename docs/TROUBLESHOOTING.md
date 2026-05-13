@@ -222,6 +222,36 @@ See [#609](https://github.com/netresearch/ofelia/issues/609).
 Set `DOCKER_HOST` (or the `--docker-host` flag / `docker-host` config key)
 to a value using one of the supported schemes above.
 
+### TLS Handshake / Cert Path Errors (v0.24.1+)
+
+**Symptoms**:
+
+```
+Docker TLS config could not be loaded; falling back to default TLS without client cert / pinned CA
+```
+
+or, when the daemon enforces mTLS:
+
+```
+SDK provider failed to connect to Docker: pinging docker: ... x509: certificate signed by unknown authority
+```
+
+**Affected**: `DOCKER_HOST=https://...` or `DOCKER_HOST=tcp+tls://...` with `DOCKER_TLS_VERIFY=1` and `DOCKER_CERT_PATH=...` set.
+
+**Root Cause** (pre-v0.24.1): Ofelia's custom HTTP client overwrote the SDK's TLS-configured transport, silently dialing without the configured client cert and pinned CA. Operators believing they had mTLS were getting unauthenticated connections. Fixed in v0.24.1 — Ofelia now reads `DOCKER_CERT_PATH` / `DOCKER_TLS_VERIFY` directly and applies the cert material to the transport.
+
+**Resolution checklist**:
+
+1. `DOCKER_CERT_PATH` must point at a directory containing all three files: `ca.pem`, `cert.pem`, `key.pem`. The Docker SDK does not synthesize any of them.
+2. `key.pem` must be readable by the Ofelia process. Recommended mode: `0600`.
+3. `DOCKER_TLS_VERIFY` semantics are quirky and inherited from the upstream SDK — **any non-empty value** (`"1"`, `"0"`, `"yes"`, `"no"`) enables verification. Only an unset / empty value disables it.
+4. If you need to opt out of verification programmatically, set `ClientConfig.TLSVerify = ptr(false)`. The explicit config value always wins over the env var.
+
+**References**:
+
+- Issue: [#607](https://github.com/netresearch/ofelia/issues/607)
+- Fix: [#613](https://github.com/netresearch/ofelia/pull/613)
+
 ### HTTP/2 Protocol Errors (v0.11.0 Only)
 
 **Symptoms**:

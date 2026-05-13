@@ -6,17 +6,20 @@ package docker
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/docker/docker/client"
+	"github.com/docker/go-connections/tlsconfig"
 
 	"github.com/netresearch/ofelia/core/ports"
 )
@@ -114,6 +117,19 @@ type ClientConfig struct {
 	// Set to 0 to inherit the default (see DefaultConfig). Use a small value
 	// to fail fast in tests; production typically wants 10-30s.
 	NegotiateTimeout time.Duration
+
+	// TLSCertPath is the directory containing TLS material (ca.pem, cert.pem,
+	// key.pem) for HTTPS Docker hosts. When empty, the DOCKER_CERT_PATH
+	// environment variable is consulted instead. If both are empty, no TLS
+	// configuration is applied (mirroring docker/docker's
+	// WithTLSClientConfigFromEnv).
+	TLSCertPath string
+
+	// TLSVerify controls whether the server certificate is verified for HTTPS
+	// Docker hosts. When nil, the DOCKER_TLS_VERIFY environment variable is
+	// consulted: any non-empty value enables verification (mirroring
+	// docker/docker's WithTLSClientConfigFromEnv).
+	TLSVerify *bool
 }
 
 // DefaultConfig returns a default configuration.
@@ -253,7 +269,15 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 	// Determine if we should use HTTP/2
 	// Docker daemon only supports HTTP/2 over TLS (ALPN negotiation)
 	// For Unix sockets and plain TCP, we use HTTP/1.1
+	//
+	// Mirror the SDK's host-resolution precedence locally so callers that
+	// invoke createHTTPClient directly (most tests, plus future internal
+	// callers) get the same dialer/TLS choice as NewClientWithConfig:
+	// explicit config.Host > DOCKER_HOST env > client.DefaultDockerHost.
 	host := config.Host
+	if host == "" {
+		host = os.Getenv(client.EnvOverrideHost)
+	}
 	if host == "" {
 		host = client.DefaultDockerHost
 	}
@@ -279,9 +303,25 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 		}
 		// HTTP/2 not supported on Unix sockets
 		transport.ForceAttemptHTTP2 = false
-	case "https":
-		// TLS-backed connections can use HTTP/2 via ALPN.
+	case "https", "tcp+tls":
+		// HTTPS / tcp+tls connections can use HTTP/2 via ALPN.
+		// tcp+tls is matched here defensively even though PR #612 currently
+		// rejects it at validateAndNormalizeHost; if that allow-list is
+		// re-enabled, this branch ensures the connection actually gets TLS.
 		transport.ForceAttemptHTTP2 = true
+		applyDockerTLS(transport, config)
+	case "tcp":
+		// Plain tcp:// is the legacy way to talk TLS to a remote daemon:
+		// the docker CLI / SDK upgrade the connection to HTTPS when
+		// DOCKER_TLS_VERIFY / DOCKER_CERT_PATH are set, even with a tcp://
+		// URL. Mirror that here so users following Docker's standard mTLS
+		// setup don't see a silent plaintext downgrade. When no TLS env /
+		// config is present, applyDockerTLS is a no-op and we stay on
+		// plain TCP / HTTP/1.1.
+		if hasTLSMaterial(config) {
+			transport.ForceAttemptHTTP2 = true
+		}
+		applyDockerTLS(transport, config)
 	default:
 		// tcp, http, npipe, or empty: plain transport, HTTP/1.1.
 		// (npipe on Windows relies on the SDK's build-tagged dialer; on other
@@ -307,17 +347,7 @@ func schemeOf(host string) string {
 }
 
 // validateAndNormalizeHost validates that host uses a supported scheme and
-// returns the host with the scheme lowercased. The path/authority portion
-// is preserved as-is (Unix socket paths are case-sensitive on most
-// filesystems, so lowercasing the whole string would break valid
-// configurations like "unix:///Var/Run/docker.sock").
-//
-// An empty host is returned unchanged — callers fall back to DOCKER_HOST or
-// client.DefaultDockerHost downstream.
-//
-// Unsupported schemes (ssh, fd, tcp+tls used incorrectly, etc.) return
-// ErrUnsupportedDockerHostScheme wrapped with the offending value and a list
-// of supported schemes.
+// returns the host with the scheme lowercased.
 func validateAndNormalizeHost(host string) (string, error) {
 	if host == "" {
 		return "", nil
@@ -331,7 +361,6 @@ func validateAndNormalizeHost(host string) (string, error) {
 
 	scheme := strings.ToLower(rawScheme)
 	if slices.Contains(supportedDockerHostSchemes, scheme) {
-		// Reassemble with the lowercase scheme; preserve the rest verbatim.
 		return scheme + "://" + rest, nil
 	}
 
@@ -347,6 +376,76 @@ func formatSupportedSchemes() string {
 		parts[i] = s + "://"
 	}
 	return strings.Join(parts, ", ")
+}
+
+// hasTLSMaterial reports whether either the explicit ClientConfig fields or
+// the DOCKER_CERT_PATH env var would cause resolveTLSConfig to produce a
+// non-nil *tls.Config. Used to decide whether tcp:// should be upgraded to
+// HTTPS (mirroring the docker CLI's behavior).
+func hasTLSMaterial(config *ClientConfig) bool {
+	if config.TLSCertPath != "" {
+		return true
+	}
+	return os.Getenv(client.EnvOverrideCertPath) != ""
+}
+
+// applyDockerTLS resolves TLS material and assigns it to the transport,
+// surfacing misconfiguration via slog rather than silently downgrading.
+// No-op when no TLS material is configured.
+func applyDockerTLS(transport *http.Transport, config *ClientConfig) {
+	tlsCfg, err := resolveTLSConfig(config)
+	if err != nil {
+		slog.Default().Warn(
+			"Docker TLS config could not be loaded; falling back to default TLS without client cert / pinned CA",
+			"error", err,
+			"hint", "verify DOCKER_CERT_PATH points at a directory containing readable ca.pem, cert.pem, key.pem",
+		)
+		return
+	}
+	if tlsCfg != nil {
+		transport.TLSClientConfig = tlsCfg
+	}
+}
+
+// resolveTLSConfig builds a *tls.Config for an HTTPS Docker host using the
+// ClientConfig fields with fallback to DOCKER_CERT_PATH / DOCKER_TLS_VERIFY
+// environment variables. Returns a nil *tls.Config (with a nil error) when
+// no cert path is configured — mirroring docker/docker's
+// WithTLSClientConfigFromEnv: empty cert path means no TLS modification.
+//
+// Precedence:
+//   - ClientConfig.TLSCertPath > DOCKER_CERT_PATH env > none
+//   - ClientConfig.TLSVerify   > DOCKER_TLS_VERIFY env (any non-empty value
+//     enables verification, matching the SDK's semantics)
+func resolveTLSConfig(config *ClientConfig) (*tls.Config, error) {
+	certPath := config.TLSCertPath
+	if certPath == "" {
+		certPath = os.Getenv(client.EnvOverrideCertPath)
+	}
+	if certPath == "" {
+		//nolint:nilnil // sentinel "no TLS configured" matches SDK semantics
+		return nil, nil
+	}
+
+	var verify bool
+	if config.TLSVerify != nil {
+		verify = *config.TLSVerify
+	} else {
+		// Mirror docker/docker: InsecureSkipVerify = (DOCKER_TLS_VERIFY == "").
+		// Any non-empty value (including "0") implies verify.
+		verify = os.Getenv(client.EnvTLSVerify) != ""
+	}
+
+	tlsCfg, err := tlsconfig.Client(tlsconfig.Options{
+		CAFile:             filepath.Join(certPath, "ca.pem"),
+		CertFile:           filepath.Join(certPath, "cert.pem"),
+		KeyFile:            filepath.Join(certPath, "key.pem"),
+		InsecureSkipVerify: !verify,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("loading docker TLS config from %s (expected ca.pem, cert.pem, key.pem): %w", certPath, err)
+	}
+	return tlsCfg, nil
 }
 
 // Containers returns the container service.
