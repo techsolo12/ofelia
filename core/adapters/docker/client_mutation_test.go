@@ -4,7 +4,9 @@
 package docker
 
 import (
+	"errors"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 )
@@ -205,5 +207,159 @@ func TestClientConfig_PoolingOptions(t *testing.T) {
 				t.Errorf("MaxIdleConnsPerHost: got %d, want %d", transport.MaxIdleConnsPerHost, tc.config.MaxIdleConnsPerHost)
 			}
 		})
+	}
+}
+
+// TestCreateHTTPClient_UnsupportedSchemes verifies that DOCKER_HOST values with
+// unsupported URL schemes are rejected at construction with a clear error,
+// instead of silently falling through to a plain-TCP transport.
+//
+// See: https://github.com/netresearch/ofelia/issues/609
+func TestCreateHTTPClient_UnsupportedSchemes(t *testing.T) {
+	t.Parallel()
+
+	// Note: tcp+tls:// is intentionally NOT in this list — it is on the
+	// supported allow-list (treated like https for transport selection) to
+	// prevent the silent TLS downgrade described in the issue.
+	testCases := []struct {
+		name string
+		host string
+	}{
+		{
+			name: "ssh_scheme",
+			host: "ssh://user@docker-host:22",
+		},
+		{
+			name: "fd_scheme",
+			host: "fd://",
+		},
+		{
+			name: "bogus_scheme",
+			host: "gopher://something",
+		},
+		{
+			name: "no_scheme",
+			host: "127.0.0.1:2375",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := NewClientWithConfig(&ClientConfig{Host: tc.host})
+			if err == nil {
+				t.Fatalf("expected error for unsupported scheme %q, got nil", tc.host)
+			}
+			if !errors.Is(err, ErrUnsupportedDockerHostScheme) {
+				t.Errorf("expected ErrUnsupportedDockerHostScheme for %q, got %v", tc.host, err)
+			}
+			// Error message must list at least one supported scheme so operators
+			// know what to switch to.
+			if !strings.Contains(err.Error(), "unix://") {
+				t.Errorf("expected error message to list supported schemes (e.g. unix://), got %q", err.Error())
+			}
+		})
+	}
+}
+
+// TestValidateAndNormalizeHost covers the host scheme validation helper directly.
+// It verifies case-insensitivity (RFC 3986: schemes are case-insensitive) and
+// the allow-list of supported transports.
+func TestValidateAndNormalizeHost(t *testing.T) {
+	t.Parallel()
+
+	testCases := []struct {
+		name      string
+		input     string
+		want      string
+		wantErr   bool
+		errSentry error
+	}{
+		// Supported schemes - lowercase.
+		{name: "unix_lowercase", input: "unix:///var/run/docker.sock", want: "unix:///var/run/docker.sock"},
+		{name: "tcp_lowercase", input: "tcp://127.0.0.1:2375", want: "tcp://127.0.0.1:2375"},
+		{name: "http_lowercase", input: "http://127.0.0.1:2375", want: "http://127.0.0.1:2375"},
+		{name: "https_lowercase", input: "https://127.0.0.1:2376", want: "https://127.0.0.1:2376"},
+		{name: "npipe_lowercase", input: `npipe:////./pipe/docker_engine`, want: `npipe:////./pipe/docker_engine`},
+
+		// Case-insensitivity: schemes are normalized to lowercase, paths preserved.
+		{name: "tcp_uppercase", input: "TCP://127.0.0.1:2375", want: "tcp://127.0.0.1:2375"},
+		{name: "unix_uppercase", input: "UNIX:///var/run/docker.sock", want: "unix:///var/run/docker.sock"},
+		{name: "https_mixed", input: "HtTpS://127.0.0.1:2376", want: "https://127.0.0.1:2376"},
+
+		// Path casing is preserved (only scheme is lowercased).
+		{name: "unix_mixed_path", input: "UNIX:///Var/Run/docker.sock", want: "unix:///Var/Run/docker.sock"},
+
+		// Empty string passes through (caller supplies default).
+		{name: "empty_string", input: "", want: ""},
+
+		// tcp+tls:// is supported (treated like https for transport selection).
+		{name: "tcp_plus_tls", input: "tcp+tls://127.0.0.1:2376", want: "tcp+tls://127.0.0.1:2376"},
+
+		// Unsupported schemes.
+		{name: "ssh", input: "ssh://docker-host", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
+		{name: "fd", input: "fd://", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
+		{name: "gopher", input: "gopher://something", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
+
+		// Missing scheme separator.
+		{name: "no_scheme", input: "127.0.0.1:2375", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := validateAndNormalizeHost(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("input %q: expected error, got nil (result=%q)", tc.input, got)
+				}
+				if tc.errSentry != nil && !errors.Is(err, tc.errSentry) {
+					t.Errorf("input %q: expected errors.Is(err, %v), got %v", tc.input, tc.errSentry, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("input %q: unexpected error: %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Errorf("input %q: got %q, want %q", tc.input, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestNewClientWithConfig_NormalizesDockerHostEnv verifies that DOCKER_HOST
+// environment variables with uppercase schemes are normalized to lowercase
+// before scheme-dispatch, instead of falling through to the plain-TCP default.
+//
+// Cannot use t.Parallel() — t.Setenv is incompatible with parallel subtests.
+func TestNewClientWithConfig_NormalizesDockerHostEnv(t *testing.T) {
+	// 127.0.0.1:0 is unreachable (port 0); construction succeeds but no real
+	// connection is attempted (API negotiation is best-effort and tolerates
+	// failure at this layer for unit-test purposes).
+	t.Setenv("DOCKER_HOST", "TCP://127.0.0.1:0")
+
+	// We don't care if the actual connection fails — we care that construction
+	// validates the scheme and doesn't reject a valid (if uppercase) TCP host.
+	_, err := NewClientWithConfig(&ClientConfig{})
+	if err != nil && errors.Is(err, ErrUnsupportedDockerHostScheme) {
+		t.Fatalf("uppercase TCP:// scheme should be normalized, not rejected: %v", err)
+	}
+}
+
+// TestCreateHTTPClient_NpipeTransport documents the npipe:// behavior decision:
+// npipe:// is on the allow-list (so Windows builds work transparently), but on
+// non-Windows the transport falls back to the default (plain TCP) configuration
+// — the actual named-pipe dialer lives in the SDK and is build-tagged. We assert
+// only that construction does not return ErrUnsupportedDockerHostScheme for
+// npipe://, mirroring the documented contract.
+func TestCreateHTTPClient_NpipeTransport(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewClientWithConfig(&ClientConfig{Host: `npipe:////./pipe/docker_engine`})
+	if err != nil && errors.Is(err, ErrUnsupportedDockerHostScheme) {
+		t.Errorf("npipe:// should be on the allow-list, got %v", err)
 	}
 }

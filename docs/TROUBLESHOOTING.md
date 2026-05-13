@@ -181,6 +181,43 @@ docker exec ofelia id
 - TCP socket should only bind to localhost, not 0.0.0.0
 - Consider the security implications before disabling userns-remap in production
 
+### Unsupported `DOCKER_HOST` Scheme
+
+**Symptoms**:
+```
+Error: creating docker client: unsupported DOCKER_HOST scheme: "ssh://"; supported schemes: unix://, tcp://, tcp+tls://, http://, https://, npipe://
+```
+
+**Root Cause**:
+Ofelia's Docker adapter validates the `DOCKER_HOST` URL scheme at startup
+against an explicit allow-list. Earlier versions silently fell through to a
+plain-TCP transport for unrecognized schemes (e.g. `ssh://`, `fd://`,
+`tcp+tls://`), which produced opaque dial errors or silent TLS downgrades.
+See [#609](https://github.com/netresearch/ofelia/issues/609).
+
+**Supported schemes** (case-insensitive — `TCP://` is normalized to `tcp://`):
+
+| Scheme | Use case | Transport |
+| --- | --- | --- |
+| `unix://` | Default on Linux/macOS | Unix domain socket, HTTP/1.1 |
+| `tcp://` | Plain TCP to a remote daemon | TCP, HTTP/1.1 (no HTTP/2) |
+| `tcp+tls://` | TLS over TCP | TLS-tunneled, HTTP/2 via ALPN |
+| `http://` | Plain HTTP to a remote daemon | TCP, HTTP/1.1 |
+| `https://` | HTTPS to a remote daemon | TLS, HTTP/2 via ALPN |
+| `npipe://` | Windows named pipe (Windows builds only) | Named pipe, HTTP/1.1 |
+
+**Unsupported schemes** (rejected at startup):
+
+- `ssh://` — Docker over SSH. Not wired up; use an SSH-forwarded socket
+  instead and point `DOCKER_HOST` at the forwarded `unix://` path.
+- `fd://` — systemd socket activation. Not applicable to Ofelia's startup
+  model; bind Ofelia to the actual `unix://` socket path.
+- Any other scheme (e.g. `gopher://`, `tcp+ssh://`).
+
+**Solution**:
+Set `DOCKER_HOST` (or the `--docker-host` flag / `docker-host` config key)
+to a value using one of the supported schemes above.
+
 ### HTTP/2 Protocol Errors (v0.11.0 Only)
 
 **Symptoms**:

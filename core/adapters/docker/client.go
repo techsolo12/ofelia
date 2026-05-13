@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -23,6 +24,33 @@ import (
 // Used both as the DefaultConfig value and as the fallback when callers pass
 // a non-positive NegotiateTimeout.
 const defaultNegotiateTimeout = 30 * time.Second
+
+// ErrUnsupportedDockerHostScheme is returned when a DOCKER_HOST value uses
+// a URL scheme that this adapter does not support. The error message lists
+// the supported schemes so operators get an actionable failure at startup
+// instead of an opaque dial error later.
+//
+// Supported schemes (case-insensitive): unix, tcp, tcp+tls, http, https, npipe.
+// Notably unsupported: ssh, fd. See docs/TROUBLESHOOTING.md.
+//
+// Tracking: https://github.com/netresearch/ofelia/issues/609
+var ErrUnsupportedDockerHostScheme = errors.New("unsupported DOCKER_HOST scheme")
+
+// supportedDockerHostSchemes is the allow-list of URL schemes accepted by
+// NewClientWithConfig. Schemes are compared case-insensitively.
+//
+//   - unix:    Unix domain socket (default on Linux/macOS).
+//   - tcp:     Plain TCP (HTTP/1.1, no HTTP/2).
+//   - tcp+tls: TLS over TCP; treated like https for transport selection.
+//   - http:    Plain HTTP over TCP (HTTP/1.1, no HTTP/2).
+//   - https:   HTTPS; HTTP/2 negotiated via ALPN.
+//   - npipe:   Windows named pipe (only usable on Windows builds; the actual
+//     dialer lives in the SDK and is build-tagged). The scheme is on the
+//     allow-list so Windows configurations work transparently.
+//
+// ssh:// and fd:// are deliberately not supported — they require dialers
+// (SSH tunnel, systemd socket activation) that this adapter does not wire up.
+var supportedDockerHostSchemes = []string{"unix", "tcp", "tcp+tls", "http", "https", "npipe"}
 
 // Client implements ports.DockerClient using the official Docker SDK.
 type Client struct {
@@ -94,14 +122,41 @@ func NewClient() (*Client, error) {
 }
 
 // NewClientWithConfig creates a new Docker client with custom configuration.
+//
+// The effective Docker host is resolved in this order:
+//  1. config.Host (if non-empty)
+//  2. DOCKER_HOST environment variable
+//  3. client.DefaultDockerHost
+//
+// The host's URL scheme is validated against the allow-list (see
+// supportedDockerHostSchemes) and normalized to lowercase. Unsupported schemes
+// (ssh://, fd://, etc.) return ErrUnsupportedDockerHostScheme.
 func NewClientWithConfig(config *ClientConfig) (*Client, error) {
+	// Resolve the effective host and validate/normalize its scheme up front,
+	// so operators get a clear error at startup instead of an opaque dial
+	// error later. See https://github.com/netresearch/ofelia/issues/609.
+	effectiveHost := config.Host
+	if effectiveHost == "" {
+		effectiveHost = os.Getenv("DOCKER_HOST")
+	}
+	normalizedHost, err := validateAndNormalizeHost(effectiveHost)
+	if err != nil {
+		return nil, fmt.Errorf("creating docker client: %w", err)
+	}
+
+	// Apply the normalized host back to the config so createHTTPClient sees
+	// the same lowercase scheme the SDK will see.
+	if normalizedHost != "" {
+		config.Host = normalizedHost
+	}
+
 	opts := []client.Opt{
 		client.FromEnv,
 		client.WithAPIVersionNegotiation(),
 	}
 
-	if config.Host != "" {
-		opts = append(opts, client.WithHost(config.Host))
+	if normalizedHost != "" {
+		opts = append(opts, client.WithHost(normalizedHost))
 	}
 
 	if config.Version != "" {
@@ -167,6 +222,10 @@ func newClientFromSDK(sdk *client.Client) *Client {
 }
 
 // createHTTPClient creates an HTTP client with connection pooling.
+//
+// The caller is responsible for ensuring config.Host has already been
+// validated and normalized via validateAndNormalizeHost (NewClientWithConfig
+// does this). The switch below relies on the scheme being lowercase.
 func createHTTPClient(config *ClientConfig) *http.Client {
 	// Determine if we should use HTTP/2
 	// Docker daemon only supports HTTP/2 over TLS (ALPN negotiation)
@@ -175,6 +234,7 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 	if host == "" {
 		host = client.DefaultDockerHost
 	}
+	scheme := schemeOf(host)
 
 	transport := &http.Transport{
 		MaxIdleConns:          config.MaxIdleConns,
@@ -184,9 +244,11 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 		ResponseHeaderTimeout: config.ResponseHeaderTimeout,
 	}
 
-	// Configure dialer based on host type
-	switch {
-	case strings.HasPrefix(host, "unix://"):
+	// Configure dialer based on scheme. Schemes are lowercase at this point
+	// (validateAndNormalizeHost guarantees this for caller-supplied hosts;
+	// client.DefaultDockerHost is already lowercase).
+	switch scheme {
+	case "unix":
 		socketPath := strings.TrimPrefix(host, "unix://")
 		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
 			dialer := &net.Dialer{Timeout: config.DialTimeout}
@@ -194,11 +256,14 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 		}
 		// HTTP/2 not supported on Unix sockets
 		transport.ForceAttemptHTTP2 = false
-	case strings.HasPrefix(host, "https://"):
-		// HTTPS connections can use HTTP/2 via ALPN
+	case "https", "tcp+tls":
+		// TLS-backed connections can use HTTP/2 via ALPN.
 		transport.ForceAttemptHTTP2 = true
 	default:
-		// TCP without TLS - HTTP/2 not supported (no h2c in Docker)
+		// tcp, http, npipe, or empty: plain transport, HTTP/1.1.
+		// (npipe on Windows relies on the SDK's build-tagged dialer; on other
+		// platforms the connection will fail at dial time — see the package
+		// docs and docs/TROUBLESHOOTING.md.)
 		transport.ForceAttemptHTTP2 = false
 	}
 
@@ -206,6 +271,61 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 		Transport: transport,
 		Timeout:   0, // No overall timeout; individual operations have timeouts
 	}
+}
+
+// schemeOf returns the lowercase scheme portion of a Docker host URL, or ""
+// if the input has no scheme separator. It does NOT validate the scheme.
+func schemeOf(host string) string {
+	idx := strings.Index(host, "://")
+	if idx < 0 {
+		return ""
+	}
+	return strings.ToLower(host[:idx])
+}
+
+// validateAndNormalizeHost validates that host uses a supported scheme and
+// returns the host with the scheme lowercased. The path/authority portion
+// is preserved as-is (Unix socket paths are case-sensitive on most
+// filesystems, so lowercasing the whole string would break valid
+// configurations like "unix:///Var/Run/docker.sock").
+//
+// An empty host is returned unchanged — callers fall back to DOCKER_HOST or
+// client.DefaultDockerHost downstream.
+//
+// Unsupported schemes (ssh, fd, tcp+tls used incorrectly, etc.) return
+// ErrUnsupportedDockerHostScheme wrapped with the offending value and a list
+// of supported schemes.
+func validateAndNormalizeHost(host string) (string, error) {
+	if host == "" {
+		return "", nil
+	}
+
+	idx := strings.Index(host, "://")
+	if idx < 0 {
+		return "", fmt.Errorf("%w: %q has no scheme; supported schemes: %s",
+			ErrUnsupportedDockerHostScheme, host, formatSupportedSchemes())
+	}
+
+	scheme := strings.ToLower(host[:idx])
+	for _, allowed := range supportedDockerHostSchemes {
+		if scheme == allowed {
+			// Reassemble with the lowercase scheme; preserve the rest verbatim.
+			return scheme + host[idx:], nil
+		}
+	}
+
+	return "", fmt.Errorf("%w: %q; supported schemes: %s",
+		ErrUnsupportedDockerHostScheme, scheme+"://", formatSupportedSchemes())
+}
+
+// formatSupportedSchemes returns a comma-separated, suffixed list of the
+// supported Docker host schemes for inclusion in error messages.
+func formatSupportedSchemes() string {
+	parts := make([]string, len(supportedDockerHostSchemes))
+	for i, s := range supportedDockerHostSchemes {
+		parts[i] = s + "://"
+	}
+	return strings.Join(parts, ", ")
 }
 
 // Containers returns the container service.
