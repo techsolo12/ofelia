@@ -14,13 +14,12 @@ import (
 )
 
 // historicalAllowedSchemes is the SORTED list of schemes the public
-// NewClientWithConfig surface accepted at the moment issue #617 was opened.
-// It exists so a future scheme addition that forgets to register a handler
-// (or, conversely, a handler addition that forgets to flip allowed=true)
-// fails this test loudly. Update intentionally in lockstep with
-// schemeHandlers when the public allow-list legitimately changes (e.g.
-// when #616 lands and tcp+tls flips to allowed=true).
-var historicalAllowedSchemes = []string{"http", "https", "npipe", "tcp", "unix"}
+// NewClientWithConfig surface accepts. It exists so a future scheme addition
+// that forgets to register a handler (or, conversely, a handler addition that
+// forgets to flip allowed=true) fails this test loudly. Update intentionally
+// in lockstep with schemeHandlers when the public allow-list legitimately
+// changes (tcp+tls was added in #616 once the TLS plumbing from #613 landed).
+var historicalAllowedSchemes = []string{"http", "https", "npipe", "tcp", "tcp+tls", "unix"}
 
 // TestSchemeHandlers_AllowListParity is the parity test mandated by issue
 // #617: the keys of schemeHandlers with allowed=true must EXACTLY equal
