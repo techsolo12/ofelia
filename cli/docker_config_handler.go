@@ -197,9 +197,12 @@ func (c *DockerHandler) buildSDKProvider() (core.DockerProvider, error) {
 		return nil, fmt.Errorf("failed to create SDK Docker provider: %w", err)
 	}
 
-	// Verify connection with a bounded context so a wedged daemon cannot hang
-	// startup at the post-construction sanity ping; see https://github.com/netresearch/ofelia/issues/614.
-	pingCtx, pingCancel := context.WithTimeout(context.Background(), dockerStartupPingTimeout)
+	// Verify connection with a bounded context derived from the handler's own
+	// context so a SIGINT during startup also cancels the sanity ping. See
+	// https://github.com/netresearch/ofelia/issues/614 for the deadline; using
+	// c.ctx rather than context.Background propagates parent cancellation per
+	// PR #636 code review.
+	pingCtx, pingCancel := context.WithTimeout(c.ctx, dockerStartupPingTimeout)
 	err = provider.Ping(pingCtx)
 	pingCancel()
 	if err != nil {

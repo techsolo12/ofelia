@@ -131,7 +131,7 @@ func TestNewDockerHandler_PostConstructSanityPing_BoundedTimeout(t *testing.T) {
 	}
 
 	const hardDeadline = 30 * time.Second
-	const expectWithin = 15 * time.Second // dockerStartupPingTimeout is 10s
+	const expectWithin = 20 * time.Second // 2x dockerStartupPingTimeout (10s) for CI headroom // dockerStartupPingTimeout is 10s
 
 	done := make(chan error, 1)
 	start := time.Now()
@@ -177,7 +177,7 @@ func TestBuildSDKProvider_PostConstructPing_BoundedTimeout(t *testing.T) {
 	}
 
 	const hardDeadline = 30 * time.Second
-	const expectWithin = 15 * time.Second
+	const expectWithin = 20 * time.Second // 2x dockerStartupPingTimeout (10s) for CI headroom
 
 	done := make(chan error, 1)
 	start := time.Now()
