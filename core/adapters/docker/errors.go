@@ -15,3 +15,22 @@ import "errors"
 // otherwise be a `nil pointer dereference` panic in a hot goroutine into an
 // actionable, branchable failure that callers can route via `errors.Is`.
 var ErrNilDockerClient = errors.New("docker adapter: nil SDK client")
+
+// ErrTCPTLSRequiresCertMaterial is returned by NewClientWithConfig when
+// DOCKER_HOST uses the explicit-TLS scheme `tcp+tls://` but no TLS material
+// is configured (no DOCKER_CERT_PATH / DOCKER_TLS_VERIFY env vars and no
+// ClientConfig.TLSCertPath / TLSVerify overrides).
+//
+// Without this gate the SDK would dial TLS using Go's stdlib defaults —
+// system CA bundle, NO client certificate — silently downgrading what the
+// operator declared as mTLS into an unauthenticated TLS handshake. This
+// is the analog, for tcp+tls://, of the silent plain-TCP downgrade
+// closed by [#612] / [#625]; tracked in [#627].
+//
+// `tcp://` and `https://` remain fail-open (tcp:// is ambiguous; https://
+// follows the upstream SDK's documented fail-open-with-warning posture).
+//
+// [#612]: https://github.com/netresearch/ofelia/pull/612
+// [#625]: https://github.com/netresearch/ofelia/pull/625
+// [#627]: https://github.com/netresearch/ofelia/issues/627
+var ErrTCPTLSRequiresCertMaterial = errors.New("tcp+tls:// requires TLS material")

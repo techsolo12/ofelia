@@ -264,9 +264,24 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 	// reads the env var at most once per call and returns a non-empty,
 	// lowercase-scheme URL ready for both the SDK option and the HTTP
 	// transport, so neither downstream caller has to re-derive it.
-	normalizedHost, _, err := resolveDockerHost(config)
+	normalizedHost, scheme, err := resolveDockerHost(config)
 	if err != nil {
 		return nil, fmt.Errorf("creating docker client: %w", err)
+	}
+
+	// Fail-closed for tcp+tls:// without TLS material. tcp+tls:// is an
+	// EXPLICIT TLS opt-in (versus tcp:// which is ambiguous and may rely on
+	// stdlib defaults). Without DOCKER_CERT_PATH / DOCKER_TLS_VERIFY (or the
+	// ClientConfig.TLSCertPath / TLSVerify overrides), resolveTLSConfig
+	// would return (nil, nil) and the SDK would silently dial TLS against
+	// the system CA pool with no client cert — operators believing they
+	// have mTLS would be getting unauthenticated connections. See
+	// https://github.com/netresearch/ofelia/issues/627.
+	if scheme == schemeTCPTLS && !hasTLSMaterial(config) {
+		return nil, fmt.Errorf(
+			"%w: set DOCKER_CERT_PATH/DOCKER_TLS_VERIFY or ClientConfig.TLSCertPath/TLSVerify; see docs/TROUBLESHOOTING.md",
+			ErrTCPTLSRequiresCertMaterial,
+		)
 	}
 
 	// Build a local copy of config with the normalized host for createHTTPClient

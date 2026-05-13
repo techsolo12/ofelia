@@ -310,6 +310,57 @@ SDK provider failed to connect to Docker: pinging docker: ... x509: certificate 
 - Issue: [#607](https://github.com/netresearch/ofelia/issues/607)
 - Fix: [#613](https://github.com/netresearch/ofelia/pull/613)
 
+### `tcp+tls://` Without Cert Material (fail-closed)
+
+**Symptoms**:
+
+```
+Error: creating docker client: tcp+tls:// requires TLS material: set DOCKER_CERT_PATH/DOCKER_TLS_VERIFY or ClientConfig.TLSCertPath/TLSVerify; see docs/TROUBLESHOOTING.md
+```
+
+**Affected**: `DOCKER_HOST=tcp+tls://...` with **no** `DOCKER_CERT_PATH` /
+`DOCKER_TLS_VERIFY` env vars and **no** `ClientConfig.TLSCertPath` /
+`TLSVerify` overrides.
+
+**Root Cause**: `tcp+tls://` is an *explicit* TLS opt-in scheme (versus
+`tcp://`, which is ambiguous and may rely on stdlib defaults). Without cert
+material, `resolveTLSConfig` would return `(nil, nil)` and the SDK would
+silently dial TLS using Go's stdlib defaults — system CA bundle, **no**
+client certificate. Operators believing they had mTLS would be getting
+unauthenticated TLS handshakes against any daemon that doesn't strictly
+require client auth. Ofelia now fails the construction at startup so the
+misconfiguration is loud rather than silent at runtime.
+
+This is the analog, for `tcp+tls://`, of the silent plain-TCP downgrade
+closed by [#612](https://github.com/netresearch/ofelia/pull/612) /
+[#625](https://github.com/netresearch/ofelia/pull/625).
+
+**Resolution**: pick one of the supported sources of cert material; the
+client must find readable `ca.pem`, `cert.pem`, `key.pem` at the path:
+
+1. Environment (matches the standard `docker` CLI workflow):
+   ```bash
+   export DOCKER_CERT_PATH=/etc/docker/certs.d/myhost
+   export DOCKER_TLS_VERIFY=1
+   ```
+2. Programmatic / test override:
+   ```go
+   NewClientWithConfig(&ClientConfig{
+       Host:        "tcp+tls://daemon:2376",
+       TLSCertPath: "/etc/docker/certs.d/myhost",
+   })
+   ```
+3. If you genuinely want plain TLS without mTLS (rare — almost always a
+   misconfiguration) switch to `https://`, which keeps the upstream SDK's
+   documented fail-open-with-warning posture.
+
+`tcp://` and `https://` are unaffected and remain fail-open.
+
+**References**:
+
+- Issue: [#627](https://github.com/netresearch/ofelia/issues/627)
+- Trigger: [#625](https://github.com/netresearch/ofelia/pull/625) (re-enabled `tcp+tls://`)
+
 ### Docker Daemon Wedged (startup or health-check fails fast with `context deadline exceeded`)
 
 **Symptoms** (any of):
