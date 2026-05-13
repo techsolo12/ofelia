@@ -4,6 +4,8 @@
 package docker
 
 import (
+	"net/http/httptest"
+	"net/url"
 	"testing"
 
 	"github.com/docker/docker/client"
@@ -27,9 +29,9 @@ func newLoopbackSDKClient(t *testing.T) *client.Client {
 // failOnPanic registers a deferred recover that fails the test with a
 // descriptive message if the surrounding test function panics. Used by the
 // nil-input regression tests to assert that the new guards return errors
-// instead of crashing the daemon. Call inline, not via defer:
+// instead of crashing the daemon. Call as:
 //
-//	defer failOnPanic(t, "Create with nil config")
+//	defer failOnPanic(t, "Create with nil config")()
 func failOnPanic(t *testing.T, what string) func() {
 	t.Helper()
 	return func() {
@@ -37,4 +39,27 @@ func failOnPanic(t *testing.T, what string) func() {
 			t.Fatalf("%s panicked: %v", what, r)
 		}
 	}
+}
+
+// newSDKClientForStubServer constructs a Docker SDK client that talks to the
+// given httptest server, pinning a known API version so the SDK skips the
+// /_ping handshake (which the stub typically isn't ready to answer). Used by
+// the EventServiceAdapter tests to exercise the Subscribe path against a
+// fake daemon without needing real Docker. Registered with t.Cleanup.
+func newSDKClientForStubServer(t *testing.T, srv *httptest.Server) *client.Client {
+	t.Helper()
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parsing stub server URL: %v", err)
+	}
+	sdk, err := client.NewClientWithOpts(
+		client.WithHost("tcp://"+u.Host),
+		client.WithHTTPClient(srv.Client()),
+		client.WithVersion("1.43"),
+	)
+	if err != nil {
+		t.Fatalf("constructing SDK client for stub: %v", err)
+	}
+	t.Cleanup(func() { _ = sdk.Close() })
+	return sdk
 }

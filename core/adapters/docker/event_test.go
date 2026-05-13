@@ -7,12 +7,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/docker/docker/client"
 
 	"github.com/netresearch/ofelia/core/domain"
 )
@@ -46,25 +43,7 @@ func TestEventServiceAdapter_Subscribe_ExitsOnError(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	u, err := url.Parse(srv.URL)
-	if err != nil {
-		t.Fatalf("parse test server URL: %v", err)
-	}
-
-	// Disable API version negotiation — it would issue a /_ping the
-	// stub server cannot satisfy meaningfully, and it is irrelevant to
-	// the contract under test.
-	sdk, err := client.NewClientWithOpts(
-		client.WithHost("tcp://"+u.Host),
-		client.WithHTTPClient(srv.Client()),
-		client.WithVersion("1.43"),
-	)
-	if err != nil {
-		t.Fatalf("constructing SDK client: %v", err)
-	}
-	t.Cleanup(func() { _ = sdk.Close() })
-
-	adapter := &EventServiceAdapter{client: sdk}
+	adapter := &EventServiceAdapter{client: newSDKClientForStubServer(t, srv)}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -138,22 +117,7 @@ func TestEventServiceAdapter_Subscribe_ExitsOnContextCancel(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	u, err := url.Parse(srv.URL)
-	if err != nil {
-		t.Fatalf("parse test server URL: %v", err)
-	}
-
-	sdk, err := client.NewClientWithOpts(
-		client.WithHost("tcp://"+u.Host),
-		client.WithHTTPClient(srv.Client()),
-		client.WithVersion("1.43"),
-	)
-	if err != nil {
-		t.Fatalf("constructing SDK client: %v", err)
-	}
-	t.Cleanup(func() { _ = sdk.Close() })
-
-	adapter := &EventServiceAdapter{client: sdk}
+	adapter := &EventServiceAdapter{client: newSDKClientForStubServer(t, srv)}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	eventCh, errCh := adapter.Subscribe(ctx, domain.EventFilter{})
