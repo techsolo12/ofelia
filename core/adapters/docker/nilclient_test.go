@@ -84,14 +84,32 @@ func TestContainerServiceAdapter_NilClient_NoPanic(t *testing.T) {
 		})
 	}
 
-	// Wait returns channels — drain errCh and assert it carried the sentinel.
+	// Wait returns channels — drain errCh, assert it carried the sentinel,
+	// and assert both channels are closed afterward so callers' select loops
+	// cannot leak (regression guard for #623 contract).
 	t.Run("Wait", func(t *testing.T) {
-		_, errCh := a.Wait(ctx, "id")
+		respCh, errCh := a.Wait(ctx, "id")
 		select {
 		case err := <-errCh:
 			assertErrNilDockerClient(t, "Wait", err)
 		case <-time.After(time.Second):
 			t.Fatal("Wait: errCh did not deliver ErrNilDockerClient within 1s")
+		}
+		select {
+		case _, ok := <-errCh:
+			if ok {
+				t.Fatal("Wait: errCh delivered a second value; expected close after the sentinel")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Wait: errCh was not closed after delivering ErrNilDockerClient")
+		}
+		select {
+		case _, ok := <-respCh:
+			if ok {
+				t.Fatal("Wait: respCh delivered a value; expected close on nil-client path")
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Wait: respCh was not closed on nil-client path")
 		}
 	})
 }
