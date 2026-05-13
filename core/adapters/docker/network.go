@@ -19,8 +19,20 @@ type NetworkServiceAdapter struct {
 	client *client.Client
 }
 
+// checkClient returns ErrNilDockerClient if the embedded SDK client is nil.
+// See docker.ErrNilDockerClient for rationale.
+func (s *NetworkServiceAdapter) checkClient() error {
+	if s.client == nil {
+		return ErrNilDockerClient
+	}
+	return nil
+}
+
 // Connect connects a container to a network.
 func (s *NetworkServiceAdapter) Connect(ctx context.Context, networkID, containerID string, config *domain.EndpointSettings) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	var endpointConfig *network.EndpointSettings
 	if config != nil {
 		endpointConfig = convertToEndpointSettings(config)
@@ -32,12 +44,18 @@ func (s *NetworkServiceAdapter) Connect(ctx context.Context, networkID, containe
 
 // Disconnect disconnects a container from a network.
 func (s *NetworkServiceAdapter) Disconnect(ctx context.Context, networkID, containerID string, force bool) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	err := s.client.NetworkDisconnect(ctx, networkID, containerID, force)
 	return convertError(err)
 }
 
 // List lists networks.
 func (s *NetworkServiceAdapter) List(ctx context.Context, opts domain.NetworkListOptions) ([]domain.Network, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	listOpts := network.ListOptions{}
 
 	if len(opts.Filters) > 0 {
@@ -63,6 +81,9 @@ func (s *NetworkServiceAdapter) List(ctx context.Context, opts domain.NetworkLis
 
 // Inspect returns network information.
 func (s *NetworkServiceAdapter) Inspect(ctx context.Context, networkID string) (*domain.Network, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	n, err := s.client.NetworkInspect(ctx, networkID, network.InspectOptions{})
 	if err != nil {
 		return nil, convertError(err)
@@ -73,6 +94,9 @@ func (s *NetworkServiceAdapter) Inspect(ctx context.Context, networkID string) (
 
 // Create creates a network.
 func (s *NetworkServiceAdapter) Create(ctx context.Context, name string, opts ports.NetworkCreateOptions) (string, error) {
+	if err := s.checkClient(); err != nil {
+		return "", err
+	}
 	createOpts := network.CreateOptions{
 		Driver:     opts.Driver,
 		Scope:      opts.Scope,
@@ -109,6 +133,9 @@ func (s *NetworkServiceAdapter) Create(ctx context.Context, name string, opts po
 
 // Remove removes a network.
 func (s *NetworkServiceAdapter) Remove(ctx context.Context, networkID string) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	err := s.client.NetworkRemove(ctx, networkID)
 	return convertError(err)
 }

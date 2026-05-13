@@ -16,12 +16,15 @@ import (
 //
 // Before the fix this panicked on `config.User` at exec.go:27 because
 // ExecOptions construction dereferences every config field unconditionally.
+//
+// Uses a loopback SDK client so the input-validation guard fires before
+// the new ErrNilDockerClient guard added in #623 short-circuits the call.
 func TestExecServiceAdapter_Create_NilConfig(t *testing.T) {
 	t.Parallel()
 
 	defer failOnPanic(t, "Create with nil config")()
 
-	adapter := &ExecServiceAdapter{client: nil}
+	adapter := &ExecServiceAdapter{client: newLoopbackSDKClient(t)}
 
 	id, err := adapter.Create(context.Background(), "some-container", nil)
 	if err == nil {
@@ -39,12 +42,15 @@ func TestExecServiceAdapter_Create_NilConfig(t *testing.T) {
 // returns an error (and does NOT panic) when stdout AND stderr are nil
 // in non-TTY mode. stdcopy.StdCopy panics on nil writers when there is
 // real output to demultiplex, so the adapter must guard the input.
+//
+// Uses a loopback SDK client so the writer-validation guard fires before
+// the new ErrNilDockerClient guard added in #623 short-circuits the call.
 func TestExecServiceAdapter_Run_NilWritersNonTTY(t *testing.T) {
 	t.Parallel()
 
 	defer failOnPanic(t, "Run with nil stdout+stderr in non-TTY")()
 
-	adapter := &ExecServiceAdapter{client: nil}
+	adapter := &ExecServiceAdapter{client: newLoopbackSDKClient(t)}
 
 	cfg := &domain.ExecConfig{Cmd: []string{"true"}, Tty: false}
 	// Non-TTY mode: stdcopy demuxing path is exercised.

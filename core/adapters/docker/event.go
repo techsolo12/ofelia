@@ -21,12 +21,32 @@ type EventServiceAdapter struct {
 	client *client.Client
 }
 
+// checkClient returns ErrNilDockerClient if the embedded SDK client is nil.
+// See docker.ErrNilDockerClient for rationale.
+func (s *EventServiceAdapter) checkClient() error {
+	if s.client == nil {
+		return ErrNilDockerClient
+	}
+	return nil
+}
+
 // Subscribe subscribes to Docker events.
 // The returned channels are closed when the context is canceled or an error occurs.
 // The caller should NOT close these channels.
+//
+// If the embedded SDK client is nil (defense-in-depth), both channels are
+// closed synchronously after pushing ErrNilDockerClient on errCh — no
+// goroutine is launched.
 func (s *EventServiceAdapter) Subscribe(ctx context.Context, filter domain.EventFilter) (<-chan domain.Event, <-chan error) {
 	eventCh := make(chan domain.Event, 100)
 	errCh := make(chan error, 1)
+
+	if err := s.checkClient(); err != nil {
+		errCh <- err
+		close(eventCh)
+		close(errCh)
+		return eventCh, errCh
+	}
 
 	go func() {
 		defer close(eventCh)
@@ -91,6 +111,9 @@ func (s *EventServiceAdapter) SubscribeWithCallback(
 	filter domain.EventFilter,
 	callback ports.EventCallback,
 ) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	eventChan, errChan := s.Subscribe(ctx, filter)
 
 	for {

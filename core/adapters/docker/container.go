@@ -28,8 +28,21 @@ type ContainerServiceAdapter struct {
 	client *client.Client
 }
 
+// checkClient returns ErrNilDockerClient if the embedded SDK client is nil.
+// Defense-in-depth guard: the public constructor always wires a non-nil
+// client, so this is only reachable through hand-rolled adapter values.
+func (s *ContainerServiceAdapter) checkClient() error {
+	if s.client == nil {
+		return ErrNilDockerClient
+	}
+	return nil
+}
+
 // Create creates a new container.
 func (s *ContainerServiceAdapter) Create(ctx context.Context, config *domain.ContainerConfig) (string, error) {
+	if err := s.checkClient(); err != nil {
+		return "", err
+	}
 	containerConfig := convertToContainerConfig(config)
 	hostConfig := convertToHostConfig(config.HostConfig)
 	networkConfig := convertToNetworkingConfig(config.NetworkConfig)
@@ -46,12 +59,18 @@ func (s *ContainerServiceAdapter) Create(ctx context.Context, config *domain.Con
 
 // Start starts a container.
 func (s *ContainerServiceAdapter) Start(ctx context.Context, containerID string) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	err := s.client.ContainerStart(ctx, containerID, container.StartOptions{})
 	return convertError(err)
 }
 
 // Stop stops a container.
 func (s *ContainerServiceAdapter) Stop(ctx context.Context, containerID string, timeout *time.Duration) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	opts := container.StopOptions{}
 	if timeout != nil {
 		seconds := int(timeout.Seconds())
@@ -63,6 +82,9 @@ func (s *ContainerServiceAdapter) Stop(ctx context.Context, containerID string, 
 
 // Remove removes a container.
 func (s *ContainerServiceAdapter) Remove(ctx context.Context, containerID string, opts domain.RemoveOptions) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	err := s.client.ContainerRemove(ctx, containerID, container.RemoveOptions{
 		RemoveVolumes: opts.RemoveVolumes,
 		RemoveLinks:   opts.RemoveLinks,
@@ -73,6 +95,9 @@ func (s *ContainerServiceAdapter) Remove(ctx context.Context, containerID string
 
 // Inspect returns container information.
 func (s *ContainerServiceAdapter) Inspect(ctx context.Context, containerID string) (*domain.Container, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	resp, err := s.client.ContainerInspect(ctx, containerID)
 	if err != nil {
 		return nil, convertError(err)
@@ -83,6 +108,9 @@ func (s *ContainerServiceAdapter) Inspect(ctx context.Context, containerID strin
 
 // List lists containers.
 func (s *ContainerServiceAdapter) List(ctx context.Context, opts domain.ListOptions) ([]domain.Container, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	listOpts := container.ListOptions{
 		All:   opts.All,
 		Size:  opts.Size,
@@ -115,6 +143,13 @@ func (s *ContainerServiceAdapter) Wait(ctx context.Context, containerID string) 
 	respCh := make(chan domain.WaitResponse, 1)
 	errCh := make(chan error, 1)
 
+	if err := s.checkClient(); err != nil {
+		errCh <- err
+		close(respCh)
+		close(errCh)
+		return respCh, errCh
+	}
+
 	go func() {
 		defer close(respCh)
 		defer close(errCh)
@@ -144,6 +179,9 @@ func (s *ContainerServiceAdapter) Wait(ctx context.Context, containerID string) 
 
 // Logs returns container logs.
 func (s *ContainerServiceAdapter) Logs(ctx context.Context, containerID string, opts domain.LogOptions) (io.ReadCloser, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	reader, err := s.client.ContainerLogs(ctx, containerID, container.LogsOptions{
 		ShowStdout: opts.ShowStdout,
 		ShowStderr: opts.ShowStderr,
@@ -164,6 +202,9 @@ func (s *ContainerServiceAdapter) Logs(ctx context.Context, containerID string, 
 func (s *ContainerServiceAdapter) CopyLogs(
 	ctx context.Context, containerID string, stdout, stderr io.Writer, opts domain.LogOptions,
 ) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	// First check if container uses TTY
 	info, err := s.Inspect(ctx, containerID)
 	if err != nil {
@@ -195,24 +236,36 @@ func (s *ContainerServiceAdapter) CopyLogs(
 
 // Kill sends a signal to a container.
 func (s *ContainerServiceAdapter) Kill(ctx context.Context, containerID string, signal string) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	err := s.client.ContainerKill(ctx, containerID, signal)
 	return convertError(err)
 }
 
 // Pause pauses a container.
 func (s *ContainerServiceAdapter) Pause(ctx context.Context, containerID string) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	err := s.client.ContainerPause(ctx, containerID)
 	return convertError(err)
 }
 
 // Unpause unpauses a container.
 func (s *ContainerServiceAdapter) Unpause(ctx context.Context, containerID string) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	err := s.client.ContainerUnpause(ctx, containerID)
 	return convertError(err)
 }
 
 // Rename renames a container.
 func (s *ContainerServiceAdapter) Rename(ctx context.Context, containerID string, newName string) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	err := s.client.ContainerRename(ctx, containerID, newName)
 	return convertError(err)
 }
@@ -221,6 +274,9 @@ func (s *ContainerServiceAdapter) Rename(ctx context.Context, containerID string
 func (s *ContainerServiceAdapter) Attach(
 	ctx context.Context, containerID string, opts ports.AttachOptions,
 ) (*domain.HijackedResponse, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	resp, err := s.client.ContainerAttach(ctx, containerID, container.AttachOptions{
 		Stream:     opts.Stream,
 		Stdin:      opts.Stdin,

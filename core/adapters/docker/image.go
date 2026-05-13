@@ -23,8 +23,20 @@ type ImageServiceAdapter struct {
 	client *client.Client
 }
 
+// checkClient returns ErrNilDockerClient if the embedded SDK client is nil.
+// See docker.ErrNilDockerClient for rationale.
+func (s *ImageServiceAdapter) checkClient() error {
+	if s.client == nil {
+		return ErrNilDockerClient
+	}
+	return nil
+}
+
 // Pull pulls an image from a registry.
 func (s *ImageServiceAdapter) Pull(ctx context.Context, opts domain.PullOptions) (io.ReadCloser, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	pullOpts := image.PullOptions{
 		RegistryAuth: opts.RegistryAuth,
 		Platform:     opts.Platform,
@@ -45,6 +57,9 @@ func (s *ImageServiceAdapter) Pull(ctx context.Context, opts domain.PullOptions)
 
 // PullAndWait pulls an image and waits for completion.
 func (s *ImageServiceAdapter) PullAndWait(ctx context.Context, opts domain.PullOptions) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	reader, err := s.Pull(ctx, opts)
 	if err != nil {
 		return err
@@ -60,6 +75,9 @@ func (s *ImageServiceAdapter) PullAndWait(ctx context.Context, opts domain.PullO
 
 // List lists images.
 func (s *ImageServiceAdapter) List(ctx context.Context, opts domain.ImageListOptions) ([]domain.ImageSummary, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	listOpts := image.ListOptions{
 		All: opts.All,
 	}
@@ -98,6 +116,9 @@ func (s *ImageServiceAdapter) List(ctx context.Context, opts domain.ImageListOpt
 
 // Inspect returns image information.
 func (s *ImageServiceAdapter) Inspect(ctx context.Context, imageID string) (*domain.Image, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	img, err := s.client.ImageInspect(ctx, imageID)
 	if err != nil {
 		return nil, convertError(err)
@@ -116,6 +137,9 @@ func (s *ImageServiceAdapter) Inspect(ctx context.Context, imageID string) (*dom
 
 // Remove removes an image.
 func (s *ImageServiceAdapter) Remove(ctx context.Context, imageID string, force, pruneChildren bool) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	_, err := s.client.ImageRemove(ctx, imageID, image.RemoveOptions{
 		Force:         force,
 		PruneChildren: pruneChildren,
@@ -125,12 +149,18 @@ func (s *ImageServiceAdapter) Remove(ctx context.Context, imageID string, force,
 
 // Tag tags an image.
 func (s *ImageServiceAdapter) Tag(ctx context.Context, source, target string) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	err := s.client.ImageTag(ctx, source, target)
 	return convertError(err)
 }
 
 // Exists checks if an image exists locally.
 func (s *ImageServiceAdapter) Exists(ctx context.Context, imageRef string) (bool, error) {
+	if err := s.checkClient(); err != nil {
+		return false, err
+	}
 	_, err := s.client.ImageInspect(ctx, imageRef)
 	if err != nil {
 		if domain.IsNotFound(convertError(err)) {

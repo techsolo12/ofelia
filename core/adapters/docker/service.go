@@ -20,8 +20,20 @@ type SwarmServiceAdapter struct {
 	client *client.Client
 }
 
+// checkClient returns ErrNilDockerClient if the embedded SDK client is nil.
+// See docker.ErrNilDockerClient for rationale.
+func (s *SwarmServiceAdapter) checkClient() error {
+	if s.client == nil {
+		return ErrNilDockerClient
+	}
+	return nil
+}
+
 // Create creates a new Swarm service.
 func (s *SwarmServiceAdapter) Create(ctx context.Context, spec domain.ServiceSpec, opts domain.ServiceCreateOptions) (string, error) {
+	if err := s.checkClient(); err != nil {
+		return "", err
+	}
 	swarmSpec := convertToSwarmSpec(&spec)
 
 	createOpts := swarm.ServiceCreateOptions{
@@ -38,6 +50,9 @@ func (s *SwarmServiceAdapter) Create(ctx context.Context, spec domain.ServiceSpe
 
 // Inspect returns service information.
 func (s *SwarmServiceAdapter) Inspect(ctx context.Context, serviceID string) (*domain.Service, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	service, _, err := s.client.ServiceInspectWithRaw(ctx, serviceID, swarm.ServiceInspectOptions{})
 	if err != nil {
 		return nil, convertError(err)
@@ -48,6 +63,9 @@ func (s *SwarmServiceAdapter) Inspect(ctx context.Context, serviceID string) (*d
 
 // List lists services.
 func (s *SwarmServiceAdapter) List(ctx context.Context, opts domain.ServiceListOptions) ([]domain.Service, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	listOpts := swarm.ServiceListOptions{}
 
 	if len(opts.Filters) > 0 {
@@ -73,12 +91,18 @@ func (s *SwarmServiceAdapter) List(ctx context.Context, opts domain.ServiceListO
 
 // Remove removes a service.
 func (s *SwarmServiceAdapter) Remove(ctx context.Context, serviceID string) error {
+	if err := s.checkClient(); err != nil {
+		return err
+	}
 	err := s.client.ServiceRemove(ctx, serviceID)
 	return convertError(err)
 }
 
 // ListTasks lists tasks.
 func (s *SwarmServiceAdapter) ListTasks(ctx context.Context, opts domain.TaskListOptions) ([]domain.Task, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	listOpts := swarm.TaskListOptions{}
 
 	if len(opts.Filters) > 0 {
@@ -104,6 +128,9 @@ func (s *SwarmServiceAdapter) ListTasks(ctx context.Context, opts domain.TaskLis
 
 // WaitForTask waits for a task to reach a terminal state.
 func (s *SwarmServiceAdapter) WaitForTask(ctx context.Context, taskID string, timeout time.Duration) (*domain.Task, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -136,6 +163,9 @@ func (s *SwarmServiceAdapter) WaitForTask(ctx context.Context, taskID string, ti
 
 // WaitForServiceTasks waits for all service tasks to reach a terminal state.
 func (s *SwarmServiceAdapter) WaitForServiceTasks(ctx context.Context, serviceID string, timeout time.Duration) ([]domain.Task, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
