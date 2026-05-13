@@ -210,12 +210,13 @@ func TestClientConfig_PoolingOptions(t *testing.T) {
 	}
 }
 
-// TestCreateHTTPClient_UnsupportedSchemes verifies that DOCKER_HOST values with
-// unsupported URL schemes are rejected at construction with a clear error,
-// instead of silently falling through to a plain-TCP transport.
+// TestNewClientWithConfig_UnsupportedSchemes verifies that DOCKER_HOST values
+// with unsupported URL schemes are rejected at construction with a clear error,
+// instead of silently falling through to a plain-TCP transport. The validation
+// happens in NewClientWithConfig (not createHTTPClient), hence the name.
 //
 // See: https://github.com/netresearch/ofelia/issues/609
-func TestCreateHTTPClient_UnsupportedSchemes(t *testing.T) {
+func TestNewClientWithConfig_UnsupportedSchemes(t *testing.T) {
 	t.Parallel()
 
 	// tcp+tls:// is rejected here pending PR #613. Without the TLS plumbing
@@ -243,8 +244,11 @@ func TestCreateHTTPClient_UnsupportedSchemes(t *testing.T) {
 			host: "gopher://something",
 		},
 		{
-			name: "no_scheme",
-			host: "127.0.0.1:2375",
+			// no_scheme is a distinct error class (ErrMissingDockerHostScheme,
+			// not ErrUnsupportedDockerHostScheme). Asserted in
+			// TestNewClientWithConfig_MissingScheme below.
+			name: "bare_path_with_scheme_chars",
+			host: "tcp+ssh://something",
 		},
 	}
 
@@ -275,11 +279,12 @@ func TestValidateAndNormalizeHost(t *testing.T) {
 	t.Parallel()
 
 	testCases := []struct {
-		name      string
-		input     string
-		want      string
-		wantErr   bool
-		errSentry error
+		name          string
+		input         string
+		want          string
+		wantErr       bool
+		errSentry     error
+		wantErrSubstr string
 	}{
 		// Supported schemes - lowercase.
 		{name: "unix_lowercase", input: "unix:///var/run/docker.sock", want: "unix:///var/run/docker.sock"},
@@ -305,8 +310,10 @@ func TestValidateAndNormalizeHost(t *testing.T) {
 		{name: "tcp_plus_tls", input: "tcp+tls://127.0.0.1:2376", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
 		{name: "gopher", input: "gopher://something", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
 
-		// Missing scheme separator.
-		{name: "no_scheme", input: "127.0.0.1:2375", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
+		// Missing scheme separator. This is a distinct error from "unsupported
+		// scheme" - Copilot review feedback was that conflating the two reads
+		// confusingly. Assert on the dedicated sentinel.
+		{name: "no_scheme", input: "127.0.0.1:2375", wantErr: true, errSentry: ErrMissingDockerHostScheme},
 	}
 
 	for _, tc := range testCases {
@@ -320,6 +327,9 @@ func TestValidateAndNormalizeHost(t *testing.T) {
 				}
 				if tc.errSentry != nil && !errors.Is(err, tc.errSentry) {
 					t.Errorf("input %q: expected errors.Is(err, %v), got %v", tc.input, tc.errSentry, err)
+				}
+				if tc.wantErrSubstr != "" && !strings.Contains(err.Error(), tc.wantErrSubstr) {
+					t.Errorf("input %q: expected error to contain %q, got %v", tc.input, tc.wantErrSubstr, err)
 				}
 				return
 			}
@@ -364,5 +374,68 @@ func TestCreateHTTPClient_NpipeTransport(t *testing.T) {
 	_, err := NewClientWithConfig(&ClientConfig{Host: `npipe:////./pipe/docker_engine`})
 	if err != nil && errors.Is(err, ErrUnsupportedDockerHostScheme) {
 		t.Errorf("npipe:// should be on the allow-list, got %v", err)
+	}
+}
+
+// TestNewClientWithConfig_NilConfig pins the contract that a nil *ClientConfig
+// does not panic at startup. Without the nil-guard, callers passing nil would
+// panic the daemon on the first Host field access during validation. Surfaced
+// by Gemini code-review on PR #612.
+func TestNewClientWithConfig_NilConfig(t *testing.T) {
+	// Use a clearly-invalid host via env so we exit early on the validation
+	// path rather than attempting a real Docker dial.
+	t.Setenv("DOCKER_HOST", "ssh://example")
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("NewClientWithConfig(nil) panicked: %v", r)
+		}
+	}()
+
+	_, err := NewClientWithConfig(nil)
+	if err == nil || !errors.Is(err, ErrUnsupportedDockerHostScheme) {
+		t.Errorf("expected ErrUnsupportedDockerHostScheme from nil-config + ssh:// env, got err=%v", err)
+	}
+}
+
+// TestNewClientWithConfig_DoesNotMutateConfigHost ensures the validation /
+// normalization step does not silently rewrite the caller's config. Reusing a
+// shared *ClientConfig across constructions is a reasonable pattern; mutation
+// would be surprising and bug-prone. Surfaced by Copilot review on PR #612.
+func TestNewClientWithConfig_DoesNotMutateConfigHost(t *testing.T) {
+	// Use an upper-case scheme that we know normalizes to lowercase. If the
+	// constructor mutates config.Host, we'd see "tcp://..." after the call.
+	const original = "TCP://127.0.0.1:0"
+	cfg := DefaultConfig()
+	cfg.Host = original
+
+	// We don't care whether the dial succeeds (it won't on port 0) - only
+	// that the config struct is unchanged when control returns.
+	_, _ = NewClientWithConfig(cfg)
+
+	if cfg.Host != original {
+		t.Errorf("NewClientWithConfig mutated config.Host: was %q, now %q", original, cfg.Host)
+	}
+}
+
+// TestNewClientWithConfig_MissingScheme asserts the dedicated error class
+// for DOCKER_HOST values that lack a "://" separator. Copilot review on
+// PR #612 flagged that conflating "missing scheme" with "unsupported scheme"
+// reads confusingly to operators.
+func TestNewClientWithConfig_MissingScheme(t *testing.T) {
+	t.Parallel()
+
+	_, err := NewClientWithConfig(&ClientConfig{Host: "127.0.0.1:2375"})
+	if err == nil {
+		t.Fatal("expected error for host without scheme separator, got nil")
+	}
+	if !errors.Is(err, ErrMissingDockerHostScheme) {
+		t.Errorf("expected ErrMissingDockerHostScheme, got %v", err)
+	}
+	if errors.Is(err, ErrUnsupportedDockerHostScheme) {
+		t.Errorf("missing-scheme error should NOT also wrap ErrUnsupportedDockerHostScheme; got %v", err)
+	}
+	if !strings.Contains(err.Error(), "unix://") {
+		t.Errorf("expected error to mention example schemes, got %q", err.Error())
 	}
 }

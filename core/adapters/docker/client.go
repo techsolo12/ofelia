@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -35,6 +36,12 @@ const defaultNegotiateTimeout = 30 * time.Second
 //
 // Tracking: https://github.com/netresearch/ofelia/issues/609
 var ErrUnsupportedDockerHostScheme = errors.New("unsupported DOCKER_HOST scheme")
+
+// ErrMissingDockerHostScheme is returned when DOCKER_HOST is non-empty but
+// has no "://" separator (e.g. "127.0.0.1:2375"). Distinct from
+// ErrUnsupportedDockerHostScheme so operators can tell "I forgot the scheme"
+// from "I used a scheme that isn't supported."
+var ErrMissingDockerHostScheme = errors.New("missing DOCKER_HOST scheme")
 
 // supportedDockerHostSchemes is the allow-list of URL schemes accepted by
 // NewClientWithConfig. Schemes are compared case-insensitively.
@@ -138,6 +145,13 @@ func NewClient() (*Client, error) {
 // supportedDockerHostSchemes) and normalized to lowercase. Unsupported schemes
 // (ssh://, fd://, etc.) return ErrUnsupportedDockerHostScheme.
 func NewClientWithConfig(config *ClientConfig) (*Client, error) {
+	// Tolerate a nil config the same way DefaultConfig() would: callers
+	// constructing through the public surface should not be able to panic
+	// the daemon at startup with a nil-pointer deref.
+	if config == nil {
+		config = DefaultConfig()
+	}
+
 	// Resolve the effective host and validate/normalize its scheme up front,
 	// so operators get a clear error at startup instead of an opaque dial
 	// error later. See https://github.com/netresearch/ofelia/issues/609.
@@ -150,10 +164,13 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("creating docker client: %w", err)
 	}
 
-	// Apply the normalized host back to the config so createHTTPClient sees
-	// the same lowercase scheme the SDK will see.
+	// Build a local copy of config with the normalized host for createHTTPClient
+	// so the dialer-selection switch sees the lowercase scheme. We deliberately
+	// avoid mutating the caller's struct - reusing a *ClientConfig across
+	// constructions is a reasonable pattern and silent mutation is surprising.
+	cfgForTransport := *config
 	if normalizedHost != "" {
-		config.Host = normalizedHost
+		cfgForTransport.Host = normalizedHost
 	}
 
 	opts := []client.Opt{
@@ -174,7 +191,7 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 	}
 
 	// Create custom HTTP client with connection pooling
-	httpClient := createHTTPClient(config)
+	httpClient := createHTTPClient(&cfgForTransport)
 	if httpClient != nil {
 		opts = append(opts, client.WithHTTPClient(httpClient))
 	}
@@ -282,11 +299,11 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 // schemeOf returns the lowercase scheme portion of a Docker host URL, or ""
 // if the input has no scheme separator. It does NOT validate the scheme.
 func schemeOf(host string) string {
-	idx := strings.Index(host, "://")
-	if idx < 0 {
+	scheme, _, ok := strings.Cut(host, "://")
+	if !ok {
 		return ""
 	}
-	return strings.ToLower(host[:idx])
+	return strings.ToLower(scheme)
 }
 
 // validateAndNormalizeHost validates that host uses a supported scheme and
@@ -306,18 +323,16 @@ func validateAndNormalizeHost(host string) (string, error) {
 		return "", nil
 	}
 
-	idx := strings.Index(host, "://")
-	if idx < 0 {
-		return "", fmt.Errorf("%w: %q has no scheme; supported schemes: %s",
-			ErrUnsupportedDockerHostScheme, host, formatSupportedSchemes())
+	rawScheme, rest, hasScheme := strings.Cut(host, "://")
+	if !hasScheme {
+		return "", fmt.Errorf("%w: %q (e.g. \"unix://\", \"tcp://\"); supported schemes: %s",
+			ErrMissingDockerHostScheme, host, formatSupportedSchemes())
 	}
 
-	scheme := strings.ToLower(host[:idx])
-	for _, allowed := range supportedDockerHostSchemes {
-		if scheme == allowed {
-			// Reassemble with the lowercase scheme; preserve the rest verbatim.
-			return scheme + host[idx:], nil
-		}
+	scheme := strings.ToLower(rawScheme)
+	if slices.Contains(supportedDockerHostSchemes, scheme) {
+		// Reassemble with the lowercase scheme; preserve the rest verbatim.
+		return scheme + "://" + rest, nil
 	}
 
 	return "", fmt.Errorf("%w: %q; supported schemes: %s",
