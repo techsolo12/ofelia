@@ -741,13 +741,17 @@ func TestResolveTLSConfig_MissingCertFiles(t *testing.T) {
 	}
 }
 
-// TestCreateHTTPClient_TCPWithTLSEnvUpgrades asserts that the legacy docker
-// TLS setup — DOCKER_HOST=tcp://... plus DOCKER_TLS_VERIFY/DOCKER_CERT_PATH —
-// produces an HTTPS-equivalent transport (TLS config + HTTP/2). Mirrors the
-// docker CLI's silent upgrade behavior so users following the canonical
-// Docker mTLS docs don't see plaintext on the wire. Surfaced by Copilot
-// review on PR #613.
-func TestCreateHTTPClient_TCPWithTLSEnvUpgrades(t *testing.T) {
+// TestCreateHTTPClient_TCPDoesNotWireTLSEvenWithEnv pins the contract
+// reconciled in #628: tcp:// is a plain HTTP/1.1 transport regardless of
+// DOCKER_TLS_VERIFY / DOCKER_CERT_PATH. Wiring TLSClientConfig into a
+// transport whose URL stays tcp:// would silently load cert material that
+// Go's http.Transport never offers on the wire — a worse failure mode
+// than failing loud, because operators believe they have mTLS when they
+// do not. Operators wanting TLS over TCP must use tcp+tls:// or https://.
+//
+// See #628 (this reconciliation) and #634 (the deeper SDK URL-rewrite
+// half of the docker-CLI parity story).
+func TestCreateHTTPClient_TCPDoesNotWireTLSEvenWithEnv(t *testing.T) {
 	certDir := t.TempDir()
 	writeTLSFixtures(t, certDir)
 
@@ -760,34 +764,13 @@ func TestCreateHTTPClient_TCPWithTLSEnvUpgrades(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
 	}
-	if transport.TLSClientConfig == nil {
-		t.Fatal("transport.TLSClientConfig is nil for tcp:// + DOCKER_TLS_VERIFY=1; silent plaintext downgrade")
+	if transport.TLSClientConfig != nil {
+		t.Errorf("tcp:// is plain transport — operators must use tcp+tls:// or https:// for TLS; "+
+			"got TLSClientConfig=%+v (silent ineffective wiring is worse than failing loud)",
+			transport.TLSClientConfig)
 	}
-	if len(transport.TLSClientConfig.Certificates) == 0 {
-		t.Error("Certificates not loaded for tcp:// + TLS env vars")
-	}
-	if transport.TLSClientConfig.InsecureSkipVerify {
-		t.Error("InsecureSkipVerify=true for tcp:// + DOCKER_TLS_VERIFY=1")
-	}
-	if !transport.ForceAttemptHTTP2 {
-		t.Error("ForceAttemptHTTP2=false; tcp:// upgraded to TLS should also opt into HTTP/2")
-	}
-}
-
-// TestHasTLSMaterial_ExplicitConfigOnly covers the explicit-config branch of
-// hasTLSMaterial where DOCKER_CERT_PATH env is empty but ClientConfig.TLSCertPath
-// is set. Without this, the env-only test alone would leave the explicit
-// branch unexercised.
-func TestHasTLSMaterial_ExplicitConfigOnly(t *testing.T) {
-	t.Setenv("DOCKER_CERT_PATH", "")
-
-	cfg := &ClientConfig{TLSCertPath: "/some/explicit/path"}
-	if !hasTLSMaterial(cfg) {
-		t.Error("hasTLSMaterial returned false for explicit TLSCertPath")
-	}
-
-	if hasTLSMaterial(&ClientConfig{}) {
-		t.Error("hasTLSMaterial returned true for empty config and empty env")
+	if transport.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2=true for plain tcp://; should be HTTP/1.1")
 	}
 }
 
