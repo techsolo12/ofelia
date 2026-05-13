@@ -807,6 +807,14 @@ func (c *Config) iniConfigUpdate() error {
 	c.logger.Debug(fmt.Sprintf("applied config files from %s", strings.Join(files, ", ")))
 	if globalChanged {
 		c.Global = parsed.Global
+		// Re-sync the embedded webhook config into the separate WebhookConfigs.Global
+		// store so live-reload picks up changes to webhook-* keys (e.g. tightening
+		// webhook-allowed-hosts at runtime). Without this, the embedded copy is
+		// fresh but the WebhookConfigs.Global - which the security validator and
+		// preset loader actually read - stays stale until restart. See #604.
+		if c.WebhookConfigs != nil {
+			syncGlobalWebhookConfig(c)
+		}
 		c.sh.ResetMiddlewares()
 		c.buildSchedulerMiddlewares(c.sh)
 		wm := c.getWebhookManager()

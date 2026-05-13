@@ -885,6 +885,43 @@ webhook-allowed-hosts          = hooks.slack.com, discord.com
 	}
 }
 
+// TestBuildFromString_OldUnprefixedKeysWarn verifies that the previously
+// undocumented unprefixed forms (e.g. allow-remote-presets, webhooks) under
+// [global] now produce "Unknown configuration key" warnings rather than
+// silently being ignored or - worse - applied through some legacy path.
+// Regression guard: if someone re-adds the unprefixed forms to the struct
+// tags, this test fires.
+func TestBuildFromString_OldUnprefixedKeysWarn(t *testing.T) {
+	t.Parallel()
+
+	logger, handler := test.NewTestLoggerWithHandler()
+	_, err := BuildFromString(`
+[global]
+log-level = info
+allow-remote-presets = true
+trusted-preset-sources = gh:netresearch/*
+preset-cache-ttl = 12h
+preset-cache-dir = /tmp/old
+allowed-hosts = *.example.com
+`, logger)
+	if err != nil {
+		t.Fatalf("BuildFromString failed: %v", err)
+	}
+
+	want := []string{
+		"allow-remote-presets",
+		"trusted-preset-sources",
+		"preset-cache-ttl",
+		"preset-cache-dir",
+		"allowed-hosts",
+	}
+	for _, key := range want {
+		if !handler.HasWarning("Unknown configuration key '" + key + "'") {
+			t.Errorf("expected 'Unknown configuration key' warning for unprefixed %q, did not see it", key)
+		}
+	}
+}
+
 // TestBuildFromString_WebhookGlobalKeys_DefaultsPreserved verifies that when
 // no webhook-* global keys are configured, the defaults from
 // DefaultWebhookGlobalConfig() are preserved (especially AllowedHosts="*", which

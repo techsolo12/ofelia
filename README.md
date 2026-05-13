@@ -282,8 +282,12 @@ See [Architecture overview](docs/architecture.md) for details about the schedule
 - `save-folder` - directory in which the reports shall be written. The folder is created automatically if it doesn't exist using an equivalent of `mkdir -p`.
 - `save-only-on-error` - only save a report if the execution was not successful.
 
+- `webhook-webhooks` - comma-separated list of webhook names to apply to every job by default.
 - `webhook-allow-remote-presets` - allow fetching presets from remote URLs (default: `false`).
+- `webhook-trusted-preset-sources` - comma-separated allow-list of remote preset sources (supports glob, e.g. `gh:netresearch/*`).
 - `webhook-preset-cache-ttl` - cache duration for remote presets (default: `24h`).
+- `webhook-preset-cache-dir` - directory used to cache remote presets.
+- `webhook-allowed-hosts` - comma-separated allow-list of webhook target hosts (default: `*`; supports wildcards).
 
 - `slack-webhook` - (**deprecated**) URL of the slack webhook. Migrate to `[webhook "name"]` sections.
 - `slack-only-on-error` - (**deprecated**) only send a slack message if the execution was not successful.
