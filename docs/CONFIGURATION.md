@@ -478,9 +478,10 @@ labels:
   ofelia.webhook.slack-alerts.secret: "XXXXXXXXXXXXXXXXXXXXXXXX"
   ofelia.webhook.slack-alerts.trigger: error
 
-  # Global webhook settings (use the same webhook-* names as the INI [global] section)
+  # Global webhook selector — only this key is exposed via labels.
+  # SSRF-sensitive globals (allowed-hosts, allow-remote-presets, etc.)
+  # must be set in the INI [global] section. See webhooks.md and #486.
   ofelia.webhook-webhooks: "slack-alerts"
-  ofelia.webhook-allowed-hosts: "hooks.slack.com"
 ```
 
 Assign webhooks to jobs on any container:

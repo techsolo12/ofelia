@@ -107,11 +107,18 @@ func NewConfig(logger *slog.Logger) *Config {
 	// (notably AllowedHosts="*", PresetCacheTTL=24h, PresetCacheDir).
 	c.Global.WebhookGlobalConfig = *middlewares.DefaultWebhookGlobalConfig()
 	// Alias c.WebhookConfigs.Global into the embedded struct so that
-	// mapstructure-decoded values become visible to the webhook subsystem
-	// without a hand-rolled field-by-field copy. This collapses the dual-store
-	// antipattern flagged in #620: every entry point that mutates Config.Global
-	// (initial parse, INI live-reload, Docker label sync) automatically refreshes
-	// what c.WebhookConfigs.Global / WebhookManager.globalConfig dereference.
+	// mapstructure-decoded values from the [global] INI section become
+	// visible to the webhook subsystem without a hand-rolled field-by-field
+	// copy. This closes the dual-store gap flagged in #620 for the INI
+	// live-reload path: mutating Config.Global automatically refreshes what
+	// c.WebhookConfigs.Global / WebhookManager.globalConfig dereference.
+	//
+	// NOTE: the Docker label sync path runs against a scratch parsed Config
+	// without this alias and merges back into c via mergeWebhookConfigs /
+	// syncWebhookConfigs, which only forward a subset of the global webhook
+	// fields. Label-sourced changes to webhook-allowed-hosts and
+	// webhook-preset-cache-ttl therefore still need a follow-up — see the
+	// PR #637 description.
 	c.WebhookConfigs.Global = &c.Global.WebhookGlobalConfig
 	return c
 }
@@ -380,7 +387,7 @@ func (c *Config) refreshWebhookManagerOnGlobalChange() {
 		return
 	}
 	if err := c.WebhookConfigs.InitManager(); err != nil {
-		c.logger.Error(fmt.Sprintf("Failed to re-initialize webhook manager during live-reload: %v", err))
+		c.logger.Error("Failed to re-initialize webhook manager during live-reload", "error", err)
 	}
 }
 

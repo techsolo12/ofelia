@@ -18,25 +18,20 @@ import (
 
 const webhookSection = "webhook"
 
-// Canonical webhook-* global config key names — single source of truth shared
-// by the INI side (mapstructure tags on middlewares.WebhookGlobalConfig), the
-// Docker label allow-list, and the label-to-config reader. Keeping these as
-// named constants prevents drift like the issue #620 part B regression where
-// label keys were renamed on the INI side but not the label side.
+// Canonical and legacy Docker label key names that the webhook label reader
+// consumes. Only the webhook-list selector is exposed via labels — the other
+// webhook globals (webhook-allowed-hosts, webhook-allow-remote-presets,
+// webhook-trusted-preset-sources, webhook-preset-cache-dir, and
+// webhook-preset-cache-ttl) are intentionally INI-only to prevent containers
+// from widening the network egress surface or redirecting preset loading. See
+// docker-labels.go (globalLabelAllowList) and #486.
 const (
-	webhookGlobalKeyWebhooks             = "webhook-webhooks"
-	webhookGlobalKeyAllowRemotePresets   = "webhook-allow-remote-presets"
-	webhookGlobalKeyTrustedPresetSources = "webhook-trusted-preset-sources"
-	webhookGlobalKeyPresetCacheTTL       = "webhook-preset-cache-ttl"
-	webhookGlobalKeyPresetCacheDir       = "webhook-preset-cache-dir"
-	webhookGlobalKeyAllowedHosts         = "webhook-allowed-hosts"
+	webhookGlobalKeyWebhooks = "webhook-webhooks"
 
-	// Legacy unprefixed Docker label key names — deprecated, see #620.
-	legacyLabelKeyWebhooks             = "webhooks"
-	legacyLabelKeyAllowRemotePresets   = "allow-remote-presets"
-	legacyLabelKeyTrustedPresetSources = "trusted-preset-sources"
-	legacyLabelKeyPresetCacheTTL       = "preset-cache-ttl"
-	legacyLabelKeyPresetCacheDir       = "preset-cache-dir"
+	// Legacy unprefixed form left behind by #618 when the INI side was
+	// renamed to webhook-*. Still accepted with a one-shot deprecation
+	// warning so operators have one release window to migrate.
+	legacyLabelKeyWebhooks = "webhooks"
 )
 
 // WebhookConfigs holds all parsed webhook configurations
@@ -349,19 +344,13 @@ func applyWebhookLabelParams(config *middlewares.WebhookConfig, params map[strin
 	}
 }
 
-// legacyWebhookLabelAliases maps the OLD unprefixed Docker label keys (left
-// behind by PR #618 when it renamed the INI side to webhook-*) to the
-// canonical webhook-* form. A user copying their INI keys verbatim into Docker
-// labels (a reasonable workflow) previously hit "Unknown global label keys"
-// and silently lost the values. For one release we still accept the legacy
-// forms but emit a deprecation warning so operators have time to migrate
-// (#620 part B).
+// legacyWebhookLabelAliases maps the OLD unprefixed Docker label keys to the
+// canonical webhook-* form. Only the webhook-list selector survived #486's
+// label allow-list, so this is now a single-entry map; it stays a map so the
+// label allow-list and the deprecation gate can iterate on a uniform
+// data structure if more aliases ever return.
 var legacyWebhookLabelAliases = map[string]string{
-	legacyLabelKeyWebhooks:             webhookGlobalKeyWebhooks,
-	legacyLabelKeyAllowRemotePresets:   webhookGlobalKeyAllowRemotePresets,
-	legacyLabelKeyTrustedPresetSources: webhookGlobalKeyTrustedPresetSources,
-	legacyLabelKeyPresetCacheTTL:       webhookGlobalKeyPresetCacheTTL,
-	legacyLabelKeyPresetCacheDir:       webhookGlobalKeyPresetCacheDir,
+	legacyLabelKeyWebhooks: webhookGlobalKeyWebhooks,
 }
 
 // loggedDeprecatedLabel guards the per-key deprecation log so reconcile-driven
@@ -369,6 +358,16 @@ var legacyWebhookLabelAliases = map[string]string{
 // container event. Each old name fires at most once for the lifetime of the
 // process.
 var loggedDeprecatedLabel sync.Map // map[string]struct{}
+
+// resetDeprecatedLabelLogForTest clears the one-shot deprecation gate so each
+// test exercising the warning starts from a clean slate. Tests register this
+// via t.Cleanup; production code never calls it.
+func resetDeprecatedLabelLogForTest() {
+	loggedDeprecatedLabel.Range(func(k, _ any) bool {
+		loggedDeprecatedLabel.Delete(k)
+		return true
+	})
+}
 
 // pickWebhookLabel returns the value for the canonical (webhook-prefixed) key
 // if present; otherwise falls back to the legacy unprefixed form (logging a
@@ -394,24 +393,34 @@ func pickWebhookLabel(globals map[string]any, canonical string, logger *slog.Log
 		if !ok {
 			return "", false
 		}
-		if _, loaded := loggedDeprecatedLabel.LoadOrStore(legacy, struct{}{}); !loaded && logger != nil {
-			logger.Warn(fmt.Sprintf(
-				"DEPRECATED Docker label key %q — use %q instead. "+
-					"The legacy form will be removed in a future release. "+
-					"See: https://github.com/netresearch/ofelia/issues/620",
-				"ofelia."+legacy, "ofelia."+canonical,
-			))
+		// Only consume the one-shot gate when we can actually emit the
+		// warning, so an early nil-logger pass doesn't permanently
+		// suppress the warning for the rest of the process.
+		if logger != nil {
+			if _, loaded := loggedDeprecatedLabel.LoadOrStore(legacy, struct{}{}); !loaded {
+				logger.Warn("DEPRECATED Docker label key — use the new prefixed form",
+					"legacy_key", "ofelia."+legacy,
+					"new_key", "ofelia."+canonical,
+					"see", "https://github.com/netresearch/ofelia/issues/620")
+			}
 		}
 		return s, true
 	}
 	return "", false
 }
 
-// applyGlobalWebhookLabels extracts webhook-specific keys from the globals map
-// (populated from service container labels) into the Config's WebhookConfigs.Global.
-// Accepts both the canonical webhook-* form (matching INI naming) and the
-// legacy unprefixed form left behind by #618 (with a one-shot deprecation
-// warning per legacy key).
+// applyGlobalWebhookLabels extracts the webhook-list selector from the globals
+// map (populated from service container labels) into the Config's
+// WebhookConfigs.Global. Accepts both the canonical webhook-webhooks form and
+// the legacy unprefixed webhooks form left behind by #618 (with a one-shot
+// deprecation warning).
+//
+// SSRF-sensitive globals (webhook-allowed-hosts, webhook-allow-remote-presets,
+// webhook-trusted-preset-sources, webhook-preset-cache-dir) and the
+// not-yet-merged webhook-preset-cache-ttl are intentionally NOT applied here
+// even when they appear in the map: the production allow-list filters them
+// upstream, and skipping them at the reader is defense-in-depth so any future
+// caller that hands this helper raw label data cannot re-enable the #486 risk.
 func applyGlobalWebhookLabels(c *Config, globals map[string]any) {
 	if c.WebhookConfigs == nil {
 		c.WebhookConfigs = NewWebhookConfigs()
@@ -419,25 +428,5 @@ func applyGlobalWebhookLabels(c *Config, globals map[string]any) {
 
 	if s, ok := pickWebhookLabel(globals, webhookGlobalKeyWebhooks, c.logger); ok {
 		c.WebhookConfigs.Global.Webhooks = s
-	}
-	if s, ok := pickWebhookLabel(globals, webhookGlobalKeyAllowRemotePresets, c.logger); ok {
-		c.WebhookConfigs.Global.AllowRemotePresets, _ = strconv.ParseBool(s)
-	}
-	if s, ok := pickWebhookLabel(globals, webhookGlobalKeyTrustedPresetSources, c.logger); ok {
-		c.WebhookConfigs.Global.TrustedPresetSources = s
-	}
-	if s, ok := pickWebhookLabel(globals, webhookGlobalKeyPresetCacheTTL, c.logger); ok {
-		if d, err := time.ParseDuration(s); err == nil {
-			c.WebhookConfigs.Global.PresetCacheTTL = d
-		}
-	}
-	if s, ok := pickWebhookLabel(globals, webhookGlobalKeyPresetCacheDir, c.logger); ok {
-		c.WebhookConfigs.Global.PresetCacheDir = s
-	}
-	// webhook-allowed-hosts has no legacy alias — it always used the prefixed form.
-	if v, ok := globals[webhookGlobalKeyAllowedHosts]; ok {
-		if s, ok := v.(string); ok {
-			c.WebhookConfigs.Global.AllowedHosts = s
-		}
 	}
 }

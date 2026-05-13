@@ -401,17 +401,18 @@ func TestApplyGlobalWebhookLabels_PartialFields(t *testing.T) {
 	t.Parallel()
 
 	cfg := NewConfig(test.NewTestLogger())
+	defaults := *cfg.WebhookConfigs.Global
 	globals := map[string]any{
 		"webhooks":              "wh1",
-		"webhook-allowed-hosts": "myhost.com",
+		"webhook-allowed-hosts": "myhost.com", // SSRF-sensitive, must be ignored (#486)
 	}
 
 	applyGlobalWebhookLabels(cfg, globals)
 
 	assert.Equal(t, "wh1", cfg.WebhookConfigs.Global.Webhooks)
-	assert.Equal(t, "myhost.com", cfg.WebhookConfigs.Global.AllowedHosts)
-	// Other fields should remain at defaults
-	assert.False(t, cfg.WebhookConfigs.Global.AllowRemotePresets)
+	assert.Equal(t, defaults.AllowedHosts, cfg.WebhookConfigs.Global.AllowedHosts,
+		"webhook-allowed-hosts is INI-only; labels must not change it (#486)")
+	assert.Equal(t, defaults.AllowRemotePresets, cfg.WebhookConfigs.Global.AllowRemotePresets)
 }
 
 func TestApplyGlobalWebhookLabels_NilWebhookConfigs_Coverage(t *testing.T) {
@@ -421,15 +422,21 @@ func TestApplyGlobalWebhookLabels_NilWebhookConfigs_Coverage(t *testing.T) {
 	cfg.WebhookConfigs = nil
 
 	globals := map[string]any{
+		// All keys here are INI-only; the helper must still create
+		// WebhookConfigs but leave the SSRF-sensitive globals at
+		// their defaults.
 		"preset-cache-ttl": "30m",
 		"preset-cache-dir": "/my/cache",
 	}
 
 	applyGlobalWebhookLabels(cfg, globals)
 
-	assert.NotNil(t, cfg.WebhookConfigs)
-	assert.Equal(t, 30*time.Minute, cfg.WebhookConfigs.Global.PresetCacheTTL)
-	assert.Equal(t, "/my/cache", cfg.WebhookConfigs.Global.PresetCacheDir)
+	require.NotNil(t, cfg.WebhookConfigs)
+	defaults := middlewares.DefaultWebhookGlobalConfig()
+	assert.Equal(t, defaults.PresetCacheTTL, cfg.WebhookConfigs.Global.PresetCacheTTL,
+		"preset-cache-ttl is INI-only; labels must not change it")
+	assert.Equal(t, defaults.PresetCacheDir, cfg.WebhookConfigs.Global.PresetCacheDir,
+		"preset-cache-dir is INI-only; labels must not change it (#486)")
 }
 
 func TestApplyGlobalWebhookLabels_InvalidTypes_Coverage(t *testing.T) {
@@ -438,13 +445,13 @@ func TestApplyGlobalWebhookLabels_InvalidTypes_Coverage(t *testing.T) {
 	cfg := NewConfig(test.NewTestLogger())
 	globals := map[string]any{
 		"webhooks":             123,   // int, not string - should be ignored
-		"allow-remote-presets": false, // bool, not string - should be ignored
-		"preset-cache-dir":     42,    // int, not string - should be ignored
+		"allow-remote-presets": false, // SSRF-sensitive AND wrong type
+		"preset-cache-dir":     42,    // SSRF-sensitive AND wrong type
 	}
 
 	applyGlobalWebhookLabels(cfg, globals)
 
-	// Should keep defaults since types don't match
+	// Wrong-typed legacy webhooks key must be ignored — no panic, no apply.
 	assert.Empty(t, cfg.WebhookConfigs.Global.Webhooks)
 }
 

@@ -37,10 +37,13 @@ import (
 // must serialize against any other test that mutates SetGlobalSecurityConfig
 // or SetValidateWebhookURLForTest.
 func TestIniConfigUpdate_WebhookAllowedHosts_LiveReload_EnforcementRefreshes(t *testing.T) {
-	// Snapshot and restore the package-global validator. NewWebhookManager will
-	// install a real one during the test.
+	// Snapshot and restore the entire package-global webhook security state.
+	// NewWebhookManager calls SetGlobalSecurityConfig, which mutates BOTH the
+	// URL validator AND the transport factory. Restoring only the validator
+	// would leak the configured transport factory into other tests; passing
+	// nil to SetGlobalSecurityConfig restores both to their package defaults.
 	t.Cleanup(func() {
-		middlewares.SetValidateWebhookURLForTest(middlewares.ValidateWebhookURLImpl)
+		middlewares.SetGlobalSecurityConfig(nil)
 	})
 
 	tmpDir := t.TempDir()
