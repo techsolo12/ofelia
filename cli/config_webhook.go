@@ -211,6 +211,13 @@ func (c *Config) syncWebhookConfigs(parsed *WebhookConfigs) {
 // applyWebhookChanges merges parsed webhook configs into the current config,
 // returning true if any changes were detected. INI-defined webhooks are never
 // overwritten by labels (security: prevents container label hijacking).
+//
+// Also forwards operator-tunable webhook globals (Webhooks selector,
+// AllowedHosts, PresetCacheTTL) via mergeWebhookGlobals so that runtime
+// label edits on a service container actually update the live config —
+// without this, the merge only happened once at startup via
+// mergeWebhookConfigs and subsequent label changes were silently dropped
+// (Code/DRY review of #650).
 func (c *Config) applyWebhookChanges(parsed *WebhookConfigs) bool {
 	changed := false
 
@@ -240,6 +247,13 @@ func (c *Config) applyWebhookChanges(parsed *WebhookConfigs) bool {
 			delete(c.WebhookConfigs.Webhooks, name)
 			changed = true
 		}
+	}
+
+	// Forward operator-tunable webhook globals from a fresh label parse so
+	// that a container that changes its ofelia.webhook-webhooks /
+	// webhook-preset-cache-ttl labels takes effect without restart.
+	if mergeWebhookGlobals(c.WebhookConfigs.Global, parsed.Global) {
+		changed = true
 	}
 
 	return changed
@@ -307,17 +321,26 @@ func mergeWebhookConfigs(c *Config, parsed *WebhookConfigs) {
 // disproportionate to the gain.
 //
 // Only non-SSRF-sensitive globals are forwarded here. See #486 / #640.
-func mergeWebhookGlobals(dst, src *middlewares.WebhookGlobalConfig) {
+//
+// Returns true when any field was overwritten so callers (notably
+// applyWebhookChanges in the runtime label-reconcile path) can flip their
+// `changed` flag and trigger webhook-manager re-init.
+func mergeWebhookGlobals(dst, src *middlewares.WebhookGlobalConfig) bool {
+	changed := false
 	if dst.Webhooks == "" && src.Webhooks != "" {
 		dst.Webhooks = src.Webhooks
+		changed = true
 	}
 	if dst.AllowedHosts == "*" && src.AllowedHosts != "*" && src.AllowedHosts != "" {
 		dst.AllowedHosts = src.AllowedHosts
+		changed = true
 	}
 	defaultTTL := 24 * time.Hour
 	if dst.PresetCacheTTL == defaultTTL && src.PresetCacheTTL != 0 && src.PresetCacheTTL != defaultTTL {
 		dst.PresetCacheTTL = src.PresetCacheTTL
+		changed = true
 	}
+	return changed
 }
 
 // buildWebhookConfigsFromLabels creates WebhookConfig objects from label-parsed webhook params.

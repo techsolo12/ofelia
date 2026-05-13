@@ -104,3 +104,33 @@ func TestSyncWebhookConfigs_GlobalSelectorAlone_Applied(t *testing.T) {
 	assert.Equal(t, "slack-alerts", c.WebhookConfigs.Global.Webhooks,
 		"webhook-webhooks selector from a Docker label must be applied even when no per-webhook labels are present (#640)")
 }
+
+// TestSyncWebhookConfigs_PresetCacheTTLOnLabelMutation covers the runtime
+// label-reconcile path (Code/DRY review of #650). PR #650 originally only
+// wired mergeWebhookGlobals into the boot-time mergeWebhookConfigs path; a
+// container that CHANGED its `ofelia.webhook-preset-cache-ttl` label after
+// startup would not propagate the new TTL because applyWebhookChanges did
+// not call mergeWebhookGlobals. This test asserts the runtime path now
+// also forwards globals.
+func TestSyncWebhookConfigs_PresetCacheTTLOnLabelMutation(t *testing.T) {
+	t.Parallel()
+
+	logger := test.NewTestLogger()
+	c := NewConfig(logger)
+	require.Equal(t, 24*time.Hour, c.WebhookConfigs.Global.PresetCacheTTL,
+		"baseline: NewConfig must seed PresetCacheTTL to the documented default")
+
+	parsed := NewWebhookConfigs()
+	parsed.Global.PresetCacheTTL = 6 * time.Hour
+	parsed.Webhooks["from-label"] = &middlewares.WebhookConfig{
+		Name:   "from-label",
+		Preset: "slack",
+	}
+
+	changed := c.applyWebhookChanges(parsed)
+
+	assert.True(t, changed,
+		"applyWebhookChanges must report changed=true when a webhook global is updated from labels")
+	assert.Equal(t, 6*time.Hour, c.WebhookConfigs.Global.PresetCacheTTL,
+		"runtime label reconcile must forward webhook globals via mergeWebhookGlobals (#640 Code/DRY review)")
+}
