@@ -4,7 +4,6 @@
 package docker
 
 import (
-	"errors"
 	"net"
 	"reflect"
 	"sort"
@@ -170,9 +169,9 @@ func TestNewClientWithConfig_ReadsDOCKERHOSTOnce(t *testing.T) {
 			if tc.wantErr && err == nil {
 				t.Fatal("expected error, got nil")
 			}
-			if !tc.wantErr && err != nil && !errors.Is(err, errExpectedNetwork(err)) {
+			if !tc.wantErr && err != nil {
 				// Ignore network/dial errors that propagate from NewClientWithOpts;
-				// what we care about is the env read count.
+				// what we care about here is the env read count.
 				t.Logf("non-fatal: NewClientWithConfig returned err=%v (expected for stub host)", err)
 			}
 
@@ -184,10 +183,6 @@ func TestNewClientWithConfig_ReadsDOCKERHOSTOnce(t *testing.T) {
 		})
 	}
 }
-
-// errExpectedNetwork is a no-op classifier used so we don't fail tests on
-// expected dial-time errors — we only care about getenv accounting here.
-func errExpectedNetwork(err error) error { return err }
 
 // TestResolveDockerHost_ReadsEnvOnce exercises resolveDockerHost in
 // isolation, asserting the env is read exactly once when cfg.Host is empty

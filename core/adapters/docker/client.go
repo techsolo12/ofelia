@@ -66,6 +66,11 @@ var ErrMissingDockerHostScheme = errors.New("missing DOCKER_HOST scheme")
 // environment reads. Production code MUST go through this rather than
 // os.Getenv directly so we can prove the "DOCKER_HOST read at most once per
 // NewClientWithConfig" contract from issue #617 with a test.
+//
+// MUST NOT be reassigned outside _test.go files. Tests that swap it MUST
+// run serially (no t.Parallel()) and restore the original via t.Cleanup.
+//
+//nolint:gochecknoglobals // intentional test seam, see TestResolveDockerHost_ReadsEnvOnce
 var getenv = os.Getenv
 
 // schemeHandler describes how the HTTP transport is configured for a given
@@ -353,7 +358,7 @@ func newClientFromSDK(sdk *client.Client) *Client {
 //
 // The DOCKER_HOST env var is read at most once per call (and only when
 // cfg.Host is empty). This is the contract verified by
-// TestResolveDockerHost_ReadsEnvAtMostOnce.
+// TestResolveDockerHost_ReadsEnvOnce.
 func resolveDockerHost(cfg *ClientConfig) (host, scheme string, err error) {
 	host = ""
 	if cfg != nil {
