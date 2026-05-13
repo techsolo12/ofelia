@@ -53,6 +53,19 @@ type ClientConfig struct {
 	// Timeout settings
 	DialTimeout           time.Duration
 	ResponseHeaderTimeout time.Duration
+
+	// NegotiateTimeout bounds the initial Docker API version negotiation that
+	// runs once at client creation. Without a bound, NegotiateAPIVersion uses
+	// context.Background() and can block forever when the Docker daemon is
+	// reachable but unresponsive (e.g. a socket proxy whose upstream is wedged),
+	// hanging Ofelia at startup with no diagnostic output.
+	//
+	// The Docker SDK swallows ping errors silently, so this timeout does not
+	// change correctness on successful paths - it only bounds the failure case.
+	//
+	// Set to 0 to inherit the default (see DefaultConfig). Use a small value
+	// to fail fast in tests; production typically wants 10-30s.
+	NegotiateTimeout time.Duration
 }
 
 // DefaultConfig returns a default configuration.
@@ -64,6 +77,7 @@ func DefaultConfig() *ClientConfig {
 		IdleConnTimeout:       90 * time.Second,
 		DialTimeout:           30 * time.Second,
 		ResponseHeaderTimeout: 120 * time.Second,
+		NegotiateTimeout:      30 * time.Second,
 	}
 }
 
@@ -105,7 +119,18 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 	// Force early API version negotiation to prevent race conditions.
 	// Without this, concurrent goroutines (e.g., Events and ContainerList) making their
 	// first API calls simultaneously will race on the lazy version negotiation.
-	sdk.NegotiateAPIVersion(context.Background())
+	//
+	// Bound the call so a reachable-but-wedged daemon (e.g. socket proxy with a
+	// hung upstream) cannot hang Ofelia at startup. NegotiateAPIVersion swallows
+	// ping errors silently, so a timeout only bounds the failure case; the
+	// successful path is unaffected. See https://github.com/netresearch/ofelia/issues/608.
+	negotiateTimeout := config.NegotiateTimeout
+	if negotiateTimeout <= 0 {
+		negotiateTimeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), negotiateTimeout)
+	defer cancel()
+	sdk.NegotiateAPIVersion(ctx)
 
 	return newClientFromSDK(sdk), nil
 }
