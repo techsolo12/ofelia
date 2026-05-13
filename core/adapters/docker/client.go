@@ -269,19 +269,32 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("creating docker client: %w", err)
 	}
 
-	// Fail-closed for tcp+tls:// without TLS material. tcp+tls:// is an
-	// EXPLICIT TLS opt-in (versus tcp:// which is ambiguous and may rely on
-	// stdlib defaults). Without DOCKER_CERT_PATH / DOCKER_TLS_VERIFY (or the
-	// ClientConfig.TLSCertPath / TLSVerify overrides), resolveTLSConfig
-	// would return (nil, nil) and the SDK would silently dial TLS against
-	// the system CA pool with no client cert — operators believing they
-	// have mTLS would be getting unauthenticated connections. See
+	// Fail-closed for tcp+tls:// without USABLE TLS material. tcp+tls:// is
+	// an EXPLICIT TLS opt-in (versus tcp:// which is ambiguous and may rely
+	// on stdlib defaults). Without DOCKER_CERT_PATH (or the
+	// ClientConfig.TLSCertPath override), resolveTLSConfig would return
+	// (nil, nil) and the SDK would silently dial TLS against the system CA
+	// pool with no client cert — operators believing they have mTLS would
+	// be getting unauthenticated connections. See
 	// https://github.com/netresearch/ofelia/issues/627.
-	if scheme == schemeTCPTLS && !hasTLSMaterial(config) {
-		return nil, fmt.Errorf(
-			"%w: set DOCKER_CERT_PATH/DOCKER_TLS_VERIFY or ClientConfig.TLSCertPath/TLSVerify; see docs/TROUBLESHOOTING.md",
-			ErrTCPTLSRequiresCertMaterial,
-		)
+	//
+	// We invoke resolveTLSConfig (not just hasTLSMaterial) so a typo or
+	// missing cert files at the path also fails closed at startup instead
+	// of silently downgrading at dial time — the case the security review
+	// of #646 flagged as bypassable.
+	if scheme == schemeTCPTLS {
+		if !hasTLSMaterial(config) {
+			return nil, fmt.Errorf(
+				"%w: set DOCKER_CERT_PATH (or ClientConfig.TLSCertPath); see docs/TROUBLESHOOTING.md",
+				ErrTCPTLSRequiresCertMaterial,
+			)
+		}
+		if _, tlsErr := resolveTLSConfig(config); tlsErr != nil {
+			return nil, fmt.Errorf(
+				"%w: cert material at the configured path is unreadable or invalid; see docs/TROUBLESHOOTING.md: %w",
+				ErrTCPTLSRequiresCertMaterial, tlsErr,
+			)
+		}
 	}
 
 	// Build a local copy of config with the normalized host for createHTTPClient

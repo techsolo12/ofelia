@@ -131,3 +131,31 @@ func writeFakeTLSMaterial(t *testing.T) string {
 	}
 	return dir
 }
+
+// TestNewClientWithConfig_TCPPlusTLSRejectsUnreadableCertPath addresses the
+// security review of #646: hasTLSMaterial only checks string presence, so
+// DOCKER_CERT_PATH=/does/not/exist (typo, broken volume mount, secrets not
+// yet populated) used to pass the gate and downstream applyDockerTLS would
+// silently fall back to default TLS without a client cert — the same
+// silent-mTLS-downgrade the gate is supposed to prevent. The gate now also
+// invokes resolveTLSConfig so unloadable material fails closed at startup.
+func TestNewClientWithConfig_TCPPlusTLSRejectsUnreadableCertPath(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "")
+	t.Setenv("DOCKER_TLS_VERIFY", "")
+	// Point at an empty directory so resolveTLSConfig fails on the missing
+	// cert.pem / key.pem read while hasTLSMaterial still says "material is
+	// configured" (the bypass the security review flagged).
+	emptyDir := t.TempDir()
+	t.Setenv("DOCKER_CERT_PATH", emptyDir)
+
+	_, err := NewClientWithConfig(&ClientConfig{Host: "tcp+tls://127.0.0.1:0"})
+	if err == nil {
+		t.Fatal("expected error for tcp+tls:// with unreadable cert path, got nil")
+	}
+	if !errors.Is(err, ErrTCPTLSRequiresCertMaterial) {
+		t.Fatalf("expected error to wrap ErrTCPTLSRequiresCertMaterial, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "unreadable or invalid") {
+		t.Errorf("expected error to mention unreadable/invalid material, got %q", err.Error())
+	}
+}
