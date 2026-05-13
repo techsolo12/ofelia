@@ -16,9 +16,11 @@ import (
 	"github.com/netresearch/ofelia/test"
 )
 
-// --- syncGlobalWebhookConfig (full INI pipeline) ---
+// --- WebhookGlobalConfig aliasing (single source of truth, #620) ---
 
-func TestSyncGlobalWebhookConfig_AllFields(t *testing.T) {
+// TestWebhookGlobalConfig_AllFields verifies the full INI pipeline populates
+// c.WebhookConfigs.Global via the embedded struct alias.
+func TestWebhookGlobalConfig_AllFields(t *testing.T) {
 	t.Parallel()
 
 	c, err := BuildFromString(`
@@ -40,20 +42,27 @@ webhook-allowed-hosts          = example.com,test.com
 	assert.Equal(t, "example.com,test.com", c.WebhookConfigs.Global.AllowedHosts)
 }
 
-func TestSyncGlobalWebhookConfig_NilWebhookConfigs(t *testing.T) {
+// TestWebhookGlobalConfig_AliasesEmbeddedStruct asserts that c.WebhookConfigs.Global
+// is the same address as &c.Global.WebhookGlobalConfig — the dual-store
+// antipattern collapse from #620. A mutation via either side must be visible
+// from the other without an explicit sync call.
+func TestWebhookGlobalConfig_AliasesEmbeddedStruct(t *testing.T) {
 	t.Parallel()
 
 	c := NewConfig(test.NewTestLogger())
-	c.WebhookConfigs = nil
-	c.Global.WebhookGlobalConfig.Webhooks = "wh1"
+	require.Same(t, &c.Global.WebhookGlobalConfig, c.WebhookConfigs.Global,
+		"c.WebhookConfigs.Global must alias the embedded WebhookGlobalConfig (single source of truth)")
 
-	syncGlobalWebhookConfig(c)
+	// Mutate via the embedded struct → visible via the WebhookConfigs.Global pointer.
+	c.Global.WebhookGlobalConfig.Webhooks = "from-embedded"
+	assert.Equal(t, "from-embedded", c.WebhookConfigs.Global.Webhooks)
 
-	assert.NotNil(t, c.WebhookConfigs)
-	assert.Equal(t, "wh1", c.WebhookConfigs.Global.Webhooks)
+	// Mutate via the WebhookConfigs.Global pointer → visible via the embedded struct.
+	c.WebhookConfigs.Global.AllowedHosts = "from-pointer.example.com"
+	assert.Equal(t, "from-pointer.example.com", c.Global.WebhookGlobalConfig.AllowedHosts)
 }
 
-func TestSyncGlobalWebhookConfig_NoKeys(t *testing.T) {
+func TestWebhookGlobalConfig_NoKeys_DefaultsPreserved(t *testing.T) {
 	t.Parallel()
 
 	// Empty [global] section: defaults must be preserved.
@@ -68,7 +77,7 @@ func TestSyncGlobalWebhookConfig_NoKeys(t *testing.T) {
 	assert.Equal(t, 24*time.Hour, c.WebhookConfigs.Global.PresetCacheTTL)
 }
 
-func TestSyncGlobalWebhookConfig_InvalidDuration(t *testing.T) {
+func TestWebhookGlobalConfig_InvalidDuration(t *testing.T) {
 	t.Parallel()
 
 	// Invalid duration: mapstructure returns an error from BuildFromString,

@@ -152,26 +152,6 @@ func parseWebhookConfig(section *ini.Section, config *middlewares.WebhookConfig)
 	return nil
 }
 
-// syncGlobalWebhookConfig copies the WebhookGlobalConfig values embedded in
-// Config.Global (populated by mapstructure decoding of the [global] INI section)
-// into c.WebhookConfigs.Global. NewConfig() pre-seeds Config.Global.WebhookGlobalConfig
-// with DefaultWebhookGlobalConfig() so that unset keys retain their defaults
-// (notably AllowedHosts="*", which is security-relevant).
-//
-// Per-key ExpandEnvVars is handled by sectionToMap() before decoding.
-func syncGlobalWebhookConfig(c *Config) {
-	if c.WebhookConfigs == nil {
-		c.WebhookConfigs = NewWebhookConfigs()
-	}
-	cfg := c.Global.WebhookGlobalConfig
-	c.WebhookConfigs.Global.Webhooks = cfg.Webhooks
-	c.WebhookConfigs.Global.AllowRemotePresets = cfg.AllowRemotePresets
-	c.WebhookConfigs.Global.TrustedPresetSources = cfg.TrustedPresetSources
-	c.WebhookConfigs.Global.PresetCacheTTL = cfg.PresetCacheTTL
-	c.WebhookConfigs.Global.PresetCacheDir = cfg.PresetCacheDir
-	c.WebhookConfigs.Global.AllowedHosts = cfg.AllowedHosts
-}
-
 // JobWebhookConfig holds per-job webhook configuration
 type JobWebhookConfig struct {
 	// Webhooks is a comma-separated list of webhook names for this job

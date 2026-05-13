@@ -104,9 +104,15 @@ func NewConfig(logger *slog.Logger) *Config {
 	// Seed the embedded WebhookGlobalConfig with the same defaults that
 	// NewWebhookConfigs() applied to c.WebhookConfigs.Global. This ensures
 	// that keys omitted from the [global] INI section keep their defaults
-	// (notably AllowedHosts="*", PresetCacheTTL=24h, PresetCacheDir) after
-	// the post-parse copy in syncGlobalWebhookConfig().
+	// (notably AllowedHosts="*", PresetCacheTTL=24h, PresetCacheDir).
 	c.Global.WebhookGlobalConfig = *middlewares.DefaultWebhookGlobalConfig()
+	// Alias c.WebhookConfigs.Global into the embedded struct so that
+	// mapstructure-decoded values become visible to the webhook subsystem
+	// without a hand-rolled field-by-field copy. This collapses the dual-store
+	// antipattern flagged in #620: every entry point that mutates Config.Global
+	// (initial parse, INI live-reload, Docker label sync) automatically refreshes
+	// what c.WebhookConfigs.Global / WebhookManager.globalConfig dereference.
+	c.WebhookConfigs.Global = &c.Global.WebhookGlobalConfig
 	return c
 }
 
@@ -361,6 +367,21 @@ func (c *Config) getWebhookManager() *middlewares.WebhookManager {
 		return c.WebhookConfigs.Manager
 	}
 	return nil
+}
+
+// refreshWebhookManagerOnGlobalChange re-initializes the webhook manager so that
+// snapshotted state (URL validator wired up via SetGlobalSecurityConfig, preset
+// loader) picks up new values from the embedded WebhookGlobalConfig. The data
+// store itself is already live thanks to the c.WebhookConfigs.Global pointer
+// alias set up in NewConfig() (#620). Skipped when the manager was never
+// initialized (no webhooks configured at startup) — nothing to refresh.
+func (c *Config) refreshWebhookManagerOnGlobalChange() {
+	if c.WebhookConfigs == nil || c.WebhookConfigs.Manager == nil {
+		return
+	}
+	if err := c.WebhookConfigs.InitManager(); err != nil {
+		c.logger.Error(fmt.Sprintf("Failed to re-initialize webhook manager during live-reload: %v", err))
+	}
 }
 
 func (c *Config) initDockerHandler() error {
@@ -807,14 +828,7 @@ func (c *Config) iniConfigUpdate() error {
 	c.logger.Debug(fmt.Sprintf("applied config files from %s", strings.Join(files, ", ")))
 	if globalChanged {
 		c.Global = parsed.Global
-		// Re-sync the embedded webhook config into the separate WebhookConfigs.Global
-		// store so live-reload picks up changes to webhook-* keys (e.g. tightening
-		// webhook-allowed-hosts at runtime). Without this, the embedded copy is
-		// fresh but the WebhookConfigs.Global - which the security validator and
-		// preset loader actually read - stays stale until restart. See #604.
-		if c.WebhookConfigs != nil {
-			syncGlobalWebhookConfig(c)
-		}
+		c.refreshWebhookManagerOnGlobalChange()
 		c.sh.ResetMiddlewares()
 		c.buildSchedulerMiddlewares(c.sh)
 		wm := c.getWebhookManager()
@@ -1194,10 +1208,10 @@ func parseGlobalAndDocker(cfg *ini.File, c *Config) (*parseResult, error) {
 			}
 		}
 		result.unknownGlobal = decResult.UnusedKeys
-		// Copy mapstructure-decoded webhook-* global keys into c.WebhookConfigs.Global.
-		// The embedded WebhookGlobalConfig in Config.Global was pre-seeded with
-		// defaults in NewConfig(), so unset keys retain their defaults.
-		syncGlobalWebhookConfig(c)
+		// c.WebhookConfigs.Global aliases &c.Global.WebhookGlobalConfig (set in
+		// NewConfig), so mapstructure-decoded webhook-* keys are visible to the
+		// webhook subsystem without an explicit copy. The embedded struct was
+		// pre-seeded with defaults in NewConfig(), so unset keys retain them.
 	}
 
 	if sec, err := cfg.GetSection("docker"); err == nil {
