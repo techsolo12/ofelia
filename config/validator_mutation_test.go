@@ -621,7 +621,7 @@ func TestIsOptionalField_BothBranches(t *testing.T) {
 	// Optional fields should return true
 	optionalFields := []string{
 		"smtp-user", "smtp-password", "email-to", "email-from",
-		"slack-webhook", "slack-channel", "save-folder",
+		"slack-webhook", "save-folder",
 		"container", "service", "image", "user", "network",
 		"environment", "secrets", "volumes", "working_dir",
 		"log-level",

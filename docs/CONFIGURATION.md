@@ -279,9 +279,8 @@ docker-events = true
 allow-host-jobs-from-labels = false
 default-user = nobody        # Default for exec/run/service; empty uses container default
 
-# Notification Settings
-slack-url = https://hooks.slack.com/services/XXX/YYY/ZZZ
-slack-channel = #alerts
+# Notification Settings (deprecated Slack middleware - prefer the webhook system below)
+slack-webhook = https://hooks.slack.com/services/XXX/YYY/ZZZ
 slack-only-on-error = true
 
 # Email Settings
@@ -341,7 +340,6 @@ delay = 5s                  # Delay before execution
 
 # Middleware Configuration
 slack-webhook = https://hooks.slack.com/...
-slack-channel = #db-alerts
 slack-only-on-error = true
 
 email-to = dba@example.com
@@ -715,12 +713,11 @@ container = worker
 command = important-task.sh
 
 # Slack settings (DEPRECATED - use [webhook "name"] sections instead)
+# Only slack-webhook and slack-only-on-error are accepted by the legacy
+# middleware. For channel routing, mentions, custom username/avatar, etc.,
+# migrate to the webhook notification system above (preset = slack).
 slack-webhook = https://hooks.slack.com/services/XXX/YYY/ZZZ
-slack-channel = #alerts
 slack-only-on-error = false
-slack-mentions = @channel
-slack-icon-emoji = :robot:
-slack-username = Ofelia Bot
 ```
 
 ### Email Notifications
@@ -794,8 +791,14 @@ command = export-data.sh
 # Save output
 save-folder = /var/log/ofelia/exports
 save-only-on-error = false
-save-format = json  # json or text
-save-retention = 30d # Keep for 30 days
+
+# History restoration on startup (set on the [global] section)
+# - restore-history: enable/disable replaying saved executions on daemon start
+#   (default: enabled when save-folder is set)
+# - restore-history-max-age: only replay executions newer than this duration
+#   (default: 24h)
+restore-history = true
+restore-history-max-age = 48h
 ```
 
 ### Overlap Prevention
