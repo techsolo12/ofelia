@@ -31,6 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Stabilize `TestHealthStatus` race against the `NewHealthChecker` background goroutine — build the `HealthChecker` directly in the test so the auto-injected `docker=Unhealthy` check cannot leak into the aggregated status before `GetHealth()` runs. ([#606](https://github.com/netresearch/ofelia/pull/606))
 
+### Refactor
+
+- Unify Docker host / scheme resolution in `core/adapters/docker/client.go` into a single `resolveDockerHost` seam. `NewClientWithConfig` and `createHTTPClient` now agree on the resolved host without re-reading `DOCKER_HOST`, eliminating the dual-reader anti-pattern that produced [#605](https://github.com/netresearch/ofelia/issues/605) / [#607](https://github.com/netresearch/ofelia/issues/607) / [#609](https://github.com/netresearch/ofelia/issues/609). The dispatch `switch` and the separate `supportedDockerHostSchemes` slice collapsed into a single `schemeHandlers` map (allow-list + dispatch derived from the same data); scheme spelling lives in named constants; `formatSupportedSchemes` is cached in a package var. `client.FromEnv` is dropped from the SDK options chain (host + TLS are mirrored explicitly; `DOCKER_API_VERSION` is preserved via `client.WithVersionFromEnv()`). New contract test asserts `DOCKER_HOST` is read at most once per `NewClientWithConfig` call; new parity test asserts the public allow-list cannot drift from the dispatch table. Pure refactor — no behavior change. ([#617](https://github.com/netresearch/ofelia/issues/617))
+
 ## [0.24.0] - 2026-05-10
 
 ### Changed
