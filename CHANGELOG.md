@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 
 - Stabilize `TestHealthStatus` race against the `NewHealthChecker` background goroutine — build the `HealthChecker` directly in the test so the auto-injected `docker=Unhealthy` check cannot leak into the aggregated status before `GetHealth()` runs. ([#606](https://github.com/netresearch/ofelia/pull/606))
+- New `TestConfigGlobalKeysAreDocumented` walks the embedded middleware structs in `Config.Global` via reflection and asserts each `mapstructure` key is mentioned in at least one operator-facing docs file (`docs/CONFIGURATION.md`, `docs/webhooks.md`, `docs/QUICK_REFERENCE.md`, `docs/TROUBLESHOOTING.md`, `README.md`). Catches the same drift class as #604 / #621 mechanically. ([#621](https://github.com/netresearch/ofelia/issues/621))
 
 ### Documentation
 
