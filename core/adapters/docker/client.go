@@ -14,7 +14,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -28,6 +28,22 @@ import (
 // Used both as the DefaultConfig value and as the fallback when callers pass
 // a non-positive NegotiateTimeout.
 const defaultNegotiateTimeout = 30 * time.Second
+
+// Docker host scheme constants. These names are RFC 3986 URL schemes; we
+// compare them case-insensitively elsewhere by normalizing to lowercase first.
+// Keep this the SOLE source of truth for scheme spelling — referencing it
+// from the handler map, the TrimPrefix in the unix dialer, the error
+// formatter, and tests.
+//
+// Tracking refactor: https://github.com/netresearch/ofelia/issues/617
+const (
+	schemeUnix   = "unix"
+	schemeTCP    = "tcp"
+	schemeHTTP   = "http"
+	schemeHTTPS  = "https"
+	schemeNpipe  = "npipe"
+	schemeTCPTLS = "tcp+tls"
+)
 
 // ErrUnsupportedDockerHostScheme is returned when a DOCKER_HOST value uses
 // a URL scheme that this adapter does not support. The error message lists
@@ -46,28 +62,93 @@ var ErrUnsupportedDockerHostScheme = errors.New("unsupported DOCKER_HOST scheme"
 // from "I used a scheme that isn't supported."
 var ErrMissingDockerHostScheme = errors.New("missing DOCKER_HOST scheme")
 
-// supportedDockerHostSchemes is the allow-list of URL schemes accepted by
-// NewClientWithConfig. Schemes are compared case-insensitively.
+// getenv is a package-level seam over os.Getenv so tests can count or stub
+// environment reads. Production code MUST go through this rather than
+// os.Getenv directly so we can prove the "DOCKER_HOST read at most once per
+// NewClientWithConfig" contract from issue #617 with a test.
 //
-//   - unix:    Unix domain socket (default on Linux/macOS).
-//   - tcp:     Plain TCP (HTTP/1.1, no HTTP/2). Auto-upgrades to TLS when
-//     DOCKER_TLS_VERIFY / DOCKER_CERT_PATH are set, mirroring the Docker
-//     CLI/SDK precedent.
+// MUST NOT be reassigned outside _test.go files. Tests that swap it MUST
+// run serially (no t.Parallel()) and restore the original via t.Cleanup.
+//
+//nolint:gochecknoglobals // intentional test seam, see TestResolveDockerHost_ReadsEnvOnce
+var getenv = os.Getenv
+
+// schemeHandler describes how the HTTP transport is configured for a given
+// Docker host scheme. The handler map (see schemeHandlers) is the SINGLE
+// source of truth: keys are the schemes we recognize at dispatch time, and
+// `allowed` records whether the public NewClientWithConfig surface accepts
+// the scheme.
+//
+// The split (recognized vs allowed) keeps schemes dispatchable inside
+// createHTTPClient — which is invoked directly by some tests — while still
+// letting NewClientWithConfig reject anything not on the public allow-list
+// at the front door (the security / silent-downgrade contract from PR #612).
+type schemeHandler struct {
+	allowed bool
+	apply   func(transport *http.Transport, cfg *ClientConfig, host string)
+}
+
+// schemeHandlers maps a lowercase URL scheme to its transport configuration.
+// Adding a new scheme means adding ONE entry here and nothing else: the
+// allow-list (validateAndNormalizeHost), the dispatch (createHTTPClient),
+// and the error message (formatSupportedSchemes) all derive from this map.
+//
+// Documented choices:
+//
+//   - unix:    Unix domain socket dialer; HTTP/1.1 only.
+//   - tcp:     Plain TCP; the docker CLI silently upgrades to HTTPS when
+//     DOCKER_TLS_VERIFY/DOCKER_CERT_PATH are set, so we mirror that to
+//     avoid a plaintext-by-omission downgrade for users following the
+//     canonical Docker mTLS docs (#613).
 //   - tcp+tls: Explicit TLS over TCP. Requires TLS material via
 //     DOCKER_CERT_PATH / DOCKER_TLS_VERIFY (or ClientConfig.TLSCertPath /
-//     TLSVerify). Re-enabled in #616 now that the TLS plumbing from #613
-//     wires the cert material into the custom transport.
-//   - http:    Plain HTTP over TCP (HTTP/1.1, no HTTP/2).
-//   - https:   HTTPS; HTTP/2 negotiated via ALPN.
-//   - npipe:   Windows named pipe (only usable on Windows builds; the actual
-//     dialer lives in the SDK and is build-tagged). The scheme is on the
-//     allow-list so Windows configurations work transparently.
-//
-// Deliberately not supported:
-//
-//   - ssh:    Requires an SSH tunnel dialer this adapter does not wire up.
-//   - fd:     Requires systemd socket activation we do not handle.
-var supportedDockerHostSchemes = []string{"unix", "tcp", "tcp+tls", "http", "https", "npipe"}
+//     TLSVerify). Re-enabled on the public allow-list in #616 now that the
+//     TLS plumbing from #613 wires the cert material into the custom
+//     transport via applyDockerTLS.
+//   - http:    Plain HTTP/1.1; no TLS handling.
+//   - https:   HTTPS with HTTP/2 via ALPN; TLS material is wired in.
+//   - npipe:   Windows named pipe; the actual dialer lives in the SDK and
+//     is build-tagged. The handler is a no-op so non-Windows builds still
+//     compile and the scheme is on the public allow-list.
+var schemeHandlers = map[string]schemeHandler{
+	schemeUnix:   {allowed: true, apply: applyUnixTransport},
+	schemeTCP:    {allowed: true, apply: applyTCPTransport},
+	schemeHTTP:   {allowed: true, apply: applyPlainTransport},
+	schemeHTTPS:  {allowed: true, apply: applyTLSTransport},
+	schemeNpipe:  {allowed: true, apply: applyPlainTransport},
+	schemeTCPTLS: {allowed: true, apply: applyTLSTransport},
+}
+
+// supportedSchemesMsg is the cached, comma-separated list of allowed schemes
+// (with "://" suffix) used in error messages. Computed once at package init
+// from schemeHandlers so future scheme additions stay DRY.
+var supportedSchemesMsg = formatSupportedSchemes()
+
+// allowedSchemes returns the sorted list of scheme names that
+// NewClientWithConfig accepts on input. Derived from schemeHandlers so the
+// allow-list cannot drift from the dispatch table.
+func allowedSchemes() []string {
+	out := make([]string, 0, len(schemeHandlers))
+	for name, h := range schemeHandlers {
+		if h.allowed {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// formatSupportedSchemes returns a comma-separated, suffixed list of the
+// publicly allowed Docker host schemes for inclusion in error messages.
+// Called once at init; see supportedSchemesMsg.
+func formatSupportedSchemes() string {
+	allowed := allowedSchemes()
+	parts := make([]string, len(allowed))
+	for i, s := range allowed {
+		parts[i] = s + "://"
+	}
+	return strings.Join(parts, ", ")
+}
 
 // Client implements ports.DockerClient using the official Docker SDK.
 type Client struct {
@@ -159,8 +240,13 @@ func NewClient() (*Client, error) {
 //  3. client.DefaultDockerHost
 //
 // The host's URL scheme is validated against the allow-list (see
-// supportedDockerHostSchemes) and normalized to lowercase. Unsupported schemes
+// schemeHandlers) and normalized to lowercase. Unsupported schemes
 // (ssh://, fd://, etc.) return ErrUnsupportedDockerHostScheme.
+//
+// The DOCKER_HOST environment variable is consulted at most once per call.
+// This is the contract from issue #617: a single resolveDockerHost seam
+// avoids the SDK-vs-transport disagreement that caused #605 / #606 / #607 /
+// #609 when two readers raced on env.
 func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 	// Tolerate a nil config the same way DefaultConfig() would: callers
 	// constructing through the public surface should not be able to panic
@@ -169,34 +255,32 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 		config = DefaultConfig()
 	}
 
-	// Resolve the effective host and validate/normalize its scheme up front,
-	// so operators get a clear error at startup instead of an opaque dial
-	// error later. See https://github.com/netresearch/ofelia/issues/609.
-	effectiveHost := config.Host
-	if effectiveHost == "" {
-		effectiveHost = os.Getenv("DOCKER_HOST")
-	}
-	normalizedHost, err := validateAndNormalizeHost(effectiveHost)
+	// Resolve the effective host and validate/normalize its scheme up front.
+	// resolveDockerHost is the single seam for DOCKER_HOST resolution: it
+	// reads the env var at most once per call and returns a non-empty,
+	// lowercase-scheme URL ready for both the SDK option and the HTTP
+	// transport, so neither downstream caller has to re-derive it.
+	normalizedHost, _, err := resolveDockerHost(config)
 	if err != nil {
 		return nil, fmt.Errorf("creating docker client: %w", err)
 	}
 
 	// Build a local copy of config with the normalized host for createHTTPClient
-	// so the dialer-selection switch sees the lowercase scheme. We deliberately
-	// avoid mutating the caller's struct - reusing a *ClientConfig across
-	// constructions is a reasonable pattern and silent mutation is surprising.
+	// so the dispatch sees the lowercase scheme without a second env read. We
+	// deliberately avoid mutating the caller's struct - reusing a *ClientConfig
+	// across constructions is a reasonable pattern and silent mutation is
+	// surprising (TestNewClientWithConfig_DoesNotMutateConfigHost).
 	cfgForTransport := *config
-	if normalizedHost != "" {
-		cfgForTransport.Host = normalizedHost
-	}
+	cfgForTransport.Host = normalizedHost
 
+	// Drop client.FromEnv: it would re-read DOCKER_HOST inside the SDK,
+	// recreating the dual-reader bug from #605 / #617. We mirror its
+	// host + TLS handling explicitly via WithHost / createHTTPClient and
+	// preserve the DOCKER_API_VERSION knob via WithVersionFromEnv.
 	opts := []client.Opt{
-		client.FromEnv,
+		client.WithVersionFromEnv(),
 		client.WithAPIVersionNegotiation(),
-	}
-
-	if normalizedHost != "" {
-		opts = append(opts, client.WithHost(normalizedHost))
+		client.WithHost(normalizedHost),
 	}
 
 	if config.Version != "" {
@@ -207,7 +291,8 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 		opts = append(opts, client.WithHTTPHeaders(config.HTTPHeaders))
 	}
 
-	// Create custom HTTP client with connection pooling
+	// Create custom HTTP client with connection pooling. The host is already
+	// resolved on cfgForTransport, so createHTTPClient does not re-read env.
 	httpClient := createHTTPClient(&cfgForTransport)
 	if httpClient != nil {
 		opts = append(opts, client.WithHTTPClient(httpClient))
@@ -261,28 +346,83 @@ func newClientFromSDK(sdk *client.Client) *Client {
 	return c
 }
 
-// createHTTPClient creates an HTTP client with connection pooling.
+// resolveDockerHost is the single source of truth for Docker host
+// resolution. It applies the config > DOCKER_HOST env > client.DefaultDockerHost
+// precedence, normalizes the scheme to lowercase, and validates the scheme
+// against the public allow-list.
 //
-// The caller is responsible for ensuring config.Host has already been
-// validated and normalized via validateAndNormalizeHost (NewClientWithConfig
-// does this). The switch below relies on the scheme being lowercase.
-func createHTTPClient(config *ClientConfig) *http.Client {
-	// Determine if we should use HTTP/2
-	// Docker daemon only supports HTTP/2 over TLS (ALPN negotiation)
-	// For Unix sockets and plain TCP, we use HTTP/1.1
-	//
-	// Mirror the SDK's host-resolution precedence locally so callers that
-	// invoke createHTTPClient directly (most tests, plus future internal
-	// callers) get the same dialer/TLS choice as NewClientWithConfig:
-	// explicit config.Host > DOCKER_HOST env > client.DefaultDockerHost.
-	host := config.Host
+// Returns:
+//   - host:   the fully resolved + normalized URL (always non-empty on success)
+//   - scheme: the lowercase scheme portion (e.g. "tcp", "unix")
+//   - err:    ErrMissingDockerHostScheme or ErrUnsupportedDockerHostScheme
+//
+// The DOCKER_HOST env var is read at most once per call (and only when
+// cfg.Host is empty). This is the contract verified by
+// TestResolveDockerHost_ReadsEnvOnce.
+func resolveDockerHost(cfg *ClientConfig) (host, scheme string, err error) {
+	host = ""
+	if cfg != nil {
+		host = cfg.Host
+	}
 	if host == "" {
-		host = os.Getenv(client.EnvOverrideHost)
+		host = getenv(client.EnvOverrideHost)
 	}
 	if host == "" {
 		host = client.DefaultDockerHost
 	}
-	scheme := schemeOf(host)
+
+	rawScheme, rest, hasScheme := strings.Cut(host, "://")
+	if !hasScheme {
+		return "", "", fmt.Errorf("%w: %q (e.g. %q, %q); supported schemes: %s",
+			ErrMissingDockerHostScheme, host,
+			schemeUnix+"://", schemeTCP+"://",
+			supportedSchemesMsg)
+	}
+
+	scheme = strings.ToLower(rawScheme)
+	handler, known := schemeHandlers[scheme]
+	if !known || !handler.allowed {
+		return "", "", fmt.Errorf("%w: %q; supported schemes: %s",
+			ErrUnsupportedDockerHostScheme, scheme+"://", supportedSchemesMsg)
+	}
+
+	return scheme + "://" + rest, scheme, nil
+}
+
+// validateAndNormalizeHost is a thin wrapper preserved for the existing
+// internal test surface (TestValidateAndNormalizeHost). It defers to
+// resolveDockerHost with an empty config so callers can validate a
+// caller-supplied host string directly. An empty input passes through
+// (returns "", nil) so the historical "empty means caller will default"
+// contract from PR #612 still holds.
+func validateAndNormalizeHost(host string) (string, error) {
+	if host == "" {
+		return "", nil
+	}
+	resolved, _, err := resolveDockerHost(&ClientConfig{Host: host})
+	if err != nil {
+		return "", err
+	}
+	return resolved, nil
+}
+
+// createHTTPClient creates an HTTP client with connection pooling.
+//
+// When called from NewClientWithConfig, config.Host is already the resolved,
+// normalized URL and the env-fallback inside resolveHostForDispatch is a
+// no-op (no second env read). When called directly by tests with an empty
+// config.Host, the same precedence (env > default) applies.
+//
+// Dispatch uses the schemeHandlers map directly (NOT the public allow-list),
+// so tcp+tls — which is publicly rejected by NewClientWithConfig — still
+// dispatches correctly when a test invokes createHTTPClient with
+// DOCKER_HOST=tcp+tls:// (TestCreateHTTPClient_TCPPlusTLSEnablesTLS).
+//
+// On unknown schemes the function falls back to a plain HTTP/1.1 transport
+// rather than returning an error; NewClientWithConfig has already validated
+// the scheme by the time it gets here in production paths.
+func createHTTPClient(config *ClientConfig) *http.Client {
+	host, scheme := resolveHostForDispatch(config)
 
 	transport := &http.Transport{
 		MaxIdleConns:          config.MaxIdleConns,
@@ -292,42 +432,12 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 		ResponseHeaderTimeout: config.ResponseHeaderTimeout,
 	}
 
-	// Configure dialer based on scheme. Schemes are lowercase at this point
-	// (validateAndNormalizeHost guarantees this for caller-supplied hosts;
-	// client.DefaultDockerHost is already lowercase).
-	switch scheme {
-	case "unix":
-		socketPath := strings.TrimPrefix(host, "unix://")
-		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: config.DialTimeout}
-			return dialer.DialContext(ctx, "unix", socketPath)
-		}
-		// HTTP/2 not supported on Unix sockets
-		transport.ForceAttemptHTTP2 = false
-	case "https", "tcp+tls":
-		// HTTPS / tcp+tls connections can use HTTP/2 via ALPN.
-		// tcp+tls was re-enabled on the allow-list in #616 once the TLS
-		// plumbing from #613 was confirmed to wire cert material into the
-		// custom transport via applyDockerTLS.
-		transport.ForceAttemptHTTP2 = true
-		applyDockerTLS(transport, config)
-	case "tcp":
-		// Plain tcp:// is the legacy way to talk TLS to a remote daemon:
-		// the docker CLI / SDK upgrade the connection to HTTPS when
-		// DOCKER_TLS_VERIFY / DOCKER_CERT_PATH are set, even with a tcp://
-		// URL. Mirror that here so users following Docker's standard mTLS
-		// setup don't see a silent plaintext downgrade. When no TLS env /
-		// config is present, applyDockerTLS is a no-op and we stay on
-		// plain TCP / HTTP/1.1.
-		if hasTLSMaterial(config) {
-			transport.ForceAttemptHTTP2 = true
-		}
-		applyDockerTLS(transport, config)
-	default:
-		// tcp, http, npipe, or empty: plain transport, HTTP/1.1.
-		// (npipe on Windows relies on the SDK's build-tagged dialer; on other
-		// platforms the connection will fail at dial time — see the package
-		// docs and docs/TROUBLESHOOTING.md.)
+	if handler, ok := schemeHandlers[scheme]; ok {
+		handler.apply(transport, config, host)
+	} else {
+		// Unknown / unrecognized scheme: plain HTTP/1.1. This branch is
+		// unreachable when NewClientWithConfig validated the host, but
+		// defensive against future direct callers passing exotic schemes.
 		transport.ForceAttemptHTTP2 = false
 	}
 
@@ -337,46 +447,69 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 	}
 }
 
-// schemeOf returns the lowercase scheme portion of a Docker host URL, or ""
-// if the input has no scheme separator. It does NOT validate the scheme.
-func schemeOf(host string) string {
-	scheme, _, ok := strings.Cut(host, "://")
-	if !ok {
-		return ""
+// resolveHostForDispatch returns the (host, scheme) pair used by
+// createHTTPClient's dispatch. Unlike resolveDockerHost it does NOT enforce
+// the public allow-list — schemes like tcp+tls that are recognized by the
+// dispatch table but not exposed via NewClientWithConfig still resolve
+// here so direct callers (tests) get a TLS-equipped transport.
+//
+// Like resolveDockerHost, it consults the env at most once per call (and
+// only when cfg.Host is empty), preserving the issue #617 contract for the
+// NewClientWithConfig pre-resolved path.
+func resolveHostForDispatch(cfg *ClientConfig) (host, scheme string) {
+	if cfg != nil {
+		host = cfg.Host
 	}
-	return strings.ToLower(scheme)
-}
-
-// validateAndNormalizeHost validates that host uses a supported scheme and
-// returns the host with the scheme lowercased.
-func validateAndNormalizeHost(host string) (string, error) {
 	if host == "" {
-		return "", nil
+		host = getenv(client.EnvOverrideHost)
+	}
+	if host == "" {
+		host = client.DefaultDockerHost
 	}
 
-	rawScheme, rest, hasScheme := strings.Cut(host, "://")
-	if !hasScheme {
-		return "", fmt.Errorf("%w: %q (e.g. \"unix://\", \"tcp://\"); supported schemes: %s",
-			ErrMissingDockerHostScheme, host, formatSupportedSchemes())
+	rawScheme, _, ok := strings.Cut(host, "://")
+	if !ok {
+		return host, ""
 	}
-
-	scheme := strings.ToLower(rawScheme)
-	if slices.Contains(supportedDockerHostSchemes, scheme) {
-		return scheme + "://" + rest, nil
-	}
-
-	return "", fmt.Errorf("%w: %q; supported schemes: %s",
-		ErrUnsupportedDockerHostScheme, scheme+"://", formatSupportedSchemes())
+	return host, strings.ToLower(rawScheme)
 }
 
-// formatSupportedSchemes returns a comma-separated, suffixed list of the
-// supported Docker host schemes for inclusion in error messages.
-func formatSupportedSchemes() string {
-	parts := make([]string, len(supportedDockerHostSchemes))
-	for i, s := range supportedDockerHostSchemes {
-		parts[i] = s + "://"
+// applyUnixTransport configures the transport to dial a Unix domain socket
+// at the path encoded in host. HTTP/2 is disabled (Docker over a Unix
+// socket is HTTP/1.1).
+func applyUnixTransport(transport *http.Transport, cfg *ClientConfig, host string) {
+	socketPath := strings.TrimPrefix(host, schemeUnix+"://")
+	transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: cfg.DialTimeout}
+		return dialer.DialContext(ctx, schemeUnix, socketPath)
 	}
-	return strings.Join(parts, ", ")
+	transport.ForceAttemptHTTP2 = false
+}
+
+// applyTLSTransport wires the transport for HTTPS / tcp+tls hosts: HTTP/2
+// via ALPN and TLS material from ClientConfig / DOCKER_CERT_PATH env.
+func applyTLSTransport(transport *http.Transport, cfg *ClientConfig, _ string) {
+	transport.ForceAttemptHTTP2 = true
+	applyDockerTLS(transport, cfg)
+}
+
+// applyTCPTransport handles plain tcp:// hosts. The docker CLI / SDK
+// silently upgrade tcp:// to HTTPS when DOCKER_TLS_VERIFY / DOCKER_CERT_PATH
+// are set; we mirror that so users following Docker's standard mTLS setup
+// don't see a silent plaintext downgrade. With no TLS material configured
+// this is a plain HTTP/1.1 transport.
+func applyTCPTransport(transport *http.Transport, cfg *ClientConfig, _ string) {
+	if hasTLSMaterial(cfg) {
+		transport.ForceAttemptHTTP2 = true
+	}
+	applyDockerTLS(transport, cfg)
+}
+
+// applyPlainTransport is the no-frills HTTP/1.1 path used for http:// and
+// npipe:// (npipe relies on the SDK's build-tagged dialer; on non-Windows
+// the connection will fail at dial time — see docs/TROUBLESHOOTING.md).
+func applyPlainTransport(transport *http.Transport, _ *ClientConfig, _ string) {
+	transport.ForceAttemptHTTP2 = false
 }
 
 // hasTLSMaterial reports whether either the explicit ClientConfig fields or
@@ -387,7 +520,7 @@ func hasTLSMaterial(config *ClientConfig) bool {
 	if config.TLSCertPath != "" {
 		return true
 	}
-	return os.Getenv(client.EnvOverrideCertPath) != ""
+	return getenv(client.EnvOverrideCertPath) != ""
 }
 
 // applyDockerTLS resolves TLS material and assigns it to the transport,
@@ -421,7 +554,7 @@ func applyDockerTLS(transport *http.Transport, config *ClientConfig) {
 func resolveTLSConfig(config *ClientConfig) (*tls.Config, error) {
 	certPath := config.TLSCertPath
 	if certPath == "" {
-		certPath = os.Getenv(client.EnvOverrideCertPath)
+		certPath = getenv(client.EnvOverrideCertPath)
 	}
 	if certPath == "" {
 		//nolint:nilnil // sentinel "no TLS configured" matches SDK semantics
@@ -434,7 +567,7 @@ func resolveTLSConfig(config *ClientConfig) (*tls.Config, error) {
 	} else {
 		// Mirror docker/docker: InsecureSkipVerify = (DOCKER_TLS_VERIFY == "").
 		// Any non-empty value (including "0") implies verify.
-		verify = os.Getenv(client.EnvTLSVerify) != ""
+		verify = getenv(client.EnvTLSVerify) != ""
 	}
 
 	tlsCfg, err := tlsconfig.Client(tlsconfig.Options{
