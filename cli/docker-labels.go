@@ -55,11 +55,23 @@ var globalLabelAllowList = map[string]bool{
 	"restore-history":         true,
 	"restore-history-max-age": true,
 
-	// Webhook global settings (security-sensitive keys like webhook-allowed-hosts,
-	// allow-remote-presets, and trusted-preset-sources are intentionally NOT allowed
-	// via labels to prevent SSRF and remote configuration injection)
-	"webhooks":         true,
-	"preset-cache-ttl": true,
+	// Webhook global settings — canonical webhook-* names match the INI keys
+	// declared by middlewares.WebhookGlobalConfig (parity enforced by
+	// TestGlobalLabelAllowList_WebhookKeys_MatchMapstructureTags). The
+	// security-sensitive keys (webhook-allowed-hosts, webhook-allow-remote-presets,
+	// webhook-trusted-preset-sources, webhook-preset-cache-dir) are intentionally
+	// NOT allowed via labels to prevent SSRF and remote configuration injection;
+	// only the harmless metadata keys below are permitted. See #486 and #620.
+	webhookGlobalKeyWebhooks:       true,
+	webhookGlobalKeyPresetCacheTTL: true,
+
+	// Legacy unprefixed forms (renamed in #618 on the INI side, left behind
+	// on the label side until #620). Kept in the allow-list so values still
+	// reach applyGlobalWebhookLabels, which logs a one-shot deprecation
+	// warning and maps them to the canonical names. Remove after the
+	// deprecation window closes.
+	legacyLabelKeyWebhooks:       true,
+	legacyLabelKeyPresetCacheTTL: true,
 }
 
 func (c *Config) buildFromDockerContainers(containers []DockerContainerInfo) error {

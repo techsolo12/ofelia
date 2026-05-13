@@ -125,7 +125,7 @@ services:
       ofelia.webhook.slack.id: "T00000000/B00000000000"
       ofelia.webhook.slack.secret: "XXXXXXXXXXXXXXXXXXXXXXXX"
       ofelia.webhook.slack.trigger: "error"
-      ofelia.webhooks: "slack"
+      ofelia.webhook-webhooks: "slack"
       # job-run can be defined on Ofelia container
       ofelia.job-run.cleanup.schedule: "@daily"
       ofelia.job-run.cleanup.image: "alpine:latest"
@@ -478,8 +478,8 @@ labels:
   ofelia.webhook.slack-alerts.secret: "XXXXXXXXXXXXXXXXXXXXXXXX"
   ofelia.webhook.slack-alerts.trigger: error
 
-  # Global webhook settings
-  ofelia.webhooks: "slack-alerts"
+  # Global webhook settings (use the same webhook-* names as the INI [global] section)
+  ofelia.webhook-webhooks: "slack-alerts"
   ofelia.webhook-allowed-hosts: "hooks.slack.com"
 ```
 
