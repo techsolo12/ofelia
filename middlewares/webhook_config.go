@@ -61,29 +61,34 @@ type WebhookConfig struct {
 	Dedup *NotificationDedup `mapstructure:"-" json:"-"`
 }
 
-// WebhookGlobalConfig holds global webhook settings
+// WebhookGlobalConfig holds global webhook settings.
+//
+// All keys are configured under the [global] section of the INI config file
+// and use the `webhook-` prefix to avoid colliding with other [global] settings.
 type WebhookGlobalConfig struct {
-	// Webhooks is a comma-separated list of webhook names to use globally
-	Webhooks string `gcfg:"webhooks" mapstructure:"webhooks"`
+	// Webhooks is a comma-separated list of webhook names to use globally.
+	// (Configured as `webhook-webhooks` in [global]. The per-job `webhooks = ...`
+	// key lives on JobWebhookConfig and is separate.)
+	Webhooks string `gcfg:"webhook-webhooks" mapstructure:"webhook-webhooks"`
 
 	// AllowRemotePresets enables fetching presets from remote URLs
-	AllowRemotePresets bool `gcfg:"allow-remote-presets" mapstructure:"allow-remote-presets"`
+	AllowRemotePresets bool `gcfg:"webhook-allow-remote-presets" mapstructure:"webhook-allow-remote-presets"`
 
 	// TrustedPresetSources is a comma-separated list of trusted remote preset sources
 	// Supports glob patterns (e.g., "gh:netresearch/*", "gh:myorg/ofelia-presets/*")
-	TrustedPresetSources string `gcfg:"trusted-preset-sources" mapstructure:"trusted-preset-sources"`
+	TrustedPresetSources string `gcfg:"webhook-trusted-preset-sources" mapstructure:"webhook-trusted-preset-sources"`
 
 	// PresetCacheTTL is how long to cache remote presets
-	PresetCacheTTL time.Duration `gcfg:"preset-cache-ttl" mapstructure:"preset-cache-ttl"`
+	PresetCacheTTL time.Duration `gcfg:"webhook-preset-cache-ttl" mapstructure:"webhook-preset-cache-ttl"`
 
 	// PresetCacheDir is the directory for caching remote presets
-	PresetCacheDir string `gcfg:"preset-cache-dir" mapstructure:"preset-cache-dir"`
+	PresetCacheDir string `gcfg:"webhook-preset-cache-dir" mapstructure:"webhook-preset-cache-dir"`
 
 	// AllowedHosts controls which hosts webhooks can target.
 	// Default: "*" (allow all hosts) - consistent with local command execution trust model
 	// Set to specific hosts for whitelist mode: "hooks.slack.com, ntfy.internal, 192.168.1.20"
 	// Supports wildcards: "*.example.com"
-	AllowedHosts string `gcfg:"allowed-hosts" mapstructure:"allowed-hosts"`
+	AllowedHosts string `gcfg:"webhook-allowed-hosts" mapstructure:"webhook-allowed-hosts"`
 }
 
 // WebhookData is the data structure passed to webhook templates

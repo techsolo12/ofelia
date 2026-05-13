@@ -42,24 +42,25 @@ const (
 // Config contains the configuration
 type Config struct {
 	Global struct {
-		middlewares.SlackConfig `mapstructure:",squash"`
-		middlewares.SaveConfig  `mapstructure:",squash"`
-		middlewares.MailConfig  `mapstructure:",squash"`
-		LogLevel                string        `gcfg:"log-level" mapstructure:"log-level" validate:"omitempty,oneof=debug info notice trace warn warning error fatal panic critical"` //nolint:revive
-		EnableWeb               bool          `gcfg:"enable-web" mapstructure:"enable-web" default:"false"`
-		WebAddr                 string        `gcfg:"web-address" mapstructure:"web-address" default:":8081"`
-		WebAuthEnabled          bool          `gcfg:"web-auth-enabled" mapstructure:"web-auth-enabled" default:"false"`
-		WebUsername             string        `gcfg:"web-username" mapstructure:"web-username"`
-		WebPasswordHash         string        `gcfg:"web-password-hash" mapstructure:"web-password-hash" json:"-"`
-		WebSecretKey            string        `gcfg:"web-secret-key" mapstructure:"web-secret-key" json:"-"`
-		WebTokenExpiry          int           `gcfg:"web-token-expiry" mapstructure:"web-token-expiry" validate:"gte=1,lte=8760" default:"24"`           //nolint:revive
-		WebMaxLoginAttempts     int           `gcfg:"web-max-login-attempts" mapstructure:"web-max-login-attempts" validate:"gte=1,lte=100" default:"5"` //nolint:revive
-		WebTrustedProxies       []string      `gcfg:"web-trusted-proxies" mapstructure:"web-trusted-proxies,"`
-		EnablePprof             bool          `gcfg:"enable-pprof" mapstructure:"enable-pprof" default:"false"`
-		PprofAddr               string        `gcfg:"pprof-address" mapstructure:"pprof-address" default:"127.0.0.1:8080"`
-		MaxRuntime              time.Duration `gcfg:"max-runtime" mapstructure:"max-runtime" validate:"gte=0" default:"24h"`
-		AllowHostJobsFromLabels bool          `gcfg:"allow-host-jobs-from-labels" mapstructure:"allow-host-jobs-from-labels" default:"false"` //nolint:revive
-		EnableStrictValidation  bool          `gcfg:"enable-strict-validation" mapstructure:"enable-strict-validation" default:"false"`
+		middlewares.SlackConfig         `mapstructure:",squash"`
+		middlewares.SaveConfig          `mapstructure:",squash"`
+		middlewares.MailConfig          `mapstructure:",squash"`
+		middlewares.WebhookGlobalConfig `mapstructure:",squash"`
+		LogLevel                        string        `gcfg:"log-level" mapstructure:"log-level" validate:"omitempty,oneof=debug info notice trace warn warning error fatal panic critical"` //nolint:revive
+		EnableWeb                       bool          `gcfg:"enable-web" mapstructure:"enable-web" default:"false"`
+		WebAddr                         string        `gcfg:"web-address" mapstructure:"web-address" default:":8081"`
+		WebAuthEnabled                  bool          `gcfg:"web-auth-enabled" mapstructure:"web-auth-enabled" default:"false"`
+		WebUsername                     string        `gcfg:"web-username" mapstructure:"web-username"`
+		WebPasswordHash                 string        `gcfg:"web-password-hash" mapstructure:"web-password-hash" json:"-"`
+		WebSecretKey                    string        `gcfg:"web-secret-key" mapstructure:"web-secret-key" json:"-"`
+		WebTokenExpiry                  int           `gcfg:"web-token-expiry" mapstructure:"web-token-expiry" validate:"gte=1,lte=8760" default:"24"`           //nolint:revive
+		WebMaxLoginAttempts             int           `gcfg:"web-max-login-attempts" mapstructure:"web-max-login-attempts" validate:"gte=1,lte=100" default:"5"` //nolint:revive
+		WebTrustedProxies               []string      `gcfg:"web-trusted-proxies" mapstructure:"web-trusted-proxies,"`
+		EnablePprof                     bool          `gcfg:"enable-pprof" mapstructure:"enable-pprof" default:"false"`
+		PprofAddr                       string        `gcfg:"pprof-address" mapstructure:"pprof-address" default:"127.0.0.1:8080"`
+		MaxRuntime                      time.Duration `gcfg:"max-runtime" mapstructure:"max-runtime" validate:"gte=0" default:"24h"`
+		AllowHostJobsFromLabels         bool          `gcfg:"allow-host-jobs-from-labels" mapstructure:"allow-host-jobs-from-labels" default:"false"` //nolint:revive
+		EnableStrictValidation          bool          `gcfg:"enable-strict-validation" mapstructure:"enable-strict-validation" default:"false"`       //nolint:revive
 		// DefaultUser sets the default user for exec/run/service jobs when not specified per-job.
 		// Set to empty string "" to use the container's default user.
 		// Default: "nobody" (secure unprivileged user)
@@ -100,6 +101,12 @@ func NewConfig(logger *slog.Logger) *Config {
 	}
 
 	_ = defaults.Set(c)
+	// Seed the embedded WebhookGlobalConfig with the same defaults that
+	// NewWebhookConfigs() applied to c.WebhookConfigs.Global. This ensures
+	// that keys omitted from the [global] INI section keep their defaults
+	// (notably AllowedHosts="*", PresetCacheTTL=24h, PresetCacheDir) after
+	// the post-parse copy in syncGlobalWebhookConfig().
+	c.Global.WebhookGlobalConfig = *middlewares.DefaultWebhookGlobalConfig()
 	return c
 }
 
@@ -1179,8 +1186,10 @@ func parseGlobalAndDocker(cfg *ini.File, c *Config) (*parseResult, error) {
 			}
 		}
 		result.unknownGlobal = decResult.UnusedKeys
-		// Parse global webhook configuration
-		parseGlobalWebhookConfig(sec, c)
+		// Copy mapstructure-decoded webhook-* global keys into c.WebhookConfigs.Global.
+		// The embedded WebhookGlobalConfig in Config.Global was pre-seeded with
+		// defaults in NewConfig(), so unset keys retain their defaults.
+		syncGlobalWebhookConfig(c)
 	}
 
 	if sec, err := cfg.GetSection("docker"); err == nil {

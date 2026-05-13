@@ -142,7 +142,7 @@ func TestGlobalWebhooks_ParsedFromINI(t *testing.T) {
 	t.Parallel()
 	iniContent := `
 [global]
-webhooks = slack-alerts
+webhook-webhooks = slack-alerts
 
 [webhook "slack-alerts"]
 preset = slack
@@ -239,7 +239,7 @@ func TestGlobalWebhooks_AttachedToScheduler(t *testing.T) {
 	t.Parallel()
 	iniContent := `
 [global]
-webhooks = global-slack
+webhook-webhooks = global-slack
 
 [webhook "global-slack"]
 preset = slack

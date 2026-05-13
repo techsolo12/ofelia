@@ -16,22 +16,21 @@ import (
 	"github.com/netresearch/ofelia/test"
 )
 
-// --- parseGlobalWebhookConfig ---
+// --- syncGlobalWebhookConfig (full INI pipeline) ---
 
-func TestParseGlobalWebhookConfig_AllFields(t *testing.T) {
+func TestSyncGlobalWebhookConfig_AllFields(t *testing.T) {
 	t.Parallel()
 
-	cfgFile := ini.Empty()
-	sec, _ := cfgFile.NewSection("global")
-	sec.Key("webhooks").SetValue("wh1,wh2")
-	sec.Key("allow-remote-presets").SetValue("true")
-	sec.Key("trusted-preset-sources").SetValue("https://example.com")
-	sec.Key("preset-cache-ttl").SetValue("1h")
-	sec.Key("preset-cache-dir").SetValue("/tmp/presets")
-	sec.Key("webhook-allowed-hosts").SetValue("example.com,test.com")
-
-	c := NewConfig(test.NewTestLogger())
-	parseGlobalWebhookConfig(sec, c)
+	c, err := BuildFromString(`
+[global]
+webhook-webhooks               = wh1,wh2
+webhook-allow-remote-presets   = true
+webhook-trusted-preset-sources = https://example.com
+webhook-preset-cache-ttl       = 1h
+webhook-preset-cache-dir       = /tmp/presets
+webhook-allowed-hosts          = example.com,test.com
+`, test.NewTestLogger())
+	require.NoError(t, err)
 
 	assert.Equal(t, "wh1,wh2", c.WebhookConfigs.Global.Webhooks)
 	assert.True(t, c.WebhookConfigs.Global.AllowRemotePresets)
@@ -41,47 +40,44 @@ func TestParseGlobalWebhookConfig_AllFields(t *testing.T) {
 	assert.Equal(t, "example.com,test.com", c.WebhookConfigs.Global.AllowedHosts)
 }
 
-func TestParseGlobalWebhookConfig_NilWebhookConfigs(t *testing.T) {
+func TestSyncGlobalWebhookConfig_NilWebhookConfigs(t *testing.T) {
 	t.Parallel()
-
-	cfgFile := ini.Empty()
-	sec, _ := cfgFile.NewSection("global")
-	sec.Key("webhooks").SetValue("wh1")
 
 	c := NewConfig(test.NewTestLogger())
 	c.WebhookConfigs = nil
+	c.Global.WebhookGlobalConfig.Webhooks = "wh1"
 
-	parseGlobalWebhookConfig(sec, c)
+	syncGlobalWebhookConfig(c)
 
 	assert.NotNil(t, c.WebhookConfigs)
 	assert.Equal(t, "wh1", c.WebhookConfigs.Global.Webhooks)
 }
 
-func TestParseGlobalWebhookConfig_NoKeys(t *testing.T) {
+func TestSyncGlobalWebhookConfig_NoKeys(t *testing.T) {
 	t.Parallel()
 
-	cfgFile := ini.Empty()
-	sec, _ := cfgFile.NewSection("global")
+	// Empty [global] section: defaults must be preserved.
+	c, err := BuildFromString(`
+[global]
+`, test.NewTestLogger())
+	require.NoError(t, err)
 
-	c := NewConfig(test.NewTestLogger())
-	parseGlobalWebhookConfig(sec, c)
-
-	// Should use defaults
+	// Defaults from DefaultWebhookGlobalConfig() preserved.
 	assert.Empty(t, c.WebhookConfigs.Global.Webhooks)
+	assert.Equal(t, "*", c.WebhookConfigs.Global.AllowedHosts)
+	assert.Equal(t, 24*time.Hour, c.WebhookConfigs.Global.PresetCacheTTL)
 }
 
-func TestParseGlobalWebhookConfig_InvalidDuration(t *testing.T) {
+func TestSyncGlobalWebhookConfig_InvalidDuration(t *testing.T) {
 	t.Parallel()
 
-	cfgFile := ini.Empty()
-	sec, _ := cfgFile.NewSection("global")
-	sec.Key("preset-cache-ttl").SetValue("not-a-duration")
-
-	c := NewConfig(test.NewTestLogger())
-	parseGlobalWebhookConfig(sec, c)
-
-	// Invalid duration should leave the default
-	assert.NotEqual(t, "not-a-duration", c.WebhookConfigs.Global.PresetCacheTTL.String())
+	// Invalid duration: mapstructure returns an error from BuildFromString,
+	// which is the expected behavior (surface bad config to the user).
+	_, err := BuildFromString(`
+[global]
+webhook-preset-cache-ttl = not-a-duration
+`, test.NewTestLogger())
+	require.Error(t, err)
 }
 
 // --- parseWebhookConfig ---
