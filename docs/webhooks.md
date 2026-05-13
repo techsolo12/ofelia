@@ -153,12 +153,49 @@ Multiple webhooks can be assigned (comma-separated).
 
 ```ini
 [global]
-; Allow fetching presets from remote URLs
+; Comma-separated list of webhook names applied to every job by default
+; (jobs can still add to or override this with their own `webhooks = ...` key).
+; This is the only webhook-* global key that can also be set via Docker labels
+; (as `ofelia.webhook-webhooks`); the others are INI-only for SSRF safety.
+webhook-webhooks =
+
+; Allow fetching presets from remote URLs (default: false)
 webhook-allow-remote-presets = false
 
-; Cache TTL for remote presets
+; Comma-separated allow-list of remote preset sources, evaluated against the
+; preset string before any fetch when `webhook-allow-remote-presets = true`.
+; Supports glob patterns. Empty (default) blocks all remote fetches even when
+; remote presets are enabled — you must opt in explicitly.
+; Examples: `gh:netresearch/*`, `gh:myorg/ofelia-presets/*`,
+; `https://presets.example.com/*`.
+; INI-only — never accepted from Docker labels (see #486 / #620).
+webhook-trusted-preset-sources =
+
+; Cache TTL for remote presets (default: 24h)
 webhook-preset-cache-ttl = 24h
+
+; Directory used to cache fetched remote presets. Default:
+; `$XDG_CACHE_HOME/ofelia/presets` when `XDG_CACHE_HOME` is set, otherwise the
+; system temp directory (e.g. `/tmp`). Must be writable by the Ofelia process.
+; INI-only — never accepted from Docker labels (a malicious container could
+; otherwise repoint the cache at an attacker-controlled directory). See #486 /
+; #620.
+webhook-preset-cache-dir =
+
+; Comma-separated whitelist of webhook target hosts. Default: `*` (allow all
+; hosts — consistent with the local command execution trust model). Supports
+; wildcards (`*.example.com`). When set to a specific list, requests to any
+; other host are blocked at delivery time. INI-only.
+webhook-allowed-hosts = *
 ```
+
+> **INI vs Docker labels:** `webhook-webhooks` is the only entry above that is
+> also accepted via Docker labels (as `ofelia.webhook-webhooks`). The remaining
+> SSRF-sensitive keys (`webhook-trusted-preset-sources`, `webhook-preset-cache-dir`,
+> `webhook-allowed-hosts`, `webhook-allow-remote-presets`) and
+> `webhook-preset-cache-ttl` (whose label-merge path is not yet implemented)
+> must be set in the INI `[global]` section. See [#486](https://github.com/netresearch/ofelia/issues/486)
+> and [#620](https://github.com/netresearch/ofelia/issues/620).
 
 ## Preset Examples
 

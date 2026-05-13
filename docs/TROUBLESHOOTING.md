@@ -1149,12 +1149,75 @@ nslookup smtp.gmail.com
    smtp-port = 465  # SSL/TLS
    ```
 
+   See [SMTP TLS verification trade-off](#smtp-tls-verification-trade-off-smtp-tls-skip-verify)
+   below before enabling `smtp-tls-skip-verify` in production.
+
 4. **Email address validation**:
    ```ini
    # Ensure valid email format
    email-to = admin@example.com, ops@example.com
    email-from = ofelia@example.com
    ```
+
+### SMTP TLS verification trade-off (`smtp-tls-skip-verify`)
+
+**Symptoms** (TLS verification failing against the SMTP relay):
+```
+Error: Mail error: x509: certificate signed by unknown authority
+Error: Mail error: x509: certificate is valid for ..., not smtp.internal
+Error: Mail error: tls: failed to verify certificate
+```
+
+**What `smtp-tls-skip-verify = true` does**:
+- Sets `tls.Config.InsecureSkipVerify = true` on the SMTP dialer.
+- The TLS handshake still happens (the wire is encrypted), but the server's
+  certificate chain is **not** validated against any CA, and the certificate's
+  Subject/SAN is **not** matched against the configured `smtp-host`.
+- A network-position attacker (compromised router, hostile WiFi, malicious DNS
+  resolver) can present any certificate and Ofelia will still send the message —
+  including the SMTP credentials in `smtp-user` / `smtp-password`.
+
+**When it's appropriate**:
+- **Test or development environments** where the SMTP relay uses a self-signed
+  certificate and rotating trusted CAs is not worth the operational cost.
+- **Internal SMTP relays signed by a private CA** that you cannot install into
+  the Ofelia container's system trust store. Prefer mounting the CA bundle into
+  `/etc/ssl/certs/` (or building a custom image with the CA installed) over
+  disabling verification entirely.
+- **Legacy mail servers** that present an expired or hostname-mismatched
+  certificate which you do not control. This should be a temporary workaround,
+  not a long-term posture.
+
+**When it's NOT appropriate**:
+- Public SMTP relays (Gmail, SendGrid, Mailgun, AWS SES, Office 365). These
+  always present valid public-CA certificates — a verification failure here is a
+  real signal (DNS hijack, MITM, expired CA bundle in the container) and should
+  not be silenced.
+- Any environment where the SMTP credentials grant write access to a mailbox
+  that other systems trust (alerting pipelines, Jira-by-email integrations,
+  etc.). Leaking those credentials via a MITM converts a notification channel
+  into an exploitation vector.
+
+**Recommended alternatives** (in preference order):
+1. Fix the certificate — renew it, add the correct SAN, use Let's Encrypt.
+2. Install the private CA in the container's trust store
+   (mount `ca-bundle.crt` into `/etc/ssl/certs/` and run `update-ca-certificates`
+   in a custom image).
+3. Use a localhost SMTP relay (Postfix sidecar) that handles upstream TLS for
+   you, and let Ofelia connect to `127.0.0.1:25` over plain TCP.
+4. Only as a last resort: `smtp-tls-skip-verify = true`, scoped to environments
+   where the threat model accepts the risk.
+
+```ini
+[global]
+smtp-host = smtp.internal.example.com
+smtp-port = 587
+smtp-user = ofelia@internal
+smtp-password = ${SMTP_PASSWORD}
+# Internal SMTP server uses a private CA we can't easily distribute.
+# Acceptable here because the path is fully inside our VPC.
+smtp-tls-skip-verify = true
+```
 
 ### Slack Notifications Not Working
 

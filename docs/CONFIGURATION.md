@@ -279,6 +279,12 @@ docker-events = true
 allow-host-jobs-from-labels = false
 default-user = nobody        # Default for exec/run/service; empty uses container default
 
+# Notification deduplication: suppress duplicate error notifications (Slack, email,
+# save) for jobs that fail repeatedly with the same error. Set to 0 (default) to
+# disable deduplication and emit every notification. Accepts any Go duration
+# (`5m`, `1h`, `30s`).
+notification-cooldown = 0
+
 # Notification Settings (deprecated Slack middleware - prefer the webhook system below)
 slack-webhook = https://hooks.slack.com/services/XXX/YYY/ZZZ
 slack-only-on-error = true
@@ -290,6 +296,11 @@ smtp-host = smtp.gmail.com
 smtp-port = 587
 smtp-user = ofelia@example.com
 smtp-password = ${SMTP_PASSWORD}  # Environment variable reference
+# Skip TLS certificate verification when dialing the SMTP server. Default: false.
+# WARNING: Disables MITM protection — only enable for test environments or when
+# the SMTP server uses a private/internal CA that cannot be trusted system-wide.
+# See docs/TROUBLESHOOTING.md for the security trade-off.
+smtp-tls-skip-verify = false
 
 # Output Settings
 save-folder = /var/log/ofelia
