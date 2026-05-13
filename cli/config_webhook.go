@@ -152,38 +152,24 @@ func parseWebhookConfig(section *ini.Section, config *middlewares.WebhookConfig)
 	return nil
 }
 
-// parseGlobalWebhookConfig parses global webhook configuration from [global] section
-func parseGlobalWebhookConfig(section *ini.Section, c *Config) {
+// syncGlobalWebhookConfig copies the WebhookGlobalConfig values embedded in
+// Config.Global (populated by mapstructure decoding of the [global] INI section)
+// into c.WebhookConfigs.Global. NewConfig() pre-seeds Config.Global.WebhookGlobalConfig
+// with DefaultWebhookGlobalConfig() so that unset keys retain their defaults
+// (notably AllowedHosts="*", which is security-relevant).
+//
+// Per-key ExpandEnvVars is handled by sectionToMap() before decoding.
+func syncGlobalWebhookConfig(c *Config) {
 	if c.WebhookConfigs == nil {
 		c.WebhookConfigs = NewWebhookConfigs()
 	}
-
-	if key, err := section.GetKey("webhooks"); err == nil {
-		c.WebhookConfigs.Global.Webhooks = ExpandEnvVars(key.String())
-	}
-
-	if key, err := section.GetKey("allow-remote-presets"); err == nil {
-		c.WebhookConfigs.Global.AllowRemotePresets, _ = key.Bool()
-	}
-
-	if key, err := section.GetKey("trusted-preset-sources"); err == nil {
-		c.WebhookConfigs.Global.TrustedPresetSources = ExpandEnvVars(key.String())
-	}
-
-	if key, err := section.GetKey("preset-cache-ttl"); err == nil {
-		if d, err := key.Duration(); err == nil {
-			c.WebhookConfigs.Global.PresetCacheTTL = d
-		}
-	}
-
-	if key, err := section.GetKey("preset-cache-dir"); err == nil {
-		c.WebhookConfigs.Global.PresetCacheDir = ExpandEnvVars(key.String())
-	}
-
-	// Host whitelist: "*" = allow all (default), specific list = whitelist mode
-	if key, err := section.GetKey("webhook-allowed-hosts"); err == nil {
-		c.WebhookConfigs.Global.AllowedHosts = ExpandEnvVars(key.String())
-	}
+	cfg := c.Global.WebhookGlobalConfig
+	c.WebhookConfigs.Global.Webhooks = cfg.Webhooks
+	c.WebhookConfigs.Global.AllowRemotePresets = cfg.AllowRemotePresets
+	c.WebhookConfigs.Global.TrustedPresetSources = cfg.TrustedPresetSources
+	c.WebhookConfigs.Global.PresetCacheTTL = cfg.PresetCacheTTL
+	c.WebhookConfigs.Global.PresetCacheDir = cfg.PresetCacheDir
+	c.WebhookConfigs.Global.AllowedHosts = cfg.AllowedHosts
 }
 
 // JobWebhookConfig holds per-job webhook configuration

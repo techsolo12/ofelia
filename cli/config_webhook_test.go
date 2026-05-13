@@ -822,3 +822,134 @@ func TestParseWebhookConfig_EnvExpansion(t *testing.T) {
 		t.Errorf("Expected expanded URL, got %q", config.URL)
 	}
 }
+
+// TestBuildFromString_WebhookGlobalKeys_Issue604 verifies that webhook-* keys
+// in the [global] section are recognized (no "Unknown configuration key" warning)
+// and that their values populate c.WebhookConfigs.Global.
+//
+// See https://github.com/netresearch/ofelia/issues/604
+func TestBuildFromString_WebhookGlobalKeys_Issue604(t *testing.T) {
+	t.Parallel()
+
+	logger, handler := test.NewTestLoggerWithHandler()
+
+	ini := `
+[global]
+webhook-allow-remote-presets   = true
+webhook-preset-cache-ttl       = 12h
+webhook-trusted-preset-sources = gh:netresearch/*, gh:myorg/ofelia-presets/*
+webhook-preset-cache-dir       = /tmp/ofelia-presets
+webhook-allowed-hosts          = hooks.slack.com, discord.com
+`
+
+	c, err := BuildFromString(ini, logger)
+	if err != nil {
+		t.Fatalf("BuildFromString failed: %v", err)
+	}
+
+	// (a) No "Unknown configuration key" warning for any of these keys.
+	suspects := []string{
+		"webhook-allow-remote-presets",
+		"webhook-preset-cache-ttl",
+		"webhook-trusted-preset-sources",
+		"webhook-preset-cache-dir",
+		"webhook-allowed-hosts",
+	}
+	for _, key := range suspects {
+		if handler.HasWarning("Unknown configuration key '" + key + "'") {
+			t.Errorf("got 'Unknown configuration key' warning for %q (issue #604)", key)
+		}
+	}
+
+	// (b) Values are reflected in c.WebhookConfigs.Global.
+	if c.WebhookConfigs == nil || c.WebhookConfigs.Global == nil {
+		t.Fatal("WebhookConfigs.Global is nil after BuildFromString")
+	}
+	g := c.WebhookConfigs.Global
+	if !g.AllowRemotePresets {
+		t.Errorf("AllowRemotePresets = false, want true")
+	}
+	if g.PresetCacheTTL != 12*time.Hour {
+		t.Errorf("PresetCacheTTL = %v, want 12h", g.PresetCacheTTL)
+	}
+	if g.TrustedPresetSources != "gh:netresearch/*, gh:myorg/ofelia-presets/*" {
+		t.Errorf("TrustedPresetSources = %q, want %q",
+			g.TrustedPresetSources, "gh:netresearch/*, gh:myorg/ofelia-presets/*")
+	}
+	if g.PresetCacheDir != "/tmp/ofelia-presets" {
+		t.Errorf("PresetCacheDir = %q, want %q", g.PresetCacheDir, "/tmp/ofelia-presets")
+	}
+	if g.AllowedHosts != "hooks.slack.com, discord.com" {
+		t.Errorf("AllowedHosts = %q, want %q",
+			g.AllowedHosts, "hooks.slack.com, discord.com")
+	}
+}
+
+// TestBuildFromString_OldUnprefixedKeysWarn verifies that the previously
+// undocumented unprefixed forms (e.g. allow-remote-presets, webhooks) under
+// [global] now produce "Unknown configuration key" warnings rather than
+// silently being ignored or - worse - applied through some legacy path.
+// Regression guard: if someone re-adds the unprefixed forms to the struct
+// tags, this test fires.
+func TestBuildFromString_OldUnprefixedKeysWarn(t *testing.T) {
+	t.Parallel()
+
+	logger, handler := test.NewTestLoggerWithHandler()
+	_, err := BuildFromString(`
+[global]
+log-level = info
+allow-remote-presets = true
+trusted-preset-sources = gh:netresearch/*
+preset-cache-ttl = 12h
+preset-cache-dir = /tmp/old
+allowed-hosts = *.example.com
+`, logger)
+	if err != nil {
+		t.Fatalf("BuildFromString failed: %v", err)
+	}
+
+	want := []string{
+		"allow-remote-presets",
+		"trusted-preset-sources",
+		"preset-cache-ttl",
+		"preset-cache-dir",
+		"allowed-hosts",
+	}
+	for _, key := range want {
+		if !handler.HasWarning("Unknown configuration key '" + key + "'") {
+			t.Errorf("expected 'Unknown configuration key' warning for unprefixed %q, did not see it", key)
+		}
+	}
+}
+
+// TestBuildFromString_WebhookGlobalKeys_DefaultsPreserved verifies that when
+// no webhook-* global keys are configured, the defaults from
+// DefaultWebhookGlobalConfig() are preserved (especially AllowedHosts="*", which
+// is security-relevant).
+func TestBuildFromString_WebhookGlobalKeys_DefaultsPreserved(t *testing.T) {
+	t.Parallel()
+
+	logger := test.NewTestLogger()
+	// Minimal config with no webhook-* keys.
+	c, err := BuildFromString(`
+[global]
+log-level = info
+`, logger)
+	if err != nil {
+		t.Fatalf("BuildFromString failed: %v", err)
+	}
+
+	if c.WebhookConfigs == nil || c.WebhookConfigs.Global == nil {
+		t.Fatal("WebhookConfigs.Global is nil")
+	}
+	g := c.WebhookConfigs.Global
+	if g.AllowedHosts != "*" {
+		t.Errorf("AllowedHosts default = %q, want %q (security-relevant)", g.AllowedHosts, "*")
+	}
+	if g.PresetCacheTTL != 24*time.Hour {
+		t.Errorf("PresetCacheTTL default = %v, want 24h", g.PresetCacheTTL)
+	}
+	if g.AllowRemotePresets {
+		t.Errorf("AllowRemotePresets default = true, want false")
+	}
+}
