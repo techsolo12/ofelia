@@ -450,6 +450,10 @@ func convertToPortMap(pm domain.PortMap) nat.PortMap {
 	return result
 }
 
+// convertToMount converts a domain Mount to the SDK's mount.Mount. Returns
+// the zero value mount.Mount{} when m is nil. Production callers iterate
+// over a slice (where elements are never nil), but the guard prevents a
+// future direct-caller from panicking.
 func convertToMount(m *domain.Mount) mount.Mount {
 	if m == nil {
 		return mount.Mount{}
