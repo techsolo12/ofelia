@@ -33,6 +33,11 @@ type SDKDockerProviderConfig struct {
 	MetricsRecorder MetricsRecorder
 	// AuthProvider for registry authentication (optional)
 	AuthProvider ports.AuthProvider
+	// NegotiateTimeout overrides the bound on the initial Docker API version
+	// negotiation that runs in NewClientWithConfig. Zero or negative values
+	// keep the adapter default (defaultNegotiateTimeout). Exposed primarily
+	// so tests can drive the construction-time wedge path quickly.
+	NegotiateTimeout time.Duration
 }
 
 // NewSDKDockerProvider creates a new SDK-based Docker provider.
@@ -40,6 +45,9 @@ func NewSDKDockerProvider(cfg *SDKDockerProviderConfig) (*SDKDockerProvider, err
 	clientConfig := dockeradapter.DefaultConfig()
 	if cfg != nil && cfg.Host != "" {
 		clientConfig.Host = cfg.Host
+	}
+	if cfg != nil && cfg.NegotiateTimeout > 0 {
+		clientConfig.NegotiateTimeout = cfg.NegotiateTimeout
 	}
 
 	client, err := dockeradapter.NewClientWithConfig(clientConfig)
