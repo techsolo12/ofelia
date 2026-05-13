@@ -20,6 +20,14 @@ import (
 
 var ErrNoContainerWithOfeliaEnabled = errors.New("couldn't find containers with label 'ofelia.enabled=true'")
 
+// dockerStartupPingTimeout bounds the construction-time sanity Ping calls
+// (both the buildSDKProvider post-construction check and the NewDockerHandler
+// post-construction check). Without this, a daemon that completes API
+// negotiation but then wedges on /_ping would hang Ofelia at startup. The
+// bound is generous because daemon startup is one-shot and operators expect
+// a clear error within a few seconds. See https://github.com/netresearch/ofelia/issues/614.
+const dockerStartupPingTimeout = 10 * time.Second
+
 // dockerEventTypeContainer is the Docker event filter "type" value for
 // container-scoped events (vs. image, network, volume, etc.). Docker's API
 // transports these as plain strings.
@@ -130,8 +138,12 @@ func NewDockerHandler(
 		c.dockerProvider = provider
 	}
 
-	// Do a sanity check on docker
-	if err = c.dockerProvider.Ping(ctx); err != nil {
+	// Do a sanity check on docker. Bound the call so a wedged daemon cannot
+	// hang Ofelia at startup; see https://github.com/netresearch/ofelia/issues/614.
+	pingCtx, pingCancel := context.WithTimeout(ctx, dockerStartupPingTimeout)
+	err = c.dockerProvider.Ping(pingCtx)
+	pingCancel()
+	if err != nil {
 		cancel()
 		//nolint:revive // Error message intentionally verbose for UX (actionable troubleshooting hints)
 		return nil, fmt.Errorf("failed to connect to Docker daemon: %w\n  → Check Docker daemon is running: systemctl status docker\n  → Verify Docker API is accessible: docker info\n  → Check for Docker daemon errors: journalctl -u docker -n 50", err)
@@ -167,20 +179,33 @@ func NewDockerHandler(
 	return c, nil
 }
 
-// buildSDKProvider creates the new SDK-based Docker provider.
-func (c *DockerHandler) buildSDKProvider() (core.DockerProvider, error) {
-	// Create auth provider for registry authentication
+// newSDKDockerProvider builds a real SDK-backed core.DockerProvider. It is a
+// package-level variable so that tests can swap in a stub provider without
+// having to spin up a fake Docker daemon. Mirrors the existing newDockerHandler
+// seam used elsewhere in this package.
+var newSDKDockerProvider = func() (core.DockerProvider, error) {
 	authProvider := dockeradapter.NewConfigAuthProvider()
-
-	provider, err := core.NewSDKDockerProvider(&core.SDKDockerProviderConfig{
+	return core.NewSDKDockerProvider(&core.SDKDockerProviderConfig{
 		AuthProvider: authProvider,
 	})
+}
+
+// buildSDKProvider creates the new SDK-based Docker provider.
+func (c *DockerHandler) buildSDKProvider() (core.DockerProvider, error) {
+	provider, err := newSDKDockerProvider()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create SDK Docker provider: %w", err)
 	}
 
-	// Verify connection
-	if err := provider.Ping(context.Background()); err != nil {
+	// Verify connection with a bounded context derived from the handler's own
+	// context so a SIGINT during startup also cancels the sanity ping. See
+	// https://github.com/netresearch/ofelia/issues/614 for the deadline; using
+	// c.ctx rather than context.Background propagates parent cancellation per
+	// PR #636 code review.
+	pingCtx, pingCancel := context.WithTimeout(c.ctx, dockerStartupPingTimeout)
+	err = provider.Ping(pingCtx)
+	pingCancel()
+	if err != nil {
 		_ = provider.Close()
 		return nil, fmt.Errorf("SDK provider failed to connect to Docker: %w", err)
 	}

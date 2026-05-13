@@ -105,7 +105,17 @@ func (hc *HealthChecker) performAllChecks() {
 	hc.checkSystemResources()
 }
 
-// checkDocker verifies Docker daemon connectivity
+// dockerHealthCheckTimeout bounds each Docker daemon call performed by the
+// background health checker. Operators monitoring /health expect a non-2xx
+// response within a single scrape interval, so we keep this short. The value
+// covers Ping and Info independently; the worst-case caller wait is roughly
+// 2x this value.
+const dockerHealthCheckTimeout = 5 * time.Second
+
+// checkDocker verifies Docker daemon connectivity. Each Docker SDK call is
+// bounded by dockerHealthCheckTimeout so that a wedged daemon - reachable but
+// unresponsive - cannot stall the periodic health-check goroutine and starve
+// /health and /ready of fresh status. See https://github.com/netresearch/ofelia/issues/614.
 func (hc *HealthChecker) checkDocker() {
 	start := time.Now()
 	check := HealthCheck{
@@ -113,20 +123,23 @@ func (hc *HealthChecker) checkDocker() {
 		LastChecked: start,
 	}
 
-	ctx := context.Background()
-
 	if hc.dockerProvider == nil {
 		check.Status = HealthStatusUnhealthy
 		check.Message = "Docker provider not initialized"
 	} else {
-		// Try to ping Docker
-		err := hc.dockerProvider.Ping(ctx)
+		// Try to ping Docker with a bounded context so a wedged daemon
+		// cannot hang the background ticker.
+		pingCtx, pingCancel := context.WithTimeout(context.Background(), dockerHealthCheckTimeout)
+		err := hc.dockerProvider.Ping(pingCtx)
+		pingCancel()
 		if err != nil {
 			check.Status = HealthStatusUnhealthy
 			check.Message = "Docker daemon unreachable: " + err.Error()
 		} else {
-			// Get Docker info
-			info, err := hc.dockerProvider.Info(ctx)
+			// Get Docker info, also bounded.
+			infoCtx, infoCancel := context.WithTimeout(context.Background(), dockerHealthCheckTimeout)
+			info, err := hc.dockerProvider.Info(infoCtx)
+			infoCancel()
 			if err != nil {
 				check.Status = HealthStatusDegraded
 				check.Message = "Could not get Docker info: " + err.Error()

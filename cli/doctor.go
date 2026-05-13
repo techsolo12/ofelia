@@ -10,9 +10,16 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/netresearch/go-cron"
 )
+
+// doctorDockerCallTimeout bounds each Docker SDK call performed by the doctor
+// command (Ping and per-image HasImageLocally). Without this, a wedged daemon
+// would hang the very diagnostic tool meant to surface this kind of failure.
+// See https://github.com/netresearch/ofelia/issues/614.
+const doctorDockerCallTimeout = 5 * time.Second
 
 // DoctorCommand runs comprehensive health checks on Ofelia configuration and environment
 type DoctorCommand struct {
@@ -375,13 +382,16 @@ func (c *DoctorCommand) checkDocker(report *DoctorReport) bool {
 		return false
 	}
 
-	if err := provider.Ping(context.Background()); err != nil {
+	pingCtx, pingCancel := context.WithTimeout(context.Background(), doctorDockerCallTimeout)
+	pingErr := provider.Ping(pingCtx)
+	pingCancel()
+	if pingErr != nil {
 		report.Healthy = false
 		report.Checks = append(report.Checks, CheckResult{
 			Category: categoryDocker,
 			Name:     checkNameConnectivity,
 			Status:   statusFail,
-			Message:  fmt.Sprintf("Docker ping failed: %v", err),
+			Message:  fmt.Sprintf("Docker ping failed: %v", pingErr),
 			Hints: []string{
 				"Check daemon status (Linux: systemctl status docker, macOS/Windows: check Docker Desktop)",
 				"View logs (Linux: journalctl -u docker -n 50, macOS/Windows: Docker Desktop logs)",
@@ -550,10 +560,15 @@ func (c *DoctorCommand) checkDockerImages(report *DoctorReport) {
 		return // Provider not available
 	}
 
-	ctx := context.Background()
 	allAvailable := true
 	for image := range imageMap {
-		hasImage, err := provider.HasImageLocally(ctx, image)
+		// Bound each lookup independently so a wedged daemon does not hang
+		// the whole diagnostic, and so a slow daemon with many images is not
+		// falsely failed by a single overall budget. See
+		// https://github.com/netresearch/ofelia/issues/614.
+		imgCtx, imgCancel := context.WithTimeout(context.Background(), doctorDockerCallTimeout)
+		hasImage, err := provider.HasImageLocally(imgCtx, image)
+		imgCancel()
 		if err != nil || !hasImage {
 			allAvailable = false
 			report.Healthy = false

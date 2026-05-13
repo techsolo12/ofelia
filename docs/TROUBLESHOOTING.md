@@ -310,6 +310,39 @@ SDK provider failed to connect to Docker: pinging docker: ... x509: certificate 
 - Issue: [#607](https://github.com/netresearch/ofelia/issues/607)
 - Fix: [#613](https://github.com/netresearch/ofelia/pull/613)
 
+### Docker Daemon Wedged (startup or health-check fails fast with `context deadline exceeded`)
+
+**Symptoms** (any of):
+
+```
+SDK provider failed to connect to Docker: pinging docker: context deadline exceeded
+```
+
+```
+Docker API version negotiation timed out; continuing with default API version
+```
+
+`/health` returns non-2xx within ~5 seconds; `/ready` reports `unhealthy` for the `docker` check.
+
+`ofelia doctor` reports each Docker call individually (Ping ~5s, `HasImageLocally` ~5s per image).
+
+**Affected**: any setup where the Docker socket / TCP endpoint is *reachable* (TCP handshake succeeds, unix socket connects) but the daemon itself does not respond in time. The most common cause is a Docker socket proxy whose upstream daemon is wedged or under load.
+
+**Root Cause**: every Docker SDK call from Ofelia is now bounded by an explicit timeout (#608/#611 for `NegotiateAPIVersion`, #614/#636 for the rest). What used to be a silent indefinite hang is now a fast loud failure with `context deadline exceeded`. This is a behavior improvement — the previous indefinite hang made monitoring blind to wedged daemons.
+
+**Resolution**:
+
+1. Verify the daemon is actually responsive: `docker --host=$DOCKER_HOST info` from the same machine.
+2. If you use a socket proxy (tecnativa, etc.), check the proxy's upstream-daemon health. Restart the proxy if its connection to `/var/run/docker.sock` is stale.
+3. Check `docker info` server-side latency. If the daemon takes more than ~5 seconds to respond to a Ping under normal load, file an issue — the bound is operator-tunable in source but not currently exposed via config.
+
+The bounds are: 5s for `/health` and `/ready`, 10s for the startup sanity Pings, 5s per call for `ofelia doctor`, and 30s for the initial API version negotiation.
+
+**References**:
+
+- Issue: [#608](https://github.com/netresearch/ofelia/issues/608), [#614](https://github.com/netresearch/ofelia/issues/614)
+- Fix: [#611](https://github.com/netresearch/ofelia/pull/611), [#636](https://github.com/netresearch/ofelia/pull/636)
+
 ### HTTP/2 Protocol Errors (v0.11.0 Only)
 
 **Symptoms**:
