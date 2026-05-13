@@ -164,21 +164,19 @@ func TestHealthHandler(t *testing.T) {
 }
 
 func TestHealthStatus(t *testing.T) {
-	hc := NewHealthChecker(nil, "1.0.0")
-
-	// Manually set some check statuses
-	hc.mu.Lock()
-	hc.checks["test1"] = HealthCheck{
-		Name:        "test1",
-		Status:      HealthStatusHealthy,
-		LastChecked: time.Now(),
+	// Build HealthChecker directly to test the aggregation logic in isolation,
+	// without the background goroutine that NewHealthChecker spawns. That
+	// goroutine races with this test's check-map writes — see the previous
+	// flake where the auto-injected docker=Unhealthy check leaked into the
+	// aggregated status before GetHealth() ran.
+	hc := &HealthChecker{
+		startTime: time.Now(),
+		version:   "1.0.0",
+		checks: map[string]HealthCheck{
+			"test1": {Name: "test1", Status: HealthStatusHealthy, LastChecked: time.Now()},
+			"test2": {Name: "test2", Status: HealthStatusDegraded, LastChecked: time.Now()},
+		},
 	}
-	hc.checks["test2"] = HealthCheck{
-		Name:        "test2",
-		Status:      HealthStatusDegraded,
-		LastChecked: time.Now(),
-	}
-	hc.mu.Unlock()
 
 	health := hc.GetHealth()
 
