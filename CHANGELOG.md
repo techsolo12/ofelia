@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `tcp+tls://` is back on the `DOCKER_HOST` allow-list now that the TLS plumbing from [#613](https://github.com/netresearch/ofelia/pull/613) wires `DOCKER_CERT_PATH` / `DOCKER_TLS_VERIFY` (and the equivalent `ClientConfig.TLSCertPath` / `TLSVerify` overrides) into the custom HTTP transport. PR [#612](https://github.com/netresearch/ofelia/pull/612) had withheld it to avoid a silent plain-TCP downgrade; that risk is now closed by the existing `TestCreateHTTPClient_TCPPlusTLSEnablesTLS` regression test plus the new `TestNewClientWithConfig_TCPPlusTLSScheme` allow-list assertion. ([#620](https://github.com/netresearch/ofelia/pull/620), fixes [#616](https://github.com/netresearch/ofelia/issues/616))
+- `tcp+tls://` is back on the `DOCKER_HOST` allow-list now that the TLS plumbing from [#613](https://github.com/netresearch/ofelia/pull/613) wires `DOCKER_CERT_PATH` / `DOCKER_TLS_VERIFY` (and the equivalent `ClientConfig.TLSCertPath` / `TLSVerify` overrides) into the custom HTTP transport. PR [#612](https://github.com/netresearch/ofelia/pull/612) had withheld it to avoid a silent plain-TCP downgrade; that risk is now closed by the existing `TestCreateHTTPClient_TCPPlusTLSEnablesTLS` regression test plus the new `TestNewClientWithConfig_TCPPlusTLSScheme` allow-list assertion. ([#625](https://github.com/netresearch/ofelia/pull/625), fixes [#616](https://github.com/netresearch/ofelia/issues/616))
 
 ### Changed
 

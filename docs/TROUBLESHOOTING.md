@@ -244,14 +244,17 @@ networks:
 
 **Symptoms**:
 ```
-Error: creating docker client: unsupported DOCKER_HOST scheme: "ssh://"; supported schemes: unix://, tcp://, http://, https://, npipe://
+Error: creating docker client: unsupported DOCKER_HOST scheme: "ssh://"; supported schemes: unix://, tcp://, tcp+tls://, http://, https://, npipe://
 ```
 
 **Root Cause**:
 Ofelia's Docker adapter validates the `DOCKER_HOST` URL scheme at startup
 against an explicit allow-list. Earlier versions silently fell through to a
-plain-TCP transport for unrecognized schemes (e.g. `ssh://`, `fd://`,
-`tcp+tls://`), which produced opaque dial errors or silent TLS downgrades.
+plain-TCP transport for unrecognized schemes (e.g. `ssh://`, `fd://`),
+which produced opaque dial errors. `tcp+tls://` was historically in the
+same boat but is now supported (see the table below — the TLS plumbing
+landed in [#613](https://github.com/netresearch/ofelia/pull/613) and the
+allow-list was re-opened in [#625](https://github.com/netresearch/ofelia/pull/625)).
 See [#609](https://github.com/netresearch/ofelia/issues/609).
 
 **Supported schemes** (case-insensitive — `TCP://` is normalized to `tcp://`):
