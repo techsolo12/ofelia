@@ -71,7 +71,7 @@ func BuildFromFile(path string) (*Config, error) {
 **INI Format:**
 ```ini
 [global]
-slack-url = https://hooks.slack.com/...
+slack-webhook = https://hooks.slack.com/...
 docker-events = true
 
 [job-exec "database-backup"]

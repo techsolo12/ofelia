@@ -38,7 +38,17 @@ func TestConfigGlobalKeysAreDocumented(t *testing.T) {
 
 	// Walk Config.Global; for every embedded struct (squash), pull each field's
 	// mapstructure tag (stripped of options) and verify the docs mention it.
-	globalT := reflect.TypeOf(Config{}).Field(0).Type // Global anonymous struct
+	//
+	// Robust against future Config restructuring: look up the Global field by
+	// name rather than by index 0, so a refactor that adds a sibling field
+	// before Global doesn't silently change what this test inspects.
+	globalField, ok := reflect.TypeOf(Config{}).FieldByName("Global")
+	if !ok {
+		t.Fatal("Config.Global field not found - did the struct get renamed?")
+	}
+	globalT := globalField.Type
+	// TODO(#635): also walk non-anonymous (direct) Global fields once the
+	// undocumented direct keys (notification-cooldown, etc.) get docs.
 	for i := range globalT.NumField() {
 		f := globalT.Field(i)
 		if !f.Anonymous {
