@@ -4,8 +4,17 @@
 package docker
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -437,5 +446,377 @@ func TestNewClientWithConfig_MissingScheme(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unix://") {
 		t.Errorf("expected error to mention example schemes, got %q", err.Error())
+	}
+}
+
+// writeTLSFixtures generates a self-signed CA + cert/key triplet (ca.pem,
+// cert.pem, key.pem) into dir. The material is throwaway and only intended
+// to give crypto/tls something parseable to load — no handshake ever runs
+// against it.
+func writeTLSFixtures(t *testing.T, dir string) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "ofelia-test"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	for name, data := range map[string][]byte{
+		"ca.pem":   certPEM,
+		"cert.pem": certPEM,
+		"key.pem":  keyPEM,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+}
+
+// TestCreateHTTPClient_HonorsTLSEnv asserts that when DOCKER_HOST is an HTTPS
+// endpoint and DOCKER_CERT_PATH / DOCKER_TLS_VERIFY are set, the resulting
+// transport carries a non-nil *tls.Config with RootCAs and Certificates
+// populated from the cert path.
+//
+// Regression test for #607: client.FromEnv installs TLS on a transport that
+// client.WithHTTPClient then replaces wholesale, discarding the TLS material.
+// createHTTPClient is the boundary that constructs the replacement transport,
+// so we assert on its output directly.
+func TestCreateHTTPClient_HonorsTLSEnv(t *testing.T) {
+	certDir := t.TempDir()
+	writeTLSFixtures(t, certDir)
+
+	// Use loopback to avoid any chance of contaminating other parallel tests
+	// that might be checking DOCKER_HOST resolution.
+	t.Setenv("DOCKER_HOST", "https://127.0.0.1:0")
+	t.Setenv("DOCKER_TLS_VERIFY", "1")
+	t.Setenv("DOCKER_CERT_PATH", certDir)
+
+	httpClient := createHTTPClient(DefaultConfig())
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
+	}
+
+	if transport.TLSClientConfig == nil {
+		t.Fatal("transport.TLSClientConfig is nil; DOCKER_TLS_VERIFY/DOCKER_CERT_PATH not honored")
+	}
+	if transport.TLSClientConfig.RootCAs == nil {
+		t.Error("transport.TLSClientConfig.RootCAs is nil; ca.pem not loaded")
+	}
+	if len(transport.TLSClientConfig.Certificates) == 0 {
+		t.Error("transport.TLSClientConfig.Certificates is empty; cert.pem/key.pem not loaded")
+	}
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Error("transport.TLSClientConfig.InsecureSkipVerify=true; DOCKER_TLS_VERIFY=1 should imply verify")
+	}
+}
+
+// TestCreateHTTPClient_ExplicitTLSOverridesEnv asserts the precedence
+// contract: ClientConfig fields take priority over DOCKER_* env vars.
+func TestCreateHTTPClient_ExplicitTLSOverridesEnv(t *testing.T) {
+	envDir := t.TempDir()
+	writeTLSFixtures(t, envDir)
+	cfgDir := t.TempDir()
+	writeTLSFixtures(t, cfgDir)
+
+	t.Setenv("DOCKER_HOST", "https://127.0.0.1:0")
+	t.Setenv("DOCKER_TLS_VERIFY", "")
+	t.Setenv("DOCKER_CERT_PATH", envDir)
+
+	verify := true
+	cfg := DefaultConfig()
+	cfg.TLSCertPath = cfgDir
+	cfg.TLSVerify = &verify
+
+	httpClient := createHTTPClient(cfg)
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
+	}
+
+	if transport.TLSClientConfig == nil {
+		t.Fatal("transport.TLSClientConfig is nil; explicit ClientConfig.TLSCertPath not honored")
+	}
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify=true; explicit TLSVerify=true should override empty env var")
+	}
+	if len(transport.TLSClientConfig.Certificates) == 0 {
+		t.Error("Certificates not loaded from explicit TLSCertPath")
+	}
+}
+
+// TestCreateHTTPClient_NoTLSForUnixSocket asserts no TLS is applied when the
+// resolved host is a unix socket, even if DOCKER_CERT_PATH is set in env.
+func TestCreateHTTPClient_NoTLSForUnixSocket(t *testing.T) {
+	certDir := t.TempDir()
+	writeTLSFixtures(t, certDir)
+
+	t.Setenv("DOCKER_HOST", "")
+	t.Setenv("DOCKER_TLS_VERIFY", "1")
+	t.Setenv("DOCKER_CERT_PATH", certDir)
+
+	cfg := DefaultConfig()
+	cfg.Host = "unix:///var/run/docker.sock"
+
+	httpClient := createHTTPClient(cfg)
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
+	}
+
+	if transport.TLSClientConfig != nil {
+		t.Errorf("expected nil TLSClientConfig for unix socket, got %+v", transport.TLSClientConfig)
+	}
+}
+
+// TestCreateHTTPClient_NoTLSWhenCertPathEmpty asserts SDK-equivalent
+// behavior: with no DOCKER_CERT_PATH and no explicit config, no TLS is
+// applied even for an HTTPS host.
+func TestCreateHTTPClient_NoTLSWhenCertPathEmpty(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "https://127.0.0.1:0")
+	t.Setenv("DOCKER_TLS_VERIFY", "1")
+	t.Setenv("DOCKER_CERT_PATH", "")
+
+	httpClient := createHTTPClient(DefaultConfig())
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
+	}
+
+	if transport.TLSClientConfig != nil {
+		t.Errorf("expected nil TLSClientConfig when DOCKER_CERT_PATH is empty, got %+v", transport.TLSClientConfig)
+	}
+}
+
+// TestCreateHTTPClient_TLSVerifyExplicitFalse asserts the explicit opt-out
+// path: ClientConfig.TLSVerify = &false must yield InsecureSkipVerify=true
+// even when DOCKER_TLS_VERIFY=1 in the environment. Mirrors the explicit-wins
+// precedence and prevents a refactor from flipping the !verify polarity.
+func TestCreateHTTPClient_TLSVerifyExplicitFalse(t *testing.T) {
+	certDir := t.TempDir()
+	writeTLSFixtures(t, certDir)
+
+	// Env says verify, but explicit config opts out — explicit must win.
+	t.Setenv("DOCKER_HOST", "https://127.0.0.1:0")
+	t.Setenv("DOCKER_TLS_VERIFY", "1")
+	t.Setenv("DOCKER_CERT_PATH", certDir)
+
+	verify := false
+	cfg := DefaultConfig()
+	cfg.TLSCertPath = certDir
+	cfg.TLSVerify = &verify
+
+	httpClient := createHTTPClient(cfg)
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
+	}
+	if transport.TLSClientConfig == nil {
+		t.Fatal("transport.TLSClientConfig is nil; cert path was set, expected TLS config")
+	}
+	if !transport.TLSClientConfig.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify=false; explicit TLSVerify=&false must override env DOCKER_TLS_VERIFY=1")
+	}
+}
+
+// TestCreateHTTPClient_InsecureSkipVerifyDefaults pins the InsecureSkipVerify
+// default for the env-driven path: with cert path set but DOCKER_TLS_VERIFY
+// unset, the SDK semantics demand InsecureSkipVerify=true. Without this
+// assertion a refactor flipping the !verify polarity could silently make
+// every TLS connection skip verification.
+func TestCreateHTTPClient_InsecureSkipVerifyDefaults(t *testing.T) {
+	certDir := t.TempDir()
+	writeTLSFixtures(t, certDir)
+
+	t.Setenv("DOCKER_HOST", "https://127.0.0.1:0")
+	t.Setenv("DOCKER_TLS_VERIFY", "") // unset = SDK skips verify
+	t.Setenv("DOCKER_CERT_PATH", certDir)
+
+	httpClient := createHTTPClient(DefaultConfig())
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
+	}
+	if transport.TLSClientConfig == nil {
+		t.Fatal("transport.TLSClientConfig is nil; cert path was set")
+	}
+	if !transport.TLSClientConfig.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify=false; with empty DOCKER_TLS_VERIFY the SDK skips verify (and so must we)")
+	}
+}
+
+// TestCreateHTTPClient_TLSLoadErrorDoesNotPanic asserts that when
+// resolveTLSConfig fails (e.g. DOCKER_CERT_PATH points at a directory
+// missing ca.pem/cert.pem/key.pem), createHTTPClient does not panic and
+// the resulting transport falls back to no TLS - the warning logged via
+// slog.Default() is the operator-facing signal. The pre-fix call site
+// silently swallowed the error, recreating the very class of bug
+// PR #613 fixes; this test pins the surfacing behavior.
+func TestCreateHTTPClient_TLSLoadErrorDoesNotPanic(t *testing.T) {
+	emptyDir := t.TempDir() // exists but has no cert files
+
+	t.Setenv("DOCKER_HOST", "https://127.0.0.1:0")
+	t.Setenv("DOCKER_TLS_VERIFY", "1")
+	t.Setenv("DOCKER_CERT_PATH", emptyDir)
+
+	httpClient := createHTTPClient(DefaultConfig())
+	if httpClient == nil {
+		t.Fatal("createHTTPClient returned nil on TLS load error; expected non-nil with no TLS")
+	}
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
+	}
+	// resolveTLSConfig errored, so transport.TLSClientConfig must remain nil.
+	// The fallback is intentional: failing closed at construction would prevent
+	// any future graceful degradation, but the warning-on-error pattern surfaces
+	// the misconfiguration loudly via slog.
+	if transport.TLSClientConfig != nil {
+		t.Errorf("expected nil TLSClientConfig after resolveTLSConfig error, got %+v", transport.TLSClientConfig)
+	}
+}
+
+// TestResolveTLSConfig_MissingCertFiles directly exercises resolveTLSConfig's
+// error path so the wrapped error message (which carries the remediation hint
+// "expected ca.pem, cert.pem, key.pem") is locked in.
+func TestResolveTLSConfig_MissingCertFiles(t *testing.T) {
+	emptyDir := t.TempDir()
+
+	cfg := &ClientConfig{TLSCertPath: emptyDir}
+	tlsCfg, err := resolveTLSConfig(cfg)
+	if err == nil {
+		t.Fatal("resolveTLSConfig returned nil error for empty cert dir; expected file-not-found wrap")
+	}
+	if tlsCfg != nil {
+		t.Errorf("resolveTLSConfig returned non-nil tlsCfg on error: %+v", tlsCfg)
+	}
+	if !strings.Contains(err.Error(), "ca.pem") {
+		t.Errorf("error message missing remediation hint about expected files: %v", err)
+	}
+	if !strings.Contains(err.Error(), emptyDir) {
+		t.Errorf("error message missing the actual cert path: %v", err)
+	}
+}
+
+// TestCreateHTTPClient_TCPWithTLSEnvUpgrades asserts that the legacy docker
+// TLS setup — DOCKER_HOST=tcp://... plus DOCKER_TLS_VERIFY/DOCKER_CERT_PATH —
+// produces an HTTPS-equivalent transport (TLS config + HTTP/2). Mirrors the
+// docker CLI's silent upgrade behavior so users following the canonical
+// Docker mTLS docs don't see plaintext on the wire. Surfaced by Copilot
+// review on PR #613.
+func TestCreateHTTPClient_TCPWithTLSEnvUpgrades(t *testing.T) {
+	certDir := t.TempDir()
+	writeTLSFixtures(t, certDir)
+
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:0")
+	t.Setenv("DOCKER_TLS_VERIFY", "1")
+	t.Setenv("DOCKER_CERT_PATH", certDir)
+
+	httpClient := createHTTPClient(DefaultConfig())
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
+	}
+	if transport.TLSClientConfig == nil {
+		t.Fatal("transport.TLSClientConfig is nil for tcp:// + DOCKER_TLS_VERIFY=1; silent plaintext downgrade")
+	}
+	if len(transport.TLSClientConfig.Certificates) == 0 {
+		t.Error("Certificates not loaded for tcp:// + TLS env vars")
+	}
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify=true for tcp:// + DOCKER_TLS_VERIFY=1")
+	}
+	if !transport.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2=false; tcp:// upgraded to TLS should also opt into HTTP/2")
+	}
+}
+
+// TestHasTLSMaterial_ExplicitConfigOnly covers the explicit-config branch of
+// hasTLSMaterial where DOCKER_CERT_PATH env is empty but ClientConfig.TLSCertPath
+// is set. Without this, the env-only test alone would leave the explicit
+// branch unexercised.
+func TestHasTLSMaterial_ExplicitConfigOnly(t *testing.T) {
+	t.Setenv("DOCKER_CERT_PATH", "")
+
+	cfg := &ClientConfig{TLSCertPath: "/some/explicit/path"}
+	if !hasTLSMaterial(cfg) {
+		t.Error("hasTLSMaterial returned false for explicit TLSCertPath")
+	}
+
+	if hasTLSMaterial(&ClientConfig{}) {
+		t.Error("hasTLSMaterial returned true for empty config and empty env")
+	}
+}
+
+// TestCreateHTTPClient_TCPWithoutTLSEnvStaysPlaintext is the negative case:
+// tcp:// without any TLS env / config must remain plaintext. Without this,
+// the TCPWithTLSEnvUpgrades test alone could pass even if every tcp://
+// silently became HTTPS.
+func TestCreateHTTPClient_TCPWithoutTLSEnvStaysPlaintext(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "tcp://127.0.0.1:0")
+	t.Setenv("DOCKER_TLS_VERIFY", "")
+	t.Setenv("DOCKER_CERT_PATH", "")
+
+	httpClient := createHTTPClient(DefaultConfig())
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
+	}
+	if transport.TLSClientConfig != nil {
+		t.Errorf("expected nil TLSClientConfig for tcp:// without TLS env, got %+v", transport.TLSClientConfig)
+	}
+	if transport.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2=true for plain tcp://; should be HTTP/1.1")
+	}
+}
+
+// TestCreateHTTPClient_TCPPlusTLSEnablesTLS asserts that tcp+tls:// (added by
+// PR #609) also gets TLS material wired up. Without this, the security
+// review of PR #612 would flag tcp+tls as a silent downgrade equivalent to
+// the original #607 bug.
+func TestCreateHTTPClient_TCPPlusTLSEnablesTLS(t *testing.T) {
+	certDir := t.TempDir()
+	writeTLSFixtures(t, certDir)
+
+	t.Setenv("DOCKER_HOST", "tcp+tls://127.0.0.1:0")
+	t.Setenv("DOCKER_TLS_VERIFY", "1")
+	t.Setenv("DOCKER_CERT_PATH", certDir)
+
+	httpClient := createHTTPClient(DefaultConfig())
+	transport, ok := httpClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", httpClient.Transport)
+	}
+	if transport.TLSClientConfig == nil {
+		t.Fatal("transport.TLSClientConfig is nil for tcp+tls://; silent TLS downgrade")
+	}
+	if !transport.ForceAttemptHTTP2 {
+		t.Error("ForceAttemptHTTP2=false for tcp+tls://; should match https:// behavior")
+	}
+	if transport.TLSClientConfig.InsecureSkipVerify {
+		t.Error("InsecureSkipVerify=true for tcp+tls:// + DOCKER_TLS_VERIFY=1")
 	}
 }
