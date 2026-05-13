@@ -162,10 +162,17 @@ webhook-webhooks =
 ; Allow fetching presets from remote URLs (default: false)
 webhook-allow-remote-presets = false
 
-; Comma-separated allow-list of remote preset sources, evaluated against the
-; preset string before any fetch when `webhook-allow-remote-presets = true`.
+; Comma-separated SSRF allow-list of remote preset sources, evaluated against
+; the preset string before any fetch when `webhook-allow-remote-presets = true`.
 ; Supports glob patterns. Empty (default) blocks all remote fetches even when
 ; remote presets are enabled — you must opt in explicitly.
+;
+; SECURITY: treat this as an SSRF allow-list — Ofelia will issue outbound HTTP(S)
+; requests on behalf of whoever controls the preset string. Prefer the most
+; specific patterns possible; avoid bare `*` or `https://*`, and never set this
+; to a wildcard that would match cloud-metadata endpoints (`http://169.254.169.254/...`)
+; or internal services.
+;
 ; Examples: `gh:netresearch/*`, `gh:myorg/ofelia-presets/*`,
 ; `https://presets.example.com/*`.
 ; INI-only — never accepted from Docker labels (see #486 / #620).
@@ -176,7 +183,14 @@ webhook-preset-cache-ttl = 24h
 
 ; Directory used to cache fetched remote presets. Default:
 ; `$XDG_CACHE_HOME/ofelia/presets` when `XDG_CACHE_HOME` is set, otherwise the
-; system temp directory (e.g. `/tmp`). Must be writable by the Ofelia process.
+; system temp directory (e.g. `/tmp`).
+;
+; SECURITY: use a directory writable ONLY by the Ofelia process (e.g.
+; `/var/cache/ofelia/presets`, owned 0700 by the daemon user). Anyone who
+; can write here can plant preset files that Ofelia will load on the next
+; cache hit and execute as middleware config. When bind-mounting host paths,
+; the directory inherits host ACLs — verify nothing else can write there.
+;
 ; INI-only — never accepted from Docker labels (a malicious container could
 ; otherwise repoint the cache at an attacker-controlled directory). See #486 /
 ; #620.

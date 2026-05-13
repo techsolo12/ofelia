@@ -1213,6 +1213,9 @@ Error: Mail error: tls: failed to verify certificate
 smtp-host = smtp.internal.example.com
 smtp-port = 587
 smtp-user = ofelia@internal
+# WARNING: smtp-user / smtp-password are exposed to ANY MITM on this path
+# whenever skip-verify is enabled. Ensure the network segment is fully
+# trusted before reusing this credential anywhere it could be replayed.
 smtp-password = ${SMTP_PASSWORD}
 # Internal SMTP server uses a private CA we can't easily distribute.
 # Acceptable here because the path is fully inside our VPC.
