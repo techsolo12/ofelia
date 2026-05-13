@@ -21,8 +21,23 @@ type ExecServiceAdapter struct {
 	client *client.Client
 }
 
+// Sentinel errors for input validation. Defined as static values so callers
+// can use errors.Is for branching and to satisfy err113 lint guidance.
+var (
+	// ErrNilExecConfig is returned when an ExecConfig pointer is nil.
+	ErrNilExecConfig = errors.New("exec: nil ExecConfig")
+	// ErrNoExecOutputWriter is returned when Run is invoked in non-TTY mode
+	// with both stdout and stderr nil. stdcopy.StdCopy panics in that case
+	// the moment it has output to dispatch.
+	ErrNoExecOutputWriter = errors.New("exec: non-TTY mode requires at least one of stdout or stderr")
+)
+
 // Create creates an exec instance.
 func (s *ExecServiceAdapter) Create(ctx context.Context, containerID string, config *domain.ExecConfig) (string, error) {
+	if config == nil {
+		return "", ErrNilExecConfig
+	}
+
 	execConfig := containertypes.ExecOptions{
 		User:         config.User,
 		Privileged:   config.Privileged,
@@ -84,6 +99,17 @@ func (s *ExecServiceAdapter) Inspect(ctx context.Context, execID string) (*domai
 func (s *ExecServiceAdapter) Run(
 	ctx context.Context, containerID string, config *domain.ExecConfig, stdout, stderr io.Writer,
 ) (int, error) {
+	if config == nil {
+		return -1, ErrNilExecConfig
+	}
+	// Non-TTY mode demultiplexes via stdcopy.StdCopy, which panics if both
+	// writers are nil and there is any output to dispatch. Guard the input
+	// to keep the contract symmetric with TTY mode (which already tolerates
+	// a nil stdout by skipping the copy).
+	if !config.Tty && stdout == nil && stderr == nil {
+		return -1, ErrNoExecOutputWriter
+	}
+
 	// Create exec instance
 	execID, err := s.Create(ctx, containerID, config)
 	if err != nil {

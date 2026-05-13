@@ -150,27 +150,6 @@ func TestClientClose(t *testing.T) {
 	}
 }
 
-// TestClientWithHTTPSHost tests HTTPS host configuration.
-func TestClientConfigHTTPSHost(t *testing.T) {
-	config := dockeradapter.DefaultConfig()
-	config.Host = "https://docker.example.com:2376"
-
-	// We can't actually connect, but we can verify configuration is accepted
-	if config.Host != "https://docker.example.com:2376" {
-		t.Errorf("Host = %v, want https://docker.example.com:2376", config.Host)
-	}
-}
-
-// TestClientConfigTCPHost tests TCP host configuration.
-func TestClientConfigTCPHost(t *testing.T) {
-	config := dockeradapter.DefaultConfig()
-	config.Host = "tcp://localhost:2375"
-
-	if config.Host != "tcp://localhost:2375" {
-		t.Errorf("Host = %v, want tcp://localhost:2375", config.Host)
-	}
-}
-
 // TestClientConfigHTTPHeaders tests custom HTTP headers.
 func TestClientConfigHTTPHeaders(t *testing.T) {
 	config := dockeradapter.DefaultConfig()
