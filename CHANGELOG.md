@@ -7,9 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `tcp+tls://` is back on the `DOCKER_HOST` allow-list now that the TLS plumbing from [#613](https://github.com/netresearch/ofelia/pull/613) wires `DOCKER_CERT_PATH` / `DOCKER_TLS_VERIFY` (and the equivalent `ClientConfig.TLSCertPath` / `TLSVerify` overrides) into the custom HTTP transport. PR [#612](https://github.com/netresearch/ofelia/pull/612) had withheld it to avoid a silent plain-TCP downgrade; that risk is now closed by the existing `TestCreateHTTPClient_TCPPlusTLSEnablesTLS` regression test plus the new `TestNewClientWithConfig_TCPPlusTLSScheme` allow-list assertion. ([#625](https://github.com/netresearch/ofelia/pull/625), fixes [#616](https://github.com/netresearch/ofelia/issues/616))
+
 ### Changed
 
-- **BREAKING:** `DOCKER_HOST` scheme is now validated against an allow-list (`unix://`, `tcp://`, `http://`, `https://`, `npipe://`) and normalized to lowercase. Unsupported schemes (`ssh://`, `fd://`, `tcp+tls://`, bogus values) now fail at startup with a clear error instead of silently falling through to a plain-TCP transport. Fixes case-sensitivity bug for `TCP://` / `UNIX://`. Configurations that previously relied on the silent fallthrough will now fail loudly — operators using `ssh://` should switch to an SSH-forwarded socket and point `DOCKER_HOST` at the forwarded `unix://` path. Note: `tcp+tls://` is rejected pending the TLS-plumbing fix in [#613](https://github.com/netresearch/ofelia/pull/613) — accepting it here without TLS material in the transport would silently downgrade to plain TCP. ([#612](https://github.com/netresearch/ofelia/pull/612), fixes [#609](https://github.com/netresearch/ofelia/issues/609))
+- **BREAKING:** `DOCKER_HOST` scheme is now validated against an allow-list (`unix://`, `tcp://`, `tcp+tls://`, `http://`, `https://`, `npipe://`) and normalized to lowercase. Unsupported schemes (`ssh://`, `fd://`, bogus values) now fail at startup with a clear error instead of silently falling through to a plain-TCP transport. Fixes case-sensitivity bug for `TCP://` / `UNIX://`. Configurations that previously relied on the silent fallthrough will now fail loudly — operators using `ssh://` should switch to an SSH-forwarded socket and point `DOCKER_HOST` at the forwarded `unix://` path. ([#612](https://github.com/netresearch/ofelia/pull/612), fixes [#609](https://github.com/netresearch/ofelia/issues/609))
 
 ### Security
 

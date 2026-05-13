@@ -34,8 +34,8 @@ const defaultNegotiateTimeout = 30 * time.Second
 // the supported schemes so operators get an actionable failure at startup
 // instead of an opaque dial error later.
 //
-// Supported schemes (case-insensitive): unix, tcp, http, https, npipe.
-// Notably unsupported: ssh, fd, tcp+tls. See docs/TROUBLESHOOTING.md.
+// Supported schemes (case-insensitive): unix, tcp, tcp+tls, http, https, npipe.
+// Notably unsupported: ssh, fd. See docs/TROUBLESHOOTING.md.
 //
 // Tracking: https://github.com/netresearch/ofelia/issues/609
 var ErrUnsupportedDockerHostScheme = errors.New("unsupported DOCKER_HOST scheme")
@@ -50,7 +50,13 @@ var ErrMissingDockerHostScheme = errors.New("missing DOCKER_HOST scheme")
 // NewClientWithConfig. Schemes are compared case-insensitively.
 //
 //   - unix:    Unix domain socket (default on Linux/macOS).
-//   - tcp:     Plain TCP (HTTP/1.1, no HTTP/2).
+//   - tcp:     Plain TCP (HTTP/1.1, no HTTP/2). Auto-upgrades to TLS when
+//     DOCKER_TLS_VERIFY / DOCKER_CERT_PATH are set, mirroring the Docker
+//     CLI/SDK precedent.
+//   - tcp+tls: Explicit TLS over TCP. Requires TLS material via
+//     DOCKER_CERT_PATH / DOCKER_TLS_VERIFY (or ClientConfig.TLSCertPath /
+//     TLSVerify). Re-enabled in #616 now that the TLS plumbing from #613
+//     wires the cert material into the custom transport.
 //   - http:    Plain HTTP over TCP (HTTP/1.1, no HTTP/2).
 //   - https:   HTTPS; HTTP/2 negotiated via ALPN.
 //   - npipe:   Windows named pipe (only usable on Windows builds; the actual
@@ -61,12 +67,7 @@ var ErrMissingDockerHostScheme = errors.New("missing DOCKER_HOST scheme")
 //
 //   - ssh:    Requires an SSH tunnel dialer this adapter does not wire up.
 //   - fd:     Requires systemd socket activation we do not handle.
-//   - tcp+tls: Withheld pending PR #613 (issue #607). Without TLS material
-//     wired into the custom transport, accepting tcp+tls would silently
-//     downgrade to plain TCP — exactly the silent-downgrade class this PR
-//     is supposed to prevent. Re-enable in a follow-up once TLS plumbing
-//     lands.
-var supportedDockerHostSchemes = []string{"unix", "tcp", "http", "https", "npipe"}
+var supportedDockerHostSchemes = []string{"unix", "tcp", "tcp+tls", "http", "https", "npipe"}
 
 // Client implements ports.DockerClient using the official Docker SDK.
 type Client struct {
@@ -305,9 +306,9 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 		transport.ForceAttemptHTTP2 = false
 	case "https", "tcp+tls":
 		// HTTPS / tcp+tls connections can use HTTP/2 via ALPN.
-		// tcp+tls is matched here defensively even though PR #612 currently
-		// rejects it at validateAndNormalizeHost; if that allow-list is
-		// re-enabled, this branch ensures the connection actually gets TLS.
+		// tcp+tls was re-enabled on the allow-list in #616 once the TLS
+		// plumbing from #613 was confirmed to wire cert material into the
+		// custom transport via applyDockerTLS.
 		transport.ForceAttemptHTTP2 = true
 		applyDockerTLS(transport, config)
 	case "tcp":

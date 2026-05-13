@@ -228,10 +228,9 @@ func TestClientConfig_PoolingOptions(t *testing.T) {
 func TestNewClientWithConfig_UnsupportedSchemes(t *testing.T) {
 	t.Parallel()
 
-	// tcp+tls:// is rejected here pending PR #613. Without the TLS plumbing
-	// from #613, accepting tcp+tls would silently downgrade to plain TCP —
-	// exactly the silent-downgrade class this PR exists to prevent. Will be
-	// re-enabled in a follow-up once #613 lands.
+	// tcp+tls:// was re-enabled in #616 once the TLS plumbing from #613
+	// landed; it is asserted as a positive case in
+	// TestNewClientWithConfig_TCPPlusTLSScheme below.
 	testCases := []struct {
 		name string
 		host string
@@ -243,10 +242,6 @@ func TestNewClientWithConfig_UnsupportedSchemes(t *testing.T) {
 		{
 			name: "fd_scheme",
 			host: "fd://",
-		},
-		{
-			name: "tcp_plus_tls_scheme",
-			host: "tcp+tls://127.0.0.1:2376",
 		},
 		{
 			name: "bogus_scheme",
@@ -281,6 +276,30 @@ func TestNewClientWithConfig_UnsupportedSchemes(t *testing.T) {
 	}
 }
 
+// TestNewClientWithConfig_TCPPlusTLSScheme asserts that DOCKER_HOST values
+// using the tcp+tls:// scheme are accepted by NewClientWithConfig now that the
+// TLS plumbing from #613 wires cert material into the custom transport.
+//
+// Construction must NOT fail with ErrUnsupportedDockerHostScheme. We use port
+// 0 so no real network connection is attempted; an unrelated dial / negotiate
+// error is acceptable - the only thing this test pins is that the scheme
+// passes the allow-list. See https://github.com/netresearch/ofelia/issues/616.
+func TestNewClientWithConfig_TCPPlusTLSScheme(t *testing.T) {
+	// Not parallel: mutates DOCKER_HOST / DOCKER_TLS_VERIFY / DOCKER_CERT_PATH
+	// via t.Setenv to avoid leaking ambient env into createHTTPClient's
+	// FromEnv-style fallbacks.
+	t.Setenv("DOCKER_HOST", "")
+	t.Setenv("DOCKER_TLS_VERIFY", "")
+	t.Setenv("DOCKER_CERT_PATH", "")
+
+	_, err := NewClientWithConfig(&ClientConfig{Host: "tcp+tls://127.0.0.1:0"})
+	if errors.Is(err, ErrUnsupportedDockerHostScheme) {
+		t.Fatalf("tcp+tls:// must be on the allow-list (#616), got ErrUnsupportedDockerHostScheme: %v", err)
+	}
+	// Any other error (dial / negotiate failure against 127.0.0.1:0) is fine
+	// - this test only pins scheme acceptance, not connectivity.
+}
+
 // TestValidateAndNormalizeHost covers the host scheme validation helper directly.
 // It verifies case-insensitivity (RFC 3986: schemes are case-insensitive) and
 // the allow-list of supported transports.
@@ -298,6 +317,7 @@ func TestValidateAndNormalizeHost(t *testing.T) {
 		// Supported schemes - lowercase.
 		{name: "unix_lowercase", input: "unix:///var/run/docker.sock", want: "unix:///var/run/docker.sock"},
 		{name: "tcp_lowercase", input: "tcp://127.0.0.1:2375", want: "tcp://127.0.0.1:2375"},
+		{name: "tcp_plus_tls_lowercase", input: "tcp+tls://127.0.0.1:2376", want: "tcp+tls://127.0.0.1:2376"},
 		{name: "http_lowercase", input: "http://127.0.0.1:2375", want: "http://127.0.0.1:2375"},
 		{name: "https_lowercase", input: "https://127.0.0.1:2376", want: "https://127.0.0.1:2376"},
 		{name: "npipe_lowercase", input: `npipe:////./pipe/docker_engine`, want: `npipe:////./pipe/docker_engine`},
@@ -306,6 +326,7 @@ func TestValidateAndNormalizeHost(t *testing.T) {
 		{name: "tcp_uppercase", input: "TCP://127.0.0.1:2375", want: "tcp://127.0.0.1:2375"},
 		{name: "unix_uppercase", input: "UNIX:///var/run/docker.sock", want: "unix:///var/run/docker.sock"},
 		{name: "https_mixed", input: "HtTpS://127.0.0.1:2376", want: "https://127.0.0.1:2376"},
+		{name: "tcp_plus_tls_uppercase", input: "TCP+TLS://127.0.0.1:2376", want: "tcp+tls://127.0.0.1:2376"},
 
 		// Path casing is preserved (only scheme is lowercased).
 		{name: "unix_mixed_path", input: "UNIX:///Var/Run/docker.sock", want: "unix:///Var/Run/docker.sock"},
@@ -316,7 +337,6 @@ func TestValidateAndNormalizeHost(t *testing.T) {
 		// Unsupported schemes.
 		{name: "ssh", input: "ssh://docker-host", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
 		{name: "fd", input: "fd://", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
-		{name: "tcp_plus_tls", input: "tcp+tls://127.0.0.1:2376", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
 		{name: "gopher", input: "gopher://something", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
 
 		// Missing scheme separator. This is a distinct error from "unsupported
