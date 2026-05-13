@@ -6,7 +6,9 @@ package docker
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -16,6 +18,11 @@ import (
 
 	"github.com/netresearch/ofelia/core/ports"
 )
+
+// defaultNegotiateTimeout bounds the initial Docker API version negotiation.
+// Used both as the DefaultConfig value and as the fallback when callers pass
+// a non-positive NegotiateTimeout.
+const defaultNegotiateTimeout = 30 * time.Second
 
 // Client implements ports.DockerClient using the official Docker SDK.
 type Client struct {
@@ -53,6 +60,19 @@ type ClientConfig struct {
 	// Timeout settings
 	DialTimeout           time.Duration
 	ResponseHeaderTimeout time.Duration
+
+	// NegotiateTimeout bounds the initial Docker API version negotiation that
+	// runs once at client creation. Without a bound, NegotiateAPIVersion uses
+	// context.Background() and can block forever when the Docker daemon is
+	// reachable but unresponsive (e.g. a socket proxy whose upstream is wedged),
+	// hanging Ofelia at startup with no diagnostic output.
+	//
+	// The Docker SDK swallows ping errors silently, so this timeout does not
+	// change correctness on successful paths - it only bounds the failure case.
+	//
+	// Set to 0 to inherit the default (see DefaultConfig). Use a small value
+	// to fail fast in tests; production typically wants 10-30s.
+	NegotiateTimeout time.Duration
 }
 
 // DefaultConfig returns a default configuration.
@@ -64,6 +84,7 @@ func DefaultConfig() *ClientConfig {
 		IdleConnTimeout:       90 * time.Second,
 		DialTimeout:           30 * time.Second,
 		ResponseHeaderTimeout: 120 * time.Second,
+		NegotiateTimeout:      defaultNegotiateTimeout,
 	}
 }
 
@@ -105,7 +126,29 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 	// Force early API version negotiation to prevent race conditions.
 	// Without this, concurrent goroutines (e.g., Events and ContainerList) making their
 	// first API calls simultaneously will race on the lazy version negotiation.
-	sdk.NegotiateAPIVersion(context.Background())
+	//
+	// Bound the call so a reachable-but-wedged daemon (e.g. socket proxy with a
+	// hung upstream) cannot hang Ofelia at startup. NegotiateAPIVersion swallows
+	// ping errors silently, so a timeout only bounds the failure case; the
+	// successful path is unaffected. See https://github.com/netresearch/ofelia/issues/608.
+	negotiateTimeout := config.NegotiateTimeout
+	if negotiateTimeout <= 0 {
+		negotiateTimeout = defaultNegotiateTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), negotiateTimeout)
+	defer cancel()
+	sdk.NegotiateAPIVersion(ctx)
+	// NegotiateAPIVersion swallows ping errors silently. Surface a deadline
+	// hit so operators can correlate startup slowness with daemon health
+	// rather than chasing phantom bugs - context cancellation is the only
+	// observable signal the SDK leaves us.
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		slog.Default().Warn(
+			"Docker API version negotiation timed out; continuing with default API version",
+			"timeout", negotiateTimeout,
+			"hint", "check Docker daemon health and DOCKER_HOST reachability",
+		)
+	}
 
 	return newClientFromSDK(sdk), nil
 }
