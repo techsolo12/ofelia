@@ -55,11 +55,43 @@ var globalLabelAllowList = map[string]bool{
 	"restore-history":         true,
 	"restore-history-max-age": true,
 
-	// Webhook global settings (security-sensitive keys like webhook-allowed-hosts,
-	// allow-remote-presets, and trusted-preset-sources are intentionally NOT allowed
-	// via labels to prevent SSRF and remote configuration injection)
-	"webhooks":         true,
-	"preset-cache-ttl": true,
+	// Webhook global settings — only the webhook-list selector is exposed
+	// via labels. The SSRF-sensitive keys (webhook-allowed-hosts,
+	// webhook-allow-remote-presets, webhook-trusted-preset-sources,
+	// webhook-preset-cache-dir) and webhook-preset-cache-ttl (whose merge
+	// path is not yet implemented) stay INI-only to prevent containers from
+	// widening the network egress surface or redirecting preset loading.
+	// See #486 and #620, plus the negative regression test in
+	// TestGlobalLabelAllowList_OmitsSSRFSensitiveWebhookKeys.
+	webhookGlobalKeyWebhooks: true,
+
+	// Legacy unprefixed form left behind by #618 on the label side. Kept in
+	// the allow-list so values still reach applyGlobalWebhookLabels, which
+	// logs a one-shot deprecation warning and maps it to the canonical
+	// name. Remove after the deprecation window closes.
+	legacyLabelKeyWebhooks: true,
+}
+
+// warnUnknownGlobalLabelKeys emits a single warning listing decoder UnusedKeys
+// after stripping the legacy webhook aliases that applyGlobalWebhookLabels
+// handles outside the decoder. Without the filter, every container reconcile
+// would log the legacy keys as unknown alongside the one-shot deprecation
+// warning.
+func warnUnknownGlobalLabelKeys(logger *slog.Logger, unused []string) {
+	if logger == nil || len(unused) == 0 {
+		return
+	}
+	filtered := make([]string, 0, len(unused))
+	for _, k := range unused {
+		if _, isLegacy := legacyWebhookLabelAliases[k]; isLegacy {
+			continue
+		}
+		filtered = append(filtered, k)
+	}
+	if len(filtered) == 0 {
+		return
+	}
+	logger.Warn("Unknown global label keys (possible typo)", "keys", filtered)
 }
 
 func (c *Config) buildFromDockerContainers(containers []DockerContainerInfo) error {
@@ -70,11 +102,9 @@ func (c *Config) buildFromDockerContainers(containers []DockerContainerInfo) err
 		if err != nil {
 			return fmt.Errorf("decode global labels: %w", err)
 		}
-		if c.logger != nil && len(result.UnusedKeys) > 0 {
-			c.logger.Warn(fmt.Sprintf("Unknown global label keys (possible typo): %v", result.UnusedKeys))
-		}
+		warnUnknownGlobalLabelKeys(c.logger, result.UnusedKeys)
 
-		// Apply global webhook labels (e.g., ofelia.webhooks=discord)
+		// Apply global webhook label selector (e.g., ofelia.webhook-webhooks=discord).
 		applyGlobalWebhookLabels(c, globals)
 	}
 

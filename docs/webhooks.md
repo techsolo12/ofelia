@@ -34,8 +34,8 @@ services:
       ofelia.enabled: "true"
       ofelia.service: "true"
 
-      # Global webhook settings
-      ofelia.webhooks: "slack-alerts"
+      # Global webhook settings (use the same webhook-* names as the INI [global] section)
+      ofelia.webhook-webhooks: "slack-alerts"
       ofelia.webhook-allowed-hosts: "hooks.slack.com,discord.com"
 
       # Define webhooks
@@ -79,16 +79,20 @@ All webhook parameters can be set via Docker labels on the service container:
 | `ofelia.webhook.NAME.link` | Optional URL to include in notification |
 | `ofelia.webhook.NAME.link-text` | Display text for link |
 
-Global webhook settings can also be set via labels on the service container:
+Only the webhook-list selector is exposed via Docker labels — the SSRF-sensitive
+globals (`webhook-allowed-hosts`, `webhook-allow-remote-presets`,
+`webhook-trusted-preset-sources`, `webhook-preset-cache-dir`) and
+`webhook-preset-cache-ttl` (whose label-merge path is not yet implemented) must
+be set via the INI `[global]` section. The label name uses the same `webhook-*`
+prefix as the INI key:
 
 | Label | Description |
 |-------|-------------|
-| `ofelia.webhooks` | Default webhooks for all jobs (comma-separated) |
-| `ofelia.webhook-allowed-hosts` | Host whitelist (`*` = allow all) |
-| `ofelia.allow-remote-presets` | Allow fetching remote presets (`true`/`false`) |
-| `ofelia.trusted-preset-sources` | Trusted remote preset source URLs |
-| `ofelia.preset-cache-ttl` | Cache TTL for remote presets (e.g., `24h`) |
-| `ofelia.preset-cache-dir` | Directory for preset cache |
+| `ofelia.webhook-webhooks` | Default webhooks for all jobs (comma-separated) |
+
+> **Security:** the SSRF-sensitive webhook globals listed above are intentionally **not** accepted from container labels to prevent a malicious container from widening the network egress surface or pointing the preset cache at an attacker-controlled directory. They must be set in the INI `[global]` section. See [#486](https://github.com/netresearch/ofelia/issues/486).
+
+> **Deprecated:** the unprefixed legacy form `ofelia.webhooks` is still accepted for backward compatibility but logs a one-shot deprecation warning. Migrate to the `webhook-` prefixed form shown above. The other unprefixed legacy forms (`ofelia.allow-remote-presets`, `ofelia.trusted-preset-sources`, `ofelia.preset-cache-ttl`, `ofelia.preset-cache-dir`) were never accepted from labels because their canonical forms are INI-only. See [#620](https://github.com/netresearch/ofelia/issues/620).
 
 ### Configuration Precedence
 

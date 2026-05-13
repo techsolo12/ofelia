@@ -216,8 +216,8 @@ func TestApplyGlobalWebhookLabels(t *testing.T) {
 
 	globals := map[string]any{
 		"webhooks":              "slack-alerts,discord-notify",
-		"allow-remote-presets":  "true",
-		"webhook-allowed-hosts": "hooks.slack.com",
+		"allow-remote-presets":  "true",            // SSRF-sensitive — must be ignored (#486)
+		"webhook-allowed-hosts": "hooks.slack.com", // SSRF-sensitive — must be ignored (#486)
 	}
 
 	applyGlobalWebhookLabels(c, globals)
@@ -225,11 +225,11 @@ func TestApplyGlobalWebhookLabels(t *testing.T) {
 	if c.WebhookConfigs.Global.Webhooks != "slack-alerts,discord-notify" {
 		t.Errorf("Expected webhooks 'slack-alerts,discord-notify', got %q", c.WebhookConfigs.Global.Webhooks)
 	}
-	if !c.WebhookConfigs.Global.AllowRemotePresets {
-		t.Error("Expected AllowRemotePresets to be true")
+	if c.WebhookConfigs.Global.AllowRemotePresets {
+		t.Error("Expected AllowRemotePresets to remain false — labels must not change SSRF-sensitive globals (#486)")
 	}
-	if c.WebhookConfigs.Global.AllowedHosts != "hooks.slack.com" {
-		t.Errorf("Expected allowed hosts 'hooks.slack.com', got %q", c.WebhookConfigs.Global.AllowedHosts)
+	if c.WebhookConfigs.Global.AllowedHosts != "*" {
+		t.Errorf("Expected AllowedHosts to remain default '*' — labels must not change SSRF-sensitive globals (#486), got %q", c.WebhookConfigs.Global.AllowedHosts)
 	}
 }
 
@@ -590,9 +590,16 @@ func TestApplyWebhookLabelParams_EmptyValues(t *testing.T) {
 	}
 }
 
-func TestApplyGlobalWebhookLabels_AllFields(t *testing.T) {
+// TestApplyGlobalWebhookLabels_OnlyWebhooksKeyApplied asserts that only the
+// webhook-list selector reaches WebhookConfigs.Global. The other webhook
+// globals are SSRF-sensitive (#486) or not yet wired through the label merge
+// path, so they must remain at their NewWebhookConfigs defaults even when
+// passed in. This is a defense-in-depth check; the production allow-list
+// already filters them upstream.
+func TestApplyGlobalWebhookLabels_OnlyWebhooksKeyApplied(t *testing.T) {
 	t.Parallel()
 	c := NewConfig(nil)
+	defaults := *c.WebhookConfigs.Global
 
 	globals := map[string]any{
 		"webhooks":               "slack-alerts,discord",
@@ -608,50 +615,20 @@ func TestApplyGlobalWebhookLabels_AllFields(t *testing.T) {
 	if c.WebhookConfigs.Global.Webhooks != "slack-alerts,discord" {
 		t.Errorf("Expected webhooks 'slack-alerts,discord', got %q", c.WebhookConfigs.Global.Webhooks)
 	}
-	if !c.WebhookConfigs.Global.AllowRemotePresets {
-		t.Error("Expected AllowRemotePresets to be true")
+	if c.WebhookConfigs.Global.AllowRemotePresets != defaults.AllowRemotePresets {
+		t.Error("AllowRemotePresets must remain at default — labels must not change SSRF-sensitive globals (#486)")
 	}
-	if c.WebhookConfigs.Global.TrustedPresetSources != "gh:myorg/*" {
-		t.Errorf("Expected TrustedPresetSources 'gh:myorg/*', got %q", c.WebhookConfigs.Global.TrustedPresetSources)
+	if c.WebhookConfigs.Global.TrustedPresetSources != defaults.TrustedPresetSources {
+		t.Errorf("TrustedPresetSources must remain at default — labels must not change SSRF-sensitive globals (#486), got %q", c.WebhookConfigs.Global.TrustedPresetSources)
 	}
-	if c.WebhookConfigs.Global.PresetCacheTTL != 1*time.Hour {
-		t.Errorf("Expected PresetCacheTTL 1h, got %v", c.WebhookConfigs.Global.PresetCacheTTL)
+	if c.WebhookConfigs.Global.PresetCacheTTL != defaults.PresetCacheTTL {
+		t.Errorf("PresetCacheTTL must remain at default — label support pending (mergeWebhookConfigs gap), got %v", c.WebhookConfigs.Global.PresetCacheTTL)
 	}
-	if c.WebhookConfigs.Global.PresetCacheDir != "/tmp/presets" {
-		t.Errorf("Expected PresetCacheDir '/tmp/presets', got %q", c.WebhookConfigs.Global.PresetCacheDir)
+	if c.WebhookConfigs.Global.PresetCacheDir != defaults.PresetCacheDir {
+		t.Errorf("PresetCacheDir must remain at default — labels must not change SSRF-sensitive globals (#486), got %q", c.WebhookConfigs.Global.PresetCacheDir)
 	}
-	if c.WebhookConfigs.Global.AllowedHosts != "hooks.slack.com,ntfy.internal" {
-		t.Errorf("Expected AllowedHosts 'hooks.slack.com,ntfy.internal', got %q", c.WebhookConfigs.Global.AllowedHosts)
-	}
-}
-
-func TestApplyGlobalWebhookLabels_InvalidBool(t *testing.T) {
-	t.Parallel()
-	c := NewConfig(nil)
-
-	globals := map[string]any{
-		"allow-remote-presets": "not-a-bool",
-	}
-
-	applyGlobalWebhookLabels(c, globals)
-
-	if c.WebhookConfigs.Global.AllowRemotePresets {
-		t.Error("Expected AllowRemotePresets to remain false for invalid bool")
-	}
-}
-
-func TestApplyGlobalWebhookLabels_InvalidDuration(t *testing.T) {
-	t.Parallel()
-	c := NewConfig(nil)
-
-	globals := map[string]any{
-		"preset-cache-ttl": "not-a-duration",
-	}
-
-	applyGlobalWebhookLabels(c, globals)
-
-	if c.WebhookConfigs.Global.PresetCacheTTL != 24*time.Hour {
-		t.Errorf("Expected PresetCacheTTL to remain at default 24h, got %v", c.WebhookConfigs.Global.PresetCacheTTL)
+	if c.WebhookConfigs.Global.AllowedHosts != defaults.AllowedHosts {
+		t.Errorf("AllowedHosts must remain at default — labels must not change SSRF-sensitive globals (#486), got %q", c.WebhookConfigs.Global.AllowedHosts)
 	}
 }
 

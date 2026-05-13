@@ -14,6 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **BREAKING:** `DOCKER_HOST` scheme is now validated against an allow-list (`unix://`, `tcp://`, `tcp+tls://`, `http://`, `https://`, `npipe://`) and normalized to lowercase. Unsupported schemes (`ssh://`, `fd://`, bogus values) now fail at startup with a clear error instead of silently falling through to a plain-TCP transport. Fixes case-sensitivity bug for `TCP://` / `UNIX://`. Configurations that previously relied on the silent fallthrough will now fail loudly — operators using `ssh://` should switch to an SSH-forwarded socket and point `DOCKER_HOST` at the forwarded `unix://` path. ([#612](https://github.com/netresearch/ofelia/pull/612), fixes [#609](https://github.com/netresearch/ofelia/issues/609))
+- Webhook global config now lives at a single source of truth: `c.WebhookConfigs.Global` aliases `&c.Global.WebhookGlobalConfig`, eliminating the dual-store antipattern that PR [#618](https://github.com/netresearch/ofelia/pull/618) papered over with a hand-rolled `syncGlobalWebhookConfig` copy. Every entry point that mutates the embedded struct from the INI side (initial INI parse, INI live-reload) is automatically visible to `WebhookManager` without an explicit sync call. INI live-reload of `webhook-allowed-hosts` now also re-runs `WebhookManager.InitManager()` so the URL validator picks up the new whitelist at runtime — previously the data store was refreshed but the security validator stayed snapshotted at startup, so tightening the whitelist via live-reload had no enforcement effect until restart. The Docker label sync path still parses into a scratch Config and merges back via `mergeWebhookConfigs`/`syncWebhookConfigs`, which only forward the `webhook-webhooks` selector and per-webhook definitions — see follow-up. ([#620](https://github.com/netresearch/ofelia/issues/620))
+
+### Deprecated
+
+- Docker label key `ofelia.webhooks` is renamed to `ofelia.webhook-webhooks` to match the documented INI `[global]` key name. A user copying their INI `webhook-webhooks` value verbatim into Docker labels previously hit an "Unknown global label keys" warning and silently lost the value. The legacy `ofelia.webhooks` form still works for backward compatibility but logs a one-shot deprecation warning per process — migrate to `ofelia.webhook-webhooks` before the next major release. The other unprefixed legacy forms (`ofelia.allow-remote-presets`, `ofelia.trusted-preset-sources`, `ofelia.preset-cache-ttl`, `ofelia.preset-cache-dir`) were never accepted from labels because their canonical forms remain INI-only for SSRF reasons (see [#486](https://github.com/netresearch/ofelia/issues/486)). ([#620](https://github.com/netresearch/ofelia/issues/620))
+
+  **Before:**
+  ```yaml
+  labels:
+    ofelia.webhooks: "slack-alerts"  # legacy — emits one-shot deprecation warning
+  ```
+
+  **After:**
+  ```yaml
+  labels:
+    ofelia.webhook-webhooks: "slack-alerts"  # canonical — matches INI [global]
+  ```
 
 ### Security
 

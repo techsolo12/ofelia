@@ -5,8 +5,10 @@ package cli
 
 import (
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	ini "gopkg.in/ini.v1"
@@ -15,6 +17,22 @@ import (
 )
 
 const webhookSection = "webhook"
+
+// Canonical and legacy Docker label key names that the webhook label reader
+// consumes. Only the webhook-list selector is exposed via labels — the other
+// webhook globals (webhook-allowed-hosts, webhook-allow-remote-presets,
+// webhook-trusted-preset-sources, webhook-preset-cache-dir, and
+// webhook-preset-cache-ttl) are intentionally INI-only to prevent containers
+// from widening the network egress surface or redirecting preset loading. See
+// docker-labels.go (globalLabelAllowList) and #486.
+const (
+	webhookGlobalKeyWebhooks = "webhook-webhooks"
+
+	// Legacy unprefixed form left behind by #618 when the INI side was
+	// renamed to webhook-*. Still accepted with a one-shot deprecation
+	// warning so operators have one release window to migrate.
+	legacyLabelKeyWebhooks = "webhooks"
+)
 
 // WebhookConfigs holds all parsed webhook configurations
 type WebhookConfigs struct {
@@ -150,26 +168,6 @@ func parseWebhookConfig(section *ini.Section, config *middlewares.WebhookConfig)
 	}
 
 	return nil
-}
-
-// syncGlobalWebhookConfig copies the WebhookGlobalConfig values embedded in
-// Config.Global (populated by mapstructure decoding of the [global] INI section)
-// into c.WebhookConfigs.Global. NewConfig() pre-seeds Config.Global.WebhookGlobalConfig
-// with DefaultWebhookGlobalConfig() so that unset keys retain their defaults
-// (notably AllowedHosts="*", which is security-relevant).
-//
-// Per-key ExpandEnvVars is handled by sectionToMap() before decoding.
-func syncGlobalWebhookConfig(c *Config) {
-	if c.WebhookConfigs == nil {
-		c.WebhookConfigs = NewWebhookConfigs()
-	}
-	cfg := c.Global.WebhookGlobalConfig
-	c.WebhookConfigs.Global.Webhooks = cfg.Webhooks
-	c.WebhookConfigs.Global.AllowRemotePresets = cfg.AllowRemotePresets
-	c.WebhookConfigs.Global.TrustedPresetSources = cfg.TrustedPresetSources
-	c.WebhookConfigs.Global.PresetCacheTTL = cfg.PresetCacheTTL
-	c.WebhookConfigs.Global.PresetCacheDir = cfg.PresetCacheDir
-	c.WebhookConfigs.Global.AllowedHosts = cfg.AllowedHosts
 }
 
 // JobWebhookConfig holds per-job webhook configuration
@@ -346,43 +344,89 @@ func applyWebhookLabelParams(config *middlewares.WebhookConfig, params map[strin
 	}
 }
 
-// applyGlobalWebhookLabels extracts webhook-specific keys from the globals map
-// (populated from service container labels) into the Config's WebhookConfigs.Global.
+// legacyWebhookLabelAliases maps the OLD unprefixed Docker label keys to the
+// canonical webhook-* form. Only the webhook-list selector survived #486's
+// label allow-list, so this is now a single-entry map; it stays a map so the
+// label allow-list and the deprecation gate can iterate on a uniform
+// data structure if more aliases ever return.
+var legacyWebhookLabelAliases = map[string]string{
+	legacyLabelKeyWebhooks: webhookGlobalKeyWebhooks,
+}
+
+// loggedDeprecatedLabel guards the per-key deprecation log so reconcile-driven
+// re-invocations of applyGlobalWebhookLabels don't spam the log on every
+// container event. Each old name fires at most once for the lifetime of the
+// process.
+var loggedDeprecatedLabel sync.Map // map[string]struct{}
+
+// resetDeprecatedLabelLogForTest clears the one-shot deprecation gate so each
+// test exercising the warning starts from a clean slate. Tests register this
+// via t.Cleanup; production code never calls it.
+func resetDeprecatedLabelLogForTest() {
+	loggedDeprecatedLabel.Range(func(k, _ any) bool {
+		loggedDeprecatedLabel.Delete(k)
+		return true
+	})
+}
+
+// pickWebhookLabel returns the value for the canonical (webhook-prefixed) key
+// if present; otherwise falls back to the legacy unprefixed form (logging a
+// one-shot deprecation warning). The new form takes precedence so operators
+// mid-migration don't see the legacy key clobber their explicit new-style
+// value.
+func pickWebhookLabel(globals map[string]any, canonical string, logger *slog.Logger) (string, bool) {
+	if v, ok := globals[canonical]; ok {
+		if s, ok := v.(string); ok {
+			return s, true
+		}
+		return "", false
+	}
+	for legacy, target := range legacyWebhookLabelAliases {
+		if target != canonical {
+			continue
+		}
+		v, ok := globals[legacy]
+		if !ok {
+			continue
+		}
+		s, ok := v.(string)
+		if !ok {
+			return "", false
+		}
+		// Only consume the one-shot gate when we can actually emit the
+		// warning, so an early nil-logger pass doesn't permanently
+		// suppress the warning for the rest of the process.
+		if logger != nil {
+			if _, loaded := loggedDeprecatedLabel.LoadOrStore(legacy, struct{}{}); !loaded {
+				logger.Warn("DEPRECATED Docker label key — use the new prefixed form",
+					"legacy_key", "ofelia."+legacy,
+					"new_key", "ofelia."+canonical,
+					"see", "https://github.com/netresearch/ofelia/issues/620")
+			}
+		}
+		return s, true
+	}
+	return "", false
+}
+
+// applyGlobalWebhookLabels extracts the webhook-list selector from the globals
+// map (populated from service container labels) into the Config's
+// WebhookConfigs.Global. Accepts both the canonical webhook-webhooks form and
+// the legacy unprefixed webhooks form left behind by #618 (with a one-shot
+// deprecation warning).
+//
+// SSRF-sensitive globals (webhook-allowed-hosts, webhook-allow-remote-presets,
+// webhook-trusted-preset-sources, webhook-preset-cache-dir) and the
+// not-yet-merged webhook-preset-cache-ttl are intentionally NOT applied here
+// even when they appear in the map: the production allow-list filters them
+// upstream, and skipping them at the reader is defense-in-depth so any future
+// caller that hands this helper raw label data cannot re-enable the #486 risk.
 func applyGlobalWebhookLabels(c *Config, globals map[string]any) {
 	if c.WebhookConfigs == nil {
 		c.WebhookConfigs = NewWebhookConfigs()
 	}
 
-	if v, ok := globals["webhooks"]; ok {
-		if s, ok := v.(string); ok {
-			c.WebhookConfigs.Global.Webhooks = s
-		}
-	}
-	if v, ok := globals["allow-remote-presets"]; ok {
-		if s, ok := v.(string); ok {
-			c.WebhookConfigs.Global.AllowRemotePresets, _ = strconv.ParseBool(s)
-		}
-	}
-	if v, ok := globals["trusted-preset-sources"]; ok {
-		if s, ok := v.(string); ok {
-			c.WebhookConfigs.Global.TrustedPresetSources = s
-		}
-	}
-	if v, ok := globals["preset-cache-ttl"]; ok {
-		if s, ok := v.(string); ok {
-			if d, err := time.ParseDuration(s); err == nil {
-				c.WebhookConfigs.Global.PresetCacheTTL = d
-			}
-		}
-	}
-	if v, ok := globals["preset-cache-dir"]; ok {
-		if s, ok := v.(string); ok {
-			c.WebhookConfigs.Global.PresetCacheDir = s
-		}
-	}
-	if v, ok := globals["webhook-allowed-hosts"]; ok {
-		if s, ok := v.(string); ok {
-			c.WebhookConfigs.Global.AllowedHosts = s
-		}
+	if s, ok := pickWebhookLabel(globals, webhookGlobalKeyWebhooks, c.logger); ok {
+		c.WebhookConfigs.Global.Webhooks = s
 	}
 }

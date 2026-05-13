@@ -16,9 +16,11 @@ import (
 	"github.com/netresearch/ofelia/test"
 )
 
-// --- syncGlobalWebhookConfig (full INI pipeline) ---
+// --- WebhookGlobalConfig aliasing (single source of truth, #620) ---
 
-func TestSyncGlobalWebhookConfig_AllFields(t *testing.T) {
+// TestWebhookGlobalConfig_AllFields verifies the full INI pipeline populates
+// c.WebhookConfigs.Global via the embedded struct alias.
+func TestWebhookGlobalConfig_AllFields(t *testing.T) {
 	t.Parallel()
 
 	c, err := BuildFromString(`
@@ -40,20 +42,27 @@ webhook-allowed-hosts          = example.com,test.com
 	assert.Equal(t, "example.com,test.com", c.WebhookConfigs.Global.AllowedHosts)
 }
 
-func TestSyncGlobalWebhookConfig_NilWebhookConfigs(t *testing.T) {
+// TestWebhookGlobalConfig_AliasesEmbeddedStruct asserts that c.WebhookConfigs.Global
+// is the same address as &c.Global.WebhookGlobalConfig — the dual-store
+// antipattern collapse from #620. A mutation via either side must be visible
+// from the other without an explicit sync call.
+func TestWebhookGlobalConfig_AliasesEmbeddedStruct(t *testing.T) {
 	t.Parallel()
 
 	c := NewConfig(test.NewTestLogger())
-	c.WebhookConfigs = nil
-	c.Global.WebhookGlobalConfig.Webhooks = "wh1"
+	require.Same(t, &c.Global.WebhookGlobalConfig, c.WebhookConfigs.Global,
+		"c.WebhookConfigs.Global must alias the embedded WebhookGlobalConfig (single source of truth)")
 
-	syncGlobalWebhookConfig(c)
+	// Mutate via the embedded struct → visible via the WebhookConfigs.Global pointer.
+	c.Global.WebhookGlobalConfig.Webhooks = "from-embedded"
+	assert.Equal(t, "from-embedded", c.WebhookConfigs.Global.Webhooks)
 
-	assert.NotNil(t, c.WebhookConfigs)
-	assert.Equal(t, "wh1", c.WebhookConfigs.Global.Webhooks)
+	// Mutate via the WebhookConfigs.Global pointer → visible via the embedded struct.
+	c.WebhookConfigs.Global.AllowedHosts = "from-pointer.example.com"
+	assert.Equal(t, "from-pointer.example.com", c.Global.WebhookGlobalConfig.AllowedHosts)
 }
 
-func TestSyncGlobalWebhookConfig_NoKeys(t *testing.T) {
+func TestWebhookGlobalConfig_NoKeys_DefaultsPreserved(t *testing.T) {
 	t.Parallel()
 
 	// Empty [global] section: defaults must be preserved.
@@ -68,7 +77,7 @@ func TestSyncGlobalWebhookConfig_NoKeys(t *testing.T) {
 	assert.Equal(t, 24*time.Hour, c.WebhookConfigs.Global.PresetCacheTTL)
 }
 
-func TestSyncGlobalWebhookConfig_InvalidDuration(t *testing.T) {
+func TestWebhookGlobalConfig_InvalidDuration(t *testing.T) {
 	t.Parallel()
 
 	// Invalid duration: mapstructure returns an error from BuildFromString,
@@ -392,17 +401,18 @@ func TestApplyGlobalWebhookLabels_PartialFields(t *testing.T) {
 	t.Parallel()
 
 	cfg := NewConfig(test.NewTestLogger())
+	defaults := *cfg.WebhookConfigs.Global
 	globals := map[string]any{
 		"webhooks":              "wh1",
-		"webhook-allowed-hosts": "myhost.com",
+		"webhook-allowed-hosts": "myhost.com", // SSRF-sensitive, must be ignored (#486)
 	}
 
 	applyGlobalWebhookLabels(cfg, globals)
 
 	assert.Equal(t, "wh1", cfg.WebhookConfigs.Global.Webhooks)
-	assert.Equal(t, "myhost.com", cfg.WebhookConfigs.Global.AllowedHosts)
-	// Other fields should remain at defaults
-	assert.False(t, cfg.WebhookConfigs.Global.AllowRemotePresets)
+	assert.Equal(t, defaults.AllowedHosts, cfg.WebhookConfigs.Global.AllowedHosts,
+		"webhook-allowed-hosts is INI-only; labels must not change it (#486)")
+	assert.Equal(t, defaults.AllowRemotePresets, cfg.WebhookConfigs.Global.AllowRemotePresets)
 }
 
 func TestApplyGlobalWebhookLabels_NilWebhookConfigs_Coverage(t *testing.T) {
@@ -412,15 +422,21 @@ func TestApplyGlobalWebhookLabels_NilWebhookConfigs_Coverage(t *testing.T) {
 	cfg.WebhookConfigs = nil
 
 	globals := map[string]any{
+		// All keys here are INI-only; the helper must still create
+		// WebhookConfigs but leave the SSRF-sensitive globals at
+		// their defaults.
 		"preset-cache-ttl": "30m",
 		"preset-cache-dir": "/my/cache",
 	}
 
 	applyGlobalWebhookLabels(cfg, globals)
 
-	assert.NotNil(t, cfg.WebhookConfigs)
-	assert.Equal(t, 30*time.Minute, cfg.WebhookConfigs.Global.PresetCacheTTL)
-	assert.Equal(t, "/my/cache", cfg.WebhookConfigs.Global.PresetCacheDir)
+	require.NotNil(t, cfg.WebhookConfigs)
+	defaults := middlewares.DefaultWebhookGlobalConfig()
+	assert.Equal(t, defaults.PresetCacheTTL, cfg.WebhookConfigs.Global.PresetCacheTTL,
+		"preset-cache-ttl is INI-only; labels must not change it")
+	assert.Equal(t, defaults.PresetCacheDir, cfg.WebhookConfigs.Global.PresetCacheDir,
+		"preset-cache-dir is INI-only; labels must not change it (#486)")
 }
 
 func TestApplyGlobalWebhookLabels_InvalidTypes_Coverage(t *testing.T) {
@@ -429,13 +445,13 @@ func TestApplyGlobalWebhookLabels_InvalidTypes_Coverage(t *testing.T) {
 	cfg := NewConfig(test.NewTestLogger())
 	globals := map[string]any{
 		"webhooks":             123,   // int, not string - should be ignored
-		"allow-remote-presets": false, // bool, not string - should be ignored
-		"preset-cache-dir":     42,    // int, not string - should be ignored
+		"allow-remote-presets": false, // SSRF-sensitive AND wrong type
+		"preset-cache-dir":     42,    // SSRF-sensitive AND wrong type
 	}
 
 	applyGlobalWebhookLabels(cfg, globals)
 
-	// Should keep defaults since types don't match
+	// Wrong-typed legacy webhooks key must be ignored — no panic, no apply.
 	assert.Empty(t, cfg.WebhookConfigs.Global.Webhooks)
 }
 
