@@ -181,6 +181,65 @@ docker exec ofelia id
 - TCP socket should only bind to localhost, not 0.0.0.0
 - Consider the security implications before disabling userns-remap in production
 
+### DOCKER_HOST with TCP Socket Proxy (v0.12.0 – v0.24.0)
+
+**Symptoms**:
+
+```
+SDK provider failed to connect to Docker: pinging docker: Cannot connect to the Docker daemon at tcp://<host>:2375. Is the docker daemon running?
+```
+
+The error names the configured `DOCKER_HOST`, but the connection never actually reaches it.
+
+**Affected Versions**: v0.12.0 – v0.24.0 (fixed in v0.24.1+).
+
+**Affected Configurations**:
+
+- `DOCKER_HOST=tcp://…` pointing at a Docker socket proxy (e.g. [tecnativa/docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy)).
+- `DOCKER_HOST=tcp://…` pointing at a remote Docker daemon over plain TCP.
+- Not affected: `DOCKER_HOST=unix://…` and the default `unix:///var/run/docker.sock`.
+
+**Root Cause**:
+The custom HTTP transport built inside the Docker SDK adapter chose its dialer from `ClientConfig.Host` only, which was empty in the production path. It therefore fell back to a Unix-socket dialer pinned to `/var/run/docker.sock`, even though the SDK itself correctly read `DOCKER_HOST` and pointed at the TCP endpoint. Every request was silently routed to a non-existent Unix socket, producing the misleading `Cannot connect to the Docker daemon at tcp://…` error.
+
+**Solutions**:
+
+1. **Upgrade to v0.24.1+** (recommended).
+2. **Workaround for older versions**: bind-mount `/var/run/docker.sock` directly into the container instead of using a TCP socket proxy. This loses the proxy's security restrictions.
+
+**Working example after the fix** (Docker Compose with `tecnativa/docker-socket-proxy`):
+
+```yaml
+services:
+  ofelia:
+    image: ghcr.io/netresearch/ofelia:0.24.1
+    environment:
+      DOCKER_HOST: tcp://ofelia-socket-proxy:2375
+    networks: [ofelia-socket-proxy]
+    depends_on:
+      ofelia-socket-proxy:
+        condition: service_healthy
+
+  ofelia-socket-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:v0.4.2
+    networks: [ofelia-socket-proxy]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: 1
+      POST: 1
+      EXEC: 1
+    healthcheck:
+      test: wget -t1 -T4 -qO- http://127.0.0.1:2375/_ping | grep -q "OK" || exit 1
+
+networks:
+  ofelia-socket-proxy:
+```
+
+**References**:
+- Issue: [#605](https://github.com/netresearch/ofelia/issues/605)
+- Fix: [#606](https://github.com/netresearch/ofelia/pull/606)
+
 ### Unsupported `DOCKER_HOST` Scheme
 
 **Symptoms**:
