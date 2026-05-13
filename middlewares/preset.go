@@ -225,7 +225,13 @@ func (l *PresetLoader) loadFromURL(url string) (*Preset, error) {
 		return nil, fmt.Errorf("create request for %s: %w", url, err)
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	// Route through the shared webhook TransportFactory so the TLS / proxy
+	// posture is centrally configured and consistent with webhook delivery.
+	// Using http.DefaultClient here would silently regress if a future
+	// caller mutates DefaultTransport. The request-level deadline is
+	// already set by the context above, so we don't add a Client.Timeout.
+	client := &http.Client{Transport: TransportFactory()}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch preset from %s: %w", url, err)
 	}
