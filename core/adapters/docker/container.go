@@ -451,6 +451,10 @@ func convertToPortMap(pm domain.PortMap) nat.PortMap {
 }
 
 func convertToMount(m *domain.Mount) mount.Mount {
+	if m == nil {
+		return mount.Mount{}
+	}
+
 	mnt := mount.Mount{
 		Type:        mount.Type(m.Type),
 		Source:      m.Source,

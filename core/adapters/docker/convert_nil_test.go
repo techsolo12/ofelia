@@ -8,21 +8,22 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/swarm"
+	"github.com/stretchr/testify/assert"
 
 	"github.com/netresearch/ofelia/core/domain"
 )
 
-// Regression tests for #632. PR #626 nil-guarded the *To*Swarm/*Mount
-// converters; #632 covers the symmetric *From* helpers and the
+// Regression tests for #622 / #632. PR #626 nil-guarded the *To*Swarm/*Mount
+// converters; the file also covers the symmetric *From* helpers and the
 // ContainerServiceAdapter.Create entry path that still dereferenced their
 // pointer arguments unconditionally.
 //
 // The helpers under test are package-private. Production callers always
 // pass non-nil pointers today, but the helper signatures invite unsafe
 // direct calls from tests/refactors and the public Create() path passes
-// the config straight through. Same bug class as #619 (panics in Exec) and
-// #626 (panics in *To*Swarm).
+// the config straight through. Same bug class as #619 (panics in Exec).
 
 // TestConvertFromSwarmService_NilInput pins the contract that
 // convertFromSwarmService returns nil (no panic) when called with a nil
@@ -114,4 +115,99 @@ func TestContainerServiceAdapter_Create_NilConfig(t *testing.T) {
 	if !errors.Is(err, ErrNilContainerConfig) {
 		t.Errorf("expected errors.Is(err, ErrNilContainerConfig), got: %v", err)
 	}
+}
+
+// TestConvertToSwarmSpec_Nil pins the contract that convertToSwarmSpec
+// returns a zero-value swarm.ServiceSpec (and does NOT panic) when called
+// with a nil *domain.ServiceSpec.
+//
+// Before the fix this panicked on `spec.Name` at service.go:182.
+func TestConvertToSwarmSpec_Nil(t *testing.T) {
+	t.Parallel()
+
+	defer failOnPanic(t, "convertToSwarmSpec(nil)")()
+
+	result := convertToSwarmSpec(nil)
+	assert.Equal(t, swarm.ServiceSpec{}, result)
+}
+
+// TestConvertTaskTemplateToSwarm_NilSrc pins the contract that
+// convertTaskTemplateToSwarm leaves dst untouched (and does NOT panic) when
+// called with a nil src.
+//
+// Before the fix this panicked on `src.ContainerSpec.Image` at service.go:232.
+func TestConvertTaskTemplateToSwarm_NilSrc(t *testing.T) {
+	t.Parallel()
+
+	defer failOnPanic(t, "convertTaskTemplateToSwarm(nil, &dst)")()
+
+	dst := swarm.TaskSpec{}
+	convertTaskTemplateToSwarm(nil, &dst)
+	assert.Equal(t, swarm.TaskSpec{}, dst, "dst should remain zero when src is nil")
+}
+
+// TestConvertTaskTemplateToSwarm_NilDst pins the contract that
+// convertTaskTemplateToSwarm becomes a no-op (and does NOT panic) when
+// called with a nil dst. The helper writes through dst, so a nil dst would
+// otherwise nil-deref on the very first assignment.
+func TestConvertTaskTemplateToSwarm_NilDst(t *testing.T) {
+	t.Parallel()
+
+	defer failOnPanic(t, "convertTaskTemplateToSwarm(&src, nil)")()
+
+	src := &domain.TaskSpec{
+		ContainerSpec: domain.ContainerSpec{Image: "nginx"},
+	}
+	convertTaskTemplateToSwarm(src, nil)
+}
+
+// TestConvertToMount_Nil pins the contract that convertToMount returns a
+// zero-value mount.Mount (and does NOT panic) when called with a nil
+// *domain.Mount.
+//
+// Before the fix this panicked on `m.Type` at container.go:392.
+func TestConvertToMount_Nil(t *testing.T) {
+	t.Parallel()
+
+	defer failOnPanic(t, "convertToMount(nil)")()
+
+	result := convertToMount(nil)
+	assert.Equal(t, mount.Mount{}, result)
+}
+
+// TestConvertHelpers_ZeroValueArg verifies that the convert helpers also
+// behave correctly with a non-nil but zero-value pointer argument — the
+// other half of the table-driven nil/zero/valid contract demanded by
+// #622's acceptance criteria.
+func TestConvertHelpers_ZeroValueArg(t *testing.T) {
+	t.Parallel()
+
+	t.Run("convertToSwarmSpec zero", func(t *testing.T) {
+		t.Parallel()
+		defer failOnPanic(t, "convertToSwarmSpec(&zero)")()
+		result := convertToSwarmSpec(&domain.ServiceSpec{})
+		assert.Empty(t, result.Annotations.Name)
+		assert.Nil(t, result.Mode.Replicated)
+		assert.Nil(t, result.Mode.Global)
+	})
+
+	t.Run("convertTaskTemplateToSwarm zero src", func(t *testing.T) {
+		t.Parallel()
+		defer failOnPanic(t, "convertTaskTemplateToSwarm(&zero, &dst)")()
+		dst := swarm.TaskSpec{}
+		convertTaskTemplateToSwarm(&domain.TaskSpec{}, &dst)
+		// Zero-value src still produces an empty ContainerSpec on dst (the
+		// helper unconditionally writes one — that's the existing behavior
+		// and not something this fix changes).
+		assert.NotNil(t, dst.ContainerSpec)
+		assert.Empty(t, dst.ContainerSpec.Image)
+		assert.Nil(t, dst.RestartPolicy)
+	})
+
+	t.Run("convertToMount zero", func(t *testing.T) {
+		t.Parallel()
+		defer failOnPanic(t, "convertToMount(&zero)")()
+		result := convertToMount(&domain.Mount{})
+		assert.Equal(t, mount.Mount{}, result)
+	})
 }

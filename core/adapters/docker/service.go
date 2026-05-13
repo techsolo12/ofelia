@@ -207,6 +207,10 @@ func (s *SwarmServiceAdapter) WaitForServiceTasks(ctx context.Context, serviceID
 // Conversion functions
 
 func convertToSwarmSpec(spec *domain.ServiceSpec) swarm.ServiceSpec {
+	if spec == nil {
+		return swarm.ServiceSpec{}
+	}
+
 	swarmSpec := swarm.ServiceSpec{
 		Annotations: swarm.Annotations{
 			Name:   spec.Name,
@@ -258,6 +262,10 @@ func convertToSwarmSpec(spec *domain.ServiceSpec) swarm.ServiceSpec {
 }
 
 func convertTaskTemplateToSwarm(src *domain.TaskSpec, dst *swarm.TaskSpec) {
+	if src == nil || dst == nil {
+		return
+	}
+
 	dst.ContainerSpec = &swarm.ContainerSpec{
 		Image:     src.ContainerSpec.Image,
 		Labels:    src.ContainerSpec.Labels,
