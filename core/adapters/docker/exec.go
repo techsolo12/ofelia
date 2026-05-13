@@ -32,8 +32,20 @@ var (
 	ErrNoExecOutputWriter = errors.New("exec: non-TTY mode requires at least one of stdout or stderr")
 )
 
+// checkClient returns ErrNilDockerClient if the embedded SDK client is nil.
+// See docker.ErrNilDockerClient for rationale.
+func (s *ExecServiceAdapter) checkClient() error {
+	if s.client == nil {
+		return ErrNilDockerClient
+	}
+	return nil
+}
+
 // Create creates an exec instance.
 func (s *ExecServiceAdapter) Create(ctx context.Context, containerID string, config *domain.ExecConfig) (string, error) {
+	if err := s.checkClient(); err != nil {
+		return "", err
+	}
 	if config == nil {
 		return "", ErrNilExecConfig
 	}
@@ -61,6 +73,9 @@ func (s *ExecServiceAdapter) Create(ctx context.Context, containerID string, con
 
 // Start starts an exec instance.
 func (s *ExecServiceAdapter) Start(ctx context.Context, execID string, opts domain.ExecStartOptions) (*domain.HijackedResponse, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	startConfig := containertypes.ExecStartOptions{
 		Detach: opts.Detach,
 		Tty:    opts.Tty,
@@ -79,6 +94,9 @@ func (s *ExecServiceAdapter) Start(ctx context.Context, execID string, opts doma
 
 // Inspect returns exec information.
 func (s *ExecServiceAdapter) Inspect(ctx context.Context, execID string) (*domain.ExecInspect, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	resp, err := s.client.ContainerExecInspect(ctx, execID)
 	if err != nil {
 		return nil, convertError(err)
@@ -99,6 +117,9 @@ func (s *ExecServiceAdapter) Inspect(ctx context.Context, execID string) (*domai
 func (s *ExecServiceAdapter) Run(
 	ctx context.Context, containerID string, config *domain.ExecConfig, stdout, stderr io.Writer,
 ) (int, error) {
+	if err := s.checkClient(); err != nil {
+		return -1, err
+	}
 	if config == nil {
 		return -1, ErrNilExecConfig
 	}

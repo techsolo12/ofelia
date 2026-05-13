@@ -17,8 +17,20 @@ type SystemServiceAdapter struct {
 	client *client.Client
 }
 
+// checkClient returns ErrNilDockerClient if the embedded SDK client is nil.
+// See docker.ErrNilDockerClient for rationale.
+func (s *SystemServiceAdapter) checkClient() error {
+	if s.client == nil {
+		return ErrNilDockerClient
+	}
+	return nil
+}
+
 // Info returns system information.
 func (s *SystemServiceAdapter) Info(ctx context.Context) (*domain.SystemInfo, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	info, err := s.client.Info(ctx)
 	if err != nil {
 		return nil, convertError(err)
@@ -129,6 +141,9 @@ func (s *SystemServiceAdapter) Info(ctx context.Context) (*domain.SystemInfo, er
 
 // Ping pings the Docker server.
 func (s *SystemServiceAdapter) Ping(ctx context.Context) (*domain.PingResponse, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	ping, err := s.client.Ping(ctx)
 	if err != nil {
 		return nil, convertError(err)
@@ -144,6 +159,9 @@ func (s *SystemServiceAdapter) Ping(ctx context.Context) (*domain.PingResponse, 
 
 // Version returns version information.
 func (s *SystemServiceAdapter) Version(ctx context.Context) (*domain.Version, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	version, err := s.client.ServerVersion(ctx)
 	if err != nil {
 		return nil, convertError(err)
@@ -177,6 +195,9 @@ func (s *SystemServiceAdapter) Version(ctx context.Context) (*domain.Version, er
 
 // DiskUsage returns disk usage information.
 func (s *SystemServiceAdapter) DiskUsage(ctx context.Context) (*domain.DiskUsage, error) {
+	if err := s.checkClient(); err != nil {
+		return nil, err
+	}
 	du, err := s.client.DiskUsage(ctx, types.DiskUsageOptions{})
 	if err != nil {
 		return nil, convertError(err)
