@@ -185,7 +185,7 @@ docker exec ofelia id
 
 **Symptoms**:
 ```
-Error: creating docker client: unsupported DOCKER_HOST scheme: "ssh://"; supported schemes: unix://, tcp://, tcp+tls://, http://, https://, npipe://
+Error: creating docker client: unsupported DOCKER_HOST scheme: "ssh://"; supported schemes: unix://, tcp://, http://, https://, npipe://
 ```
 
 **Root Cause**:
@@ -201,7 +201,6 @@ See [#609](https://github.com/netresearch/ofelia/issues/609).
 | --- | --- | --- |
 | `unix://` | Default on Linux/macOS | Unix domain socket, HTTP/1.1 |
 | `tcp://` | Plain TCP to a remote daemon | TCP, HTTP/1.1 (no HTTP/2) |
-| `tcp+tls://` | TLS over TCP | TLS-tunneled, HTTP/2 via ALPN |
 | `http://` | Plain HTTP to a remote daemon | TCP, HTTP/1.1 |
 | `https://` | HTTPS to a remote daemon | TLS, HTTP/2 via ALPN |
 | `npipe://` | Windows named pipe (Windows builds only) | Named pipe, HTTP/1.1 |
@@ -212,6 +211,11 @@ See [#609](https://github.com/netresearch/ofelia/issues/609).
   instead and point `DOCKER_HOST` at the forwarded `unix://` path.
 - `fd://` — systemd socket activation. Not applicable to Ofelia's startup
   model; bind Ofelia to the actual `unix://` socket path.
+- `tcp+tls://` — pending PR [#613](https://github.com/netresearch/ofelia/pull/613).
+  Without TLS material wired into the custom transport, accepting `tcp+tls://`
+  would silently downgrade to plain TCP — exactly the failure mode this
+  validation is meant to prevent. Will be re-enabled in a follow-up once the
+  TLS plumbing lands. Use `https://` in the meantime.
 - Any other scheme (e.g. `gopher://`, `tcp+ssh://`).
 
 **Solution**:

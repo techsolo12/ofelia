@@ -218,9 +218,10 @@ func TestClientConfig_PoolingOptions(t *testing.T) {
 func TestCreateHTTPClient_UnsupportedSchemes(t *testing.T) {
 	t.Parallel()
 
-	// Note: tcp+tls:// is intentionally NOT in this list — it is on the
-	// supported allow-list (treated like https for transport selection) to
-	// prevent the silent TLS downgrade described in the issue.
+	// tcp+tls:// is rejected here pending PR #613. Without the TLS plumbing
+	// from #613, accepting tcp+tls would silently downgrade to plain TCP —
+	// exactly the silent-downgrade class this PR exists to prevent. Will be
+	// re-enabled in a follow-up once #613 lands.
 	testCases := []struct {
 		name string
 		host string
@@ -232,6 +233,10 @@ func TestCreateHTTPClient_UnsupportedSchemes(t *testing.T) {
 		{
 			name: "fd_scheme",
 			host: "fd://",
+		},
+		{
+			name: "tcp_plus_tls_scheme",
+			host: "tcp+tls://127.0.0.1:2376",
 		},
 		{
 			name: "bogus_scheme",
@@ -294,12 +299,10 @@ func TestValidateAndNormalizeHost(t *testing.T) {
 		// Empty string passes through (caller supplies default).
 		{name: "empty_string", input: "", want: ""},
 
-		// tcp+tls:// is supported (treated like https for transport selection).
-		{name: "tcp_plus_tls", input: "tcp+tls://127.0.0.1:2376", want: "tcp+tls://127.0.0.1:2376"},
-
 		// Unsupported schemes.
 		{name: "ssh", input: "ssh://docker-host", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
 		{name: "fd", input: "fd://", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
+		{name: "tcp_plus_tls", input: "tcp+tls://127.0.0.1:2376", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
 		{name: "gopher", input: "gopher://something", wantErr: true, errSentry: ErrUnsupportedDockerHostScheme},
 
 		// Missing scheme separator.

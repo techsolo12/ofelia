@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** `DOCKER_HOST` scheme is now validated against an allow-list (`unix://`, `tcp://`, `http://`, `https://`, `npipe://`) and normalized to lowercase. Unsupported schemes (`ssh://`, `fd://`, `tcp+tls://`, bogus values) now fail at startup with a clear error instead of silently falling through to a plain-TCP transport. Fixes case-sensitivity bug for `TCP://` / `UNIX://`. Configurations that previously relied on the silent fallthrough will now fail loudly — operators using `ssh://` should switch to an SSH-forwarded socket and point `DOCKER_HOST` at the forwarded `unix://` path. Note: `tcp+tls://` is rejected pending the TLS-plumbing fix in [#613](https://github.com/netresearch/ofelia/pull/613) — accepting it here without TLS material in the transport would silently downgrade to plain TCP. ([#612](https://github.com/netresearch/ofelia/pull/612), fixes [#609](https://github.com/netresearch/ofelia/issues/609))
+
 ### Fixed
 
 - Docker API version negotiation at startup is now bounded by a configurable `NegotiateTimeout` (default 30s). Previously `NewClientWithConfig` called `NegotiateAPIVersion` with `context.Background()`, so a reachable-but-wedged Docker daemon (e.g. a socket proxy with a hung upstream) could hang Ofelia at startup with no diagnostic output. The deadline-exceeded path now logs a warning so operators can correlate startup slowness with daemon health ([#611](https://github.com/netresearch/ofelia/pull/611), fixes [#608](https://github.com/netresearch/ofelia/issues/608))
-- `DOCKER_HOST` scheme is now validated against an allow-list (`unix://`, `tcp://`, `tcp+tls://`, `http://`, `https://`, `npipe://`) and normalized to lowercase. Unsupported schemes (`ssh://`, `fd://`, bogus values) now fail at startup with a clear error instead of silently falling through to a plain-TCP transport. Fixes silent TLS downgrade for `tcp+tls://` and case-sensitivity bug for `TCP://`/`UNIX://` ([#609](https://github.com/netresearch/ofelia/issues/609))
 
 ## [0.24.0] - 2026-05-10
 

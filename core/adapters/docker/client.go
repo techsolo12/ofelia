@@ -30,8 +30,8 @@ const defaultNegotiateTimeout = 30 * time.Second
 // the supported schemes so operators get an actionable failure at startup
 // instead of an opaque dial error later.
 //
-// Supported schemes (case-insensitive): unix, tcp, tcp+tls, http, https, npipe.
-// Notably unsupported: ssh, fd. See docs/TROUBLESHOOTING.md.
+// Supported schemes (case-insensitive): unix, tcp, http, https, npipe.
+// Notably unsupported: ssh, fd, tcp+tls. See docs/TROUBLESHOOTING.md.
 //
 // Tracking: https://github.com/netresearch/ofelia/issues/609
 var ErrUnsupportedDockerHostScheme = errors.New("unsupported DOCKER_HOST scheme")
@@ -41,16 +41,22 @@ var ErrUnsupportedDockerHostScheme = errors.New("unsupported DOCKER_HOST scheme"
 //
 //   - unix:    Unix domain socket (default on Linux/macOS).
 //   - tcp:     Plain TCP (HTTP/1.1, no HTTP/2).
-//   - tcp+tls: TLS over TCP; treated like https for transport selection.
 //   - http:    Plain HTTP over TCP (HTTP/1.1, no HTTP/2).
 //   - https:   HTTPS; HTTP/2 negotiated via ALPN.
 //   - npipe:   Windows named pipe (only usable on Windows builds; the actual
 //     dialer lives in the SDK and is build-tagged). The scheme is on the
 //     allow-list so Windows configurations work transparently.
 //
-// ssh:// and fd:// are deliberately not supported — they require dialers
-// (SSH tunnel, systemd socket activation) that this adapter does not wire up.
-var supportedDockerHostSchemes = []string{"unix", "tcp", "tcp+tls", "http", "https", "npipe"}
+// Deliberately not supported:
+//
+//   - ssh:    Requires an SSH tunnel dialer this adapter does not wire up.
+//   - fd:     Requires systemd socket activation we do not handle.
+//   - tcp+tls: Withheld pending PR #613 (issue #607). Without TLS material
+//     wired into the custom transport, accepting tcp+tls would silently
+//     downgrade to plain TCP — exactly the silent-downgrade class this PR
+//     is supposed to prevent. Re-enable in a follow-up once TLS plumbing
+//     lands.
+var supportedDockerHostSchemes = []string{"unix", "tcp", "http", "https", "npipe"}
 
 // Client implements ports.DockerClient using the official Docker SDK.
 type Client struct {
@@ -256,7 +262,7 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 		}
 		// HTTP/2 not supported on Unix sockets
 		transport.ForceAttemptHTTP2 = false
-	case "https", "tcp+tls":
+	case "https":
 		// TLS-backed connections can use HTTP/2 via ALPN.
 		transport.ForceAttemptHTTP2 = true
 	default:
