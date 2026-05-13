@@ -59,13 +59,36 @@ type PresetLoader struct {
 	localPresetDirs []string
 	cache           *PresetCache
 	globalConfig    *WebhookGlobalConfig
+	// httpClient is the cached HTTP client used for remote preset fetches
+	// (loadFromURL / loadFromGitHub). It is constructed once in
+	// NewPresetLoader so multiple fetches share a connection pool / idle-conn
+	// reuse instead of paying the cost of a fresh *http.Transport per call.
+	//
+	// Test ordering constraint: tests that override the transport factory via
+	// SetTransportFactoryForTest MUST do so BEFORE calling NewPresetLoader —
+	// the override has no effect on a client that has already been cached.
+	httpClient *http.Client
 }
 
-// NewPresetLoader creates a new preset loader
+// NewPresetLoader creates a new preset loader.
+//
+// The HTTP client used for remote preset fetches (loadFromURL,
+// loadFromGitHub) is constructed here from TransportFactory() and cached on
+// the returned loader. Callers that need to influence the transport (e.g.
+// tests using SetTransportFactoryForTest) must install the override BEFORE
+// calling NewPresetLoader; replacing the factory afterwards does not affect
+// the already-cached client.
 func NewPresetLoader(globalConfig *WebhookGlobalConfig) *PresetLoader {
 	loader := &PresetLoader{
 		bundledPresets: make(map[string]*Preset),
 		globalConfig:   globalConfig,
+		// Cache an HTTP client routed through the shared webhook
+		// TransportFactory so the TLS / proxy posture is centrally configured
+		// and consistent with webhook delivery. Sharing a single client
+		// enables connection pooling across bursty preset fetches.
+		// Per-request deadlines are set via context.WithTimeout in
+		// loadFromURL, so we deliberately do not set Client.Timeout here.
+		httpClient: &http.Client{Transport: TransportFactory()},
 	}
 
 	// Load all bundled presets
@@ -225,13 +248,13 @@ func (l *PresetLoader) loadFromURL(url string) (*Preset, error) {
 		return nil, fmt.Errorf("create request for %s: %w", url, err)
 	}
 
-	// Route through the shared webhook TransportFactory so the TLS / proxy
-	// posture is centrally configured and consistent with webhook delivery.
-	// Using http.DefaultClient here would silently regress if a future
-	// caller mutates DefaultTransport. The request-level deadline is
-	// already set by the context above, so we don't add a Client.Timeout.
-	client := &http.Client{Transport: TransportFactory()}
-	resp, err := client.Do(req)
+	// Use the cached *http.Client constructed in NewPresetLoader so bursty
+	// preset fetches reuse the underlying connection pool. The transport was
+	// produced by TransportFactory() at construction time so the TLS / proxy
+	// posture stays consistent with webhook delivery. The request-level
+	// deadline is already set by the context above, so we don't add a
+	// Client.Timeout.
+	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch preset from %s: %w", url, err)
 	}
