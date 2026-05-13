@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - Reconcile **Slack** middleware key documentation with the actual struct fields in `middlewares.SlackConfig`. Removed the documented-but-rejected `slack-url` (typo for `slack-webhook`), `slack-channel`, `slack-mentions`, `slack-icon-emoji`, and `slack-username` keys from `docs/CONFIGURATION.md` and `docs/QUICK_REFERENCE.md`. The legacy Slack middleware (deprecated, scheduled for removal in v1.0.0) only accepts `slack-webhook` and `slack-only-on-error`; for channel routing, mentions, custom username/avatar, etc., migrate to a `[webhook "name"]` section with `preset = slack` ([webhook docs](docs/webhooks.md)). ([#621](https://github.com/netresearch/ofelia/issues/621))
+- Reconcile **Save** middleware key documentation with the actual struct fields in `middlewares.SaveConfig`. Documented the existing `restore-history` and `restore-history-max-age` global keys (supported by the parser but undocumented) and removed the unimplemented `save-format` and `save-retention` keys from `docs/CONFIGURATION.md`. ([#621](https://github.com/netresearch/ofelia/issues/621))
 
 ## [0.24.0] - 2026-05-10
 

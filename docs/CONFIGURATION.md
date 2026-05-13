@@ -791,8 +791,14 @@ command = export-data.sh
 # Save output
 save-folder = /var/log/ofelia/exports
 save-only-on-error = false
-save-format = json  # json or text
-save-retention = 30d # Keep for 30 days
+
+# History restoration on startup (set on the [global] section)
+# - restore-history: enable/disable replaying saved executions on daemon start
+#   (default: enabled when save-folder is set)
+# - restore-history-max-age: only replay executions newer than this duration
+#   (default: 24h)
+restore-history = true
+restore-history-max-age = 48h
 ```
 
 ### Overlap Prevention
