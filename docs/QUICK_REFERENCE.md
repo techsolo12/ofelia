@@ -623,9 +623,8 @@ schedule = @daily
 container = app
 command = /important-task.sh
 
-# Slack for quick alerts
+# Slack for quick alerts (deprecated - prefer the webhook notification system)
 slack-webhook = https://hooks.slack.com/...
-slack-channel = #ops
 slack-only-on-error = true
 
 # Email for detailed logs
