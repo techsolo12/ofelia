@@ -42,10 +42,11 @@ func (j *ExecJob) InitializeRuntimeFields() {
 }
 
 func (j *ExecJob) Run(ctx *Context) error {
-	runCtx := ctx.Ctx
-	if runCtx == nil {
-		runCtx = context.Background()
-	}
+	// Use the (deadline-bounded) middleware-chain context for cancellation
+	// propagation. The fallback to context.Background() is centralized in
+	// (*Context).RunContext so a nil ctx.Ctx (legacy literal in older
+	// tests) cannot panic. See issue #638.
+	runCtx := ctx.RunContext()
 
 	// Resolve environment from env-file, env-from, and explicit environment
 	mergedEnv, err := ResolveJobEnvironment(runCtx, j.EnvFile, j.EnvFrom, j.Environment, j.Provider, nil)

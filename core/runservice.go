@@ -48,6 +48,14 @@ func NewRunServiceJob(provider DockerProvider) *RunServiceJob {
 	return &RunServiceJob{Provider: provider}
 }
 
+// GetMaxRuntime exposes the configured per-job maximum runtime so the
+// scheduler can wrap the per-run context with a deadline (issue #638).
+// A zero value means "no per-job override"; the scheduler falls back to
+// its default bound (typically 24h, mirroring `[global] max-runtime`).
+func (j *RunServiceJob) GetMaxRuntime() time.Duration {
+	return j.MaxRuntime
+}
+
 // InitializeRuntimeFields initializes fields that depend on the Docker provider.
 // This should be called after the Provider field is set.
 func (j *RunServiceJob) InitializeRuntimeFields() {
@@ -64,13 +72,11 @@ func (j *RunServiceJob) Validate() error {
 }
 
 func (j *RunServiceJob) Run(ctx *Context) error {
-	// Use the middleware chain's context for cancellation propagation.
-	// This ensures scheduler shutdown, job removal, and max-runtime
-	// cancellation reach the Docker API calls.
-	runCtx := ctx.Ctx
-	if runCtx == nil {
-		runCtx = context.Background()
-	}
+	// Use the (deadline-bounded) middleware-chain context for cancellation
+	// propagation. The fallback to context.Background() lives in
+	// (*Context).RunContext so legacy *Context{} literals stay safe.
+	// See issue #638.
+	runCtx := ctx.RunContext()
 
 	// Pull image using the provider
 	if err := j.Provider.EnsureImage(runCtx, j.Image, true); err != nil {

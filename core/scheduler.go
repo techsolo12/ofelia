@@ -212,8 +212,13 @@ type maxConcurrentSkipJob struct {
 	logger cron.Logger
 }
 
+// Run implements cron.Job. Defensive fallback only: maxConcurrentSkipJob
+// also implements cron.JobWithContext, so go-cron always invokes
+// RunWithContext on the happy path. Use context.TODO() to flag the
+// fallback intent. The per-job deadline is applied downstream by
+// jobWrapper.runWithCtx via boundJobContext (issue #638).
 func (m *maxConcurrentSkipJob) Run() {
-	m.RunWithContext(context.Background())
+	m.RunWithContext(context.TODO())
 }
 
 // RunWithContext attempts to acquire a slot from the shared concurrencySemaphore
@@ -805,6 +810,47 @@ func (s *Scheduler) IsJobRunning(name string) bool {
 	return s.cron.IsJobRunningByName(name)
 }
 
+// defaultJobMaxRuntime is the upper bound applied to job execution
+// contexts when neither the job nor the global config exposes a
+// MaxRuntime. It mirrors the documented default for
+// `[global] max-runtime` (24h) so behavior is consistent regardless of
+// whether a job inherits the global default at config-load time. See
+// issue #638.
+const defaultJobMaxRuntime = 24 * time.Hour
+
+// MaxRuntimeProvider is implemented by job types that expose a per-job
+// maximum runtime. Currently RunJob and RunServiceJob satisfy this
+// interface; ExecJob, LocalJob, and ComposeJob do not (they inherit
+// the bound from defaultJobMaxRuntime or, when wired through cli/config,
+// from `[global] max-runtime`).
+type MaxRuntimeProvider interface {
+	GetMaxRuntime() time.Duration
+}
+
+// boundJobContext returns a child of parent with a deadline derived from
+// the job's MaxRuntime when the job implements MaxRuntimeProvider, or
+// from defaultMax otherwise. The caller must invoke the returned cancel
+// when the job finishes to release the timer.
+//
+// This is the scheduler-side enforcement complement to RunJob.startAndWait's
+// inner WithTimeout: it ensures every job (including ExecJob, RunServiceJob,
+// LocalJob, ComposeJob) runs under a bounded context, so a wedged Docker
+// upstream cannot stall a goroutine indefinitely. See issue #638.
+func boundJobContext(parent context.Context, j Job, defaultMax time.Duration) (context.Context, context.CancelFunc) {
+	d := defaultMax
+	if mp, ok := j.(MaxRuntimeProvider); ok {
+		if jm := mp.GetMaxRuntime(); jm > 0 {
+			d = jm
+		}
+	}
+	if d <= 0 {
+		// Defensive: never return parent unwrapped with a no-op cancel
+		// confused for "deadline applied".
+		d = defaultJobMaxRuntime
+	}
+	return context.WithTimeout(parent, d)
+}
+
 type jobWrapper struct {
 	s *Scheduler
 	j Job
@@ -813,9 +859,14 @@ type jobWrapper struct {
 // Compile-time assertion: jobWrapper implements cron.JobWithContext.
 var _ cron.JobWithContext = (*jobWrapper)(nil)
 
-// Run implements cron.Job. Called by go-cron for jobs that don't support context.
+// Run implements cron.Job. Called by go-cron for jobs that don't support
+// context. Defensive only: jobWrapper also implements
+// cron.JobWithContext (see assertion above), so go-cron always uses
+// RunWithContext on the happy path. Use context.TODO() to flag the
+// fallback intent and let runWithCtx apply the per-job deadline. See
+// issue #638.
 func (w *jobWrapper) Run() {
-	w.runWithCtx(context.Background())
+	w.runWithCtx(context.TODO())
 }
 
 // RunWithContext implements cron.JobWithContext. Called by go-cron with a
@@ -857,7 +908,16 @@ func (w *jobWrapper) runWithCtx(ctx context.Context) {
 	// Ensure buffers are returned to pool when done
 	defer e.Cleanup()
 
-	jctx := NewContextWithContext(ctx, w.s, w.j, e)
+	// Bound the per-run context with the job's MaxRuntime (or the
+	// scheduler default) so a wedged Docker upstream cannot stall this
+	// goroutine indefinitely. Applied at the wrapper layer so all job
+	// types (ExecJob, RunJob, RunServiceJob, LocalJob, ComposeJob)
+	// inherit the bound, not just RunJob/RunServiceJob which already
+	// re-wrap inside startAndWait. See issue #638.
+	boundedCtx, cancelBound := boundJobContext(ctx, w.j, defaultJobMaxRuntime)
+	defer cancelBound()
+
+	jctx := NewContextWithContext(boundedCtx, w.s, w.j, e)
 
 	w.start(jctx)
 
