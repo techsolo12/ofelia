@@ -39,9 +39,16 @@ func (s *ContainerServiceAdapter) checkClient() error {
 }
 
 // Create creates a new container.
+//
+// Returns ErrNilContainerConfig (no panic) if config is nil — the
+// previous code dereferenced config.HostConfig / config.NetworkConfig
+// unconditionally. See #632 / #626.
 func (s *ContainerServiceAdapter) Create(ctx context.Context, config *domain.ContainerConfig) (string, error) {
 	if err := s.checkClient(); err != nil {
 		return "", err
+	}
+	if config == nil {
+		return "", ErrNilContainerConfig
 	}
 	containerConfig := convertToContainerConfig(config)
 	hostConfig := convertToHostConfig(config.HostConfig)

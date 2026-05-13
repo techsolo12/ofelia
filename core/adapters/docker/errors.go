@@ -34,3 +34,12 @@ var ErrNilDockerClient = errors.New("docker adapter: nil SDK client")
 // [#625]: https://github.com/netresearch/ofelia/pull/625
 // [#627]: https://github.com/netresearch/ofelia/issues/627
 var ErrTCPTLSRequiresCertMaterial = errors.New("tcp+tls:// requires TLS material")
+
+// ErrNilContainerConfig is returned by ContainerServiceAdapter.Create when
+// the supplied *domain.ContainerConfig is nil. Production callers always
+// pass a non-nil config (the executor builds it eagerly), so this is
+// defense-in-depth — but the previous code dereferenced
+// `config.HostConfig` / `config.NetworkConfig` unconditionally and would
+// panic on a hand-rolled nil. Returning a typed sentinel keeps the failure
+// branchable via errors.Is and consistent with ErrNilExecConfig.
+var ErrNilContainerConfig = errors.New("container: nil ContainerConfig")
