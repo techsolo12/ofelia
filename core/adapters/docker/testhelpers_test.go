@@ -23,3 +23,18 @@ func newLoopbackSDKClient(t *testing.T) *client.Client {
 	t.Cleanup(func() { _ = sdk.Close() })
 	return sdk
 }
+
+// failOnPanic registers a deferred recover that fails the test with a
+// descriptive message if the surrounding test function panics. Used by the
+// nil-input regression tests to assert that the new guards return errors
+// instead of crashing the daemon. Call inline, not via defer:
+//
+//	defer failOnPanic(t, "Create with nil config")
+func failOnPanic(t *testing.T, what string) func() {
+	t.Helper()
+	return func() {
+		if r := recover(); r != nil {
+			t.Fatalf("%s panicked: %v", what, r)
+		}
+	}
+}

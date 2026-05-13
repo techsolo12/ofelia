@@ -19,11 +19,7 @@ import (
 func TestExecServiceAdapter_Create_NilConfig(t *testing.T) {
 	t.Parallel()
 
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("Create panicked on nil config: %v", r)
-		}
-	}()
+	defer failOnPanic(t, "Create with nil config")()
 
 	adapter := &ExecServiceAdapter{client: nil}
 
@@ -46,11 +42,7 @@ func TestExecServiceAdapter_Create_NilConfig(t *testing.T) {
 func TestExecServiceAdapter_Run_NilWritersNonTTY(t *testing.T) {
 	t.Parallel()
 
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("Run panicked on nil stdout+stderr in non-TTY: %v", r)
-		}
-	}()
+	defer failOnPanic(t, "Run with nil stdout+stderr in non-TTY")()
 
 	adapter := &ExecServiceAdapter{client: nil}
 

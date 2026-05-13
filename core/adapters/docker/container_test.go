@@ -18,11 +18,7 @@ import (
 func TestContainerServiceAdapter_Inspect_EmptyID(t *testing.T) {
 	t.Parallel()
 
-	defer func() {
-		if r := recover(); r != nil {
-			t.Fatalf("Inspect panicked on empty ID: %v", r)
-		}
-	}()
+	defer failOnPanic(t, "Inspect with empty ID")()
 
 	// Loopback SDK client — the SDK rejects the empty ID before
 	// attempting to connect, so the host is never dialed.
