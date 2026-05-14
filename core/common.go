@@ -55,20 +55,29 @@ type Context struct {
 	middlewares []Middleware
 }
 
+// NewContext constructs a Context with a non-nil default Ctx
+// (context.TODO()). Prefer NewContextWithContext to thread the scheduler's
+// per-run, deadline-bounded context through the middleware chain;
+// NewContext is kept for legacy callers that have no parent context yet.
+//
+// The default is context.TODO (not context.Background) to flag — both to
+// readers and to static analyzers — that the caller still owes a real
+// parent context. See issue #638.
 func NewContext(s *Scheduler, j Job, e *Execution) *Context {
-	return &Context{
-		Scheduler:   s,
-		Logger:      s.Logger,
-		Job:         j,
-		Execution:   e,
-		Ctx:         context.Background(),
-		middlewares: j.Middlewares(),
-	}
+	return NewContextWithContext(context.TODO(), s, j, e)
 }
 
 // NewContextWithContext creates a Context with a specific context.Context,
-// typically the per-entry context provided by go-cron's JobWithContext interface.
+// typically the per-entry, deadline-bounded context produced by the
+// scheduler around each invocation. The provided ctx must be non-nil; a
+// nil ctx is replaced with context.TODO() so downstream RunContext()
+// always returns a usable context.
+//
+//nolint:contextcheck // intentional: only substitutes context.TODO() when caller passes nil; non-nil ctx is stored unchanged
 func NewContextWithContext(ctx context.Context, s *Scheduler, j Job, e *Execution) *Context {
+	if ctx == nil {
+		ctx = context.TODO()
+	}
 	return &Context{
 		Scheduler:   s,
 		Logger:      s.Logger,
@@ -77,6 +86,21 @@ func NewContextWithContext(ctx context.Context, s *Scheduler, j Job, e *Executio
 		Ctx:         ctx,
 		middlewares: j.Middlewares(),
 	}
+}
+
+// RunContext returns the context.Context that job Run methods should use
+// for outbound calls (Docker SDK, env-from inspections, etc.). It returns
+// c.Ctx when set; otherwise context.Background() so legacy *Context{}
+// literals (e.g. in tests that predate context plumbing) keep working.
+//
+// Centralizing the fallback here is the foundation for issue #638: it
+// replaces four inline `if runCtx == nil { runCtx = context.Background() }`
+// blocks (execjob, runjob, runservice, localjob) with a single call site.
+func (c *Context) RunContext() context.Context {
+	if c == nil || c.Ctx == nil {
+		return context.Background()
+	}
+	return c.Ctx
 }
 
 func (c *Context) Start() {
