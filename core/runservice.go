@@ -90,11 +90,25 @@ func (j *RunServiceJob) Run(ctx *Context) error {
 
 	ctx.Logger.Info(fmt.Sprintf("Created service %s for job %s", svcID, j.Name))
 
-	if err := j.watchContainer(runCtx, ctx, svcID); err != nil {
-		return err
+	watchErr := j.watchContainer(runCtx, ctx, svcID)
+
+	// If the per-run context already fired (wrapper-level deadline from
+	// boundJobContext / per-job MaxRuntime), the swarm service is left
+	// scheduled because the SDK calls bailed out on cancellation rather
+	// than completing teardown. Issue a best-effort RemoveService on a
+	// fresh context so the operator does not get a phantom task. See
+	// issue #655.
+	deleteCtx := runCtx
+	if runCtx.Err() != nil {
+		cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), jobCleanupTimeout)
+		defer cancelCleanup()
+		deleteCtx = cleanupCtx
 	}
 
-	return j.deleteService(runCtx, ctx, svcID)
+	if delErr := j.deleteService(deleteCtx, ctx, svcID); delErr != nil && watchErr == nil {
+		return delErr
+	}
+	return watchErr
 }
 
 func (j *RunServiceJob) buildService(ctx context.Context) (string, error) {
@@ -188,7 +202,19 @@ func (j *RunServiceJob) watchContainer(ctx context.Context, jobCtx *Context, svc
 			ticker.Stop()
 			wg.Done()
 		}()
-		for range ticker.C {
+		for {
+			// Honor the wrapper-level deadline (#651's boundJobContext)
+			// in addition to the per-job MaxRuntime check below — the
+			// global default of 24h means any service job left running
+			// past that bound used to spin in this loop forever even
+			// though the SDK calls themselves had bailed. See #655.
+			select {
+			case <-ctx.Done():
+				err = ctx.Err()
+				return
+			case <-ticker.C:
+			}
+
 			if j.MaxRuntime > 0 && time.Since(startTime) > j.MaxRuntime {
 				err = ErrMaxTimeRunning
 				return
