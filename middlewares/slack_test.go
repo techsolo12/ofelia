@@ -102,6 +102,25 @@ func TestSlack_ContinueOnStop(t *testing.T) {
 	assert.True(t, m.ContinueOnStop(), "Slack.ContinueOnStop() should return true")
 }
 
+// TestSlack_FallbackClient_UsesTransportFactory is a regression guard for #630.
+// The (deprecated) Slack middleware constructs its default *http.Client with no
+// custom Transport, so notifications fall back to http.DefaultTransport instead
+// of the webhook stack's TLS-aware transport. NewSlack must wire the fallback
+// Client.Transport through TransportFactory() for defense-in-depth during the
+// deprecation window.
+//
+// Not parallel: installs a sentinel TransportFactory via the global hook.
+func TestSlack_FallbackClient_UsesTransportFactory(t *testing.T) {
+	sentinel := &http.Transport{}
+	SetTransportFactoryForTest(func() *http.Transport { return sentinel })
+	t.Cleanup(func() { SetTransportFactoryForTest(NewSafeTransport) })
+
+	m := NewSlack(&SlackConfig{SlackWebhook: "https://example.com/hook"}).(*Slack)
+	require.NotNil(t, m.Client, "NewSlack must construct a default *http.Client")
+	assert.Same(t, sentinel, m.Client.Transport,
+		"NewSlack fallback client must obtain its Transport from TransportFactory()")
+}
+
 func TestSlackDedupSuppressesDuplicateErrors(t *testing.T) {
 	t.Parallel()
 

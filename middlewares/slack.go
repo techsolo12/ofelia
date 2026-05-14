@@ -45,10 +45,15 @@ type SlackConfig struct {
 func NewSlack(c *SlackConfig) core.Middleware {
 	var m core.Middleware
 	if !IsEmpty(c) {
-		// Deprecation warning is now handled centrally by cli/deprecations.go
+		// Deprecation warning is now handled centrally by cli/deprecations.go.
+		// Route the fallback HTTP client through the shared webhook
+		// TransportFactory so the (deprecated) Slack middleware inherits the
+		// same TLS / proxy posture as the generic webhook stack instead of
+		// silently using http.DefaultTransport. Defense-in-depth for the
+		// deprecation window — see #630.
 		m = &Slack{
 			SlackConfig: *c,
-			Client:      &http.Client{Timeout: 5 * time.Second},
+			Client:      &http.Client{Transport: TransportFactory(), Timeout: 5 * time.Second},
 		}
 	}
 
@@ -91,7 +96,9 @@ func (m *Slack) pushMessage(ctx *core.Context) {
 	values.Add(slackPayloadVar, string(content))
 
 	if m.Client == nil {
-		m.Client = &http.Client{Timeout: 5 * time.Second}
+		// Same defense-in-depth posture as NewSlack: route the fallback
+		// client through TransportFactory() rather than http.DefaultTransport.
+		m.Client = &http.Client{Transport: TransportFactory(), Timeout: 5 * time.Second}
 	}
 
 	// Build request with context and validate URL
