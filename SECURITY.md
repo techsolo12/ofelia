@@ -119,6 +119,25 @@ Some Scorecard checks are designed for team-based development and will show lowe
 
 These are accepted trade-offs documented as part of our security model.
 
+### Pinned-Dependencies: First-Party Reusable Workflows
+
+The `Pinned-Dependencies` check flags references to reusable workflows that are not pinned by commit SHA. This project intentionally references its **own organisation's** reusable workflows via the `@main` ref:
+
+```yaml
+uses: netresearch/.github/.github/workflows/<workflow>.yml@main
+```
+
+**Third-party actions** (anything outside the `netresearch/` GitHub organisation) MUST still be pinned by full commit SHA — this is enforced by code review and by the Dependabot configuration (`.github/dependabot.yml`), which auto-bumps every SHA-pinned third-party action in the `github-actions` ecosystem on a weekly schedule. The trivy-action supply-chain incident of 2026 reinforced this rule.
+
+**Rationale for `@main` on first-party workflows:**
+
+- The `netresearch/.github` repository is owned by the same organisation and protected by the same access controls as this repository
+- Pinning by SHA on first-party reusable workflows would require a Renovate/Dependabot cycle across every consumer repository for every improvement to the shared workflow, with no security benefit (the source of truth is the same set of maintainers)
+- The shared workflows themselves pin all their internal third-party action calls by SHA, so the supply-chain surface area is contained at the central repository
+- Trade-off accepted: a compromise of a `netresearch/.github` maintainer account would cascade to consumers. This is mitigated by branch protection and the same review requirements on the central repository
+
+Open Scorecard "Pinned-Dependencies" alerts that reference `netresearch/.github/.github/workflows/*.yml@main` are dismissed as "Won't fix — first-party reusable workflow, see SECURITY.md".
+
 ## Branch Protection Settings
 
 For OpenSSF Scorecard compliance while maintaining solo-developer workflow:
@@ -148,7 +167,7 @@ With these settings, solo developers can:
 
 This repository targets the following scorecard improvements:
 
-- ✅ **Pinned-Dependencies**: All GitHub Actions pinned by SHA
+- ✅ **Pinned-Dependencies**: All third-party GitHub Actions pinned by SHA (first-party `netresearch/.github` reusable workflows use `@main` — see [policy above](#pinned-dependencies-first-party-reusable-workflows))
 - ✅ **Token-Permissions**: Minimal permissions in workflows
 - ✅ **Security-Policy**: This file exists
 - ✅ **SAST**: CodeQL and gosec enabled
