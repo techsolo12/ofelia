@@ -96,14 +96,14 @@ type schemeHandler struct {
 // Documented choices:
 //
 //   - unix:    Unix domain socket dialer; HTTP/1.1 only.
-//   - tcp:     Plain TCP; HTTP/1.1, no TLS. Operators who want TLS over TCP
-//     must use tcp+tls:// (#616) or https://. The docker CLI rewrites
-//     tcp:// to https:// internally when DOCKER_TLS_VERIFY/DOCKER_CERT_PATH
-//     are set; Ofelia does NOT mirror that rewrite, because Go's
-//     http.Transport only performs TLS on https:// URLs — wiring TLS
-//     material into a tcp:// transport would be silently ineffective
-//     (the cert material would be loaded but never offered on the wire).
-//     See #628 / #634 for the analysis.
+//   - tcp:     Plain TCP; auto-upgrades to https:// (TLS) when
+//     DOCKER_CERT_PATH (or ClientConfig.TLSCertPath) is set, mirroring the
+//     docker CLI. The rewrite happens in NewClientWithConfig via
+//     upgradeTCPToHTTPSIfTLSMaterial so the SDK and HTTP transport
+//     agree on the URL scheme — without it, http.Transport never
+//     triggers TLS for tcp:// even when cert material is configured
+//     (#634, follow-up to #613). The handler below remains in place
+//     for direct callers of createHTTPClient (tests).
 //   - tcp+tls: Explicit TLS over TCP. Requires TLS material via
 //     DOCKER_CERT_PATH / DOCKER_TLS_VERIFY (or ClientConfig.TLSCertPath /
 //     TLSVerify). Re-enabled on the public allow-list in #616 now that the
@@ -270,18 +270,8 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 	}
 
 	// Fail-closed for tcp+tls:// without USABLE TLS material. tcp+tls:// is
-	// an EXPLICIT TLS opt-in (versus tcp:// which is ambiguous and may rely
-	// on stdlib defaults). Without DOCKER_CERT_PATH (or the
-	// ClientConfig.TLSCertPath override), resolveTLSConfig would return
-	// (nil, nil) and the SDK would silently dial TLS against the system CA
-	// pool with no client cert — operators believing they have mTLS would
-	// be getting unauthenticated connections. See
-	// https://github.com/netresearch/ofelia/issues/627.
-	//
-	// We invoke resolveTLSConfig (not just hasTLSMaterial) so a typo or
-	// missing cert files at the path also fails closed at startup instead
-	// of silently downgrading at dial time — the case the security review
-	// of #646 flagged as bypassable.
+	// an EXPLICIT TLS opt-in. Invoke resolveTLSConfig so a typo or missing
+	// cert files at the path also fails closed at startup. See #627 / #646.
 	if scheme == schemeTCPTLS {
 		if !hasTLSMaterial(config) {
 			return nil, fmt.Errorf(
@@ -296,6 +286,16 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 			)
 		}
 	}
+
+	// Mirror the docker CLI: when the host scheme is plain tcp:// AND TLS
+	// material is configured, rewrite tcp:// to https:// so the SDK and
+	// HTTP transport agree. Without this, Go's http.Transport only triggers
+	// TLS for https:// URLs — the cert material wired in by applyDockerTLS
+	// (PR #613) was silently unused for tcp://. See #634. The
+	// applyTCPTransport hasTLSMaterial branch remains in place to support
+	// direct callers of createHTTPClient; in production this rewrite means
+	// dispatch goes through applyTLSTransport.
+	normalizedHost = upgradeTCPToHTTPSIfTLSMaterial(normalizedHost, config)
 
 	// Build a local copy of config with the normalized host for createHTTPClient
 	// so the dispatch sees the lowercase scheme without a second env read. We
@@ -547,10 +547,38 @@ func applyPlainTransport(transport *http.Transport, _ *ClientConfig, _ string) {
 	transport.ForceAttemptHTTP2 = false
 }
 
+// upgradeTCPToHTTPSIfTLSMaterial mirrors the docker CLI's silent scheme
+// upgrade: when the resolved host uses the plain tcp:// scheme AND TLS
+// material is configured (DOCKER_CERT_PATH env or the equivalent
+// ClientConfig.TLSCertPath override), the scheme is rewritten to https://
+// before being handed to client.WithHost. Without this rewrite, the SDK
+// keeps a tcp:// URL while the custom transport carries TLS material that
+// http.Transport never triggers (it only switches to TLS for https://
+// URLs), so the cert material wired by applyDockerTLS is silently unused.
+// Closes the docker-CLI parity gap from
+// https://github.com/netresearch/ofelia/issues/634.
+//
+// All other schemes (tcp+tls://, https://, unix://, http://, npipe://) pass
+// through unchanged: they either already TLS-correctly route through
+// applyTLSTransport, are explicitly plaintext by the operator's choice, or
+// have no TLS implication.
+func upgradeTCPToHTTPSIfTLSMaterial(host string, cfg *ClientConfig) string {
+	const tcpPrefix = schemeTCP + "://"
+	if !strings.HasPrefix(host, tcpPrefix) {
+		return host
+	}
+	if !hasTLSMaterial(cfg) {
+		return host
+	}
+	return schemeHTTPS + "://" + strings.TrimPrefix(host, tcpPrefix)
+}
+
 // hasTLSMaterial reports whether the explicit ClientConfig fields or the
 // DOCKER_CERT_PATH env var would cause resolveTLSConfig to produce a non-nil
-// *tls.Config. Used by NewClientWithConfig's tcp+tls:// fail-closed gate
-// (#627) to short-circuit before resolveTLSConfig is even invoked.
+// *tls.Config. Used by upgradeTCPToHTTPSIfTLSMaterial to decide whether to
+// rewrite the tcp:// scheme to https:// (docker-CLI parity, #634), and
+// consulted by NewClientWithConfig's tcp+tls:// fail-closed gate (#627) to
+// short-circuit before resolveTLSConfig is even invoked.
 func hasTLSMaterial(config *ClientConfig) bool {
 	if config != nil && config.TLSCertPath != "" {
 		return true

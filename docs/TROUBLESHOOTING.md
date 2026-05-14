@@ -262,7 +262,7 @@ See [#609](https://github.com/netresearch/ofelia/issues/609).
 | Scheme | Use case | Transport |
 | --- | --- | --- |
 | `unix://` | Default on Linux/macOS | Unix domain socket, HTTP/1.1 |
-| `tcp://` | Plain TCP to a remote daemon (no TLS — for TLS over TCP use `tcp+tls://` or `https://`) | TCP, HTTP/1.1 |
+| `tcp://` | Plain TCP to a remote daemon (auto-upgrades to `https://` end-to-end when `DOCKER_CERT_PATH` is set, mirroring the docker CLI — see [#634](https://github.com/netresearch/ofelia/issues/634)) | TCP, HTTP/1.1 (TLS + HTTP/2 via ALPN when upgraded) |
 | `tcp+tls://` | Explicit TLS over TCP (requires `DOCKER_CERT_PATH` / `DOCKER_TLS_VERIFY`) | TLS, HTTP/2 via ALPN |
 | `http://` | Plain HTTP to a remote daemon | TCP, HTTP/1.1 |
 | `https://` | HTTPS to a remote daemon | TLS, HTTP/2 via ALPN |
