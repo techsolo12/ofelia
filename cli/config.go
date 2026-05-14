@@ -113,14 +113,39 @@ func NewConfig(logger *slog.Logger) *Config {
 	// live-reload path: mutating Config.Global automatically refreshes what
 	// c.WebhookConfigs.Global / WebhookManager.globalConfig dereference.
 	//
-	// NOTE: the Docker label sync path runs against a scratch parsed Config
-	// without this alias and merges back into c via mergeWebhookConfigs /
-	// syncWebhookConfigs, which only forward a subset of the global webhook
-	// fields. Label-sourced changes to webhook-allowed-hosts and
-	// webhook-preset-cache-ttl therefore still need a follow-up — see the
-	// PR #637 description.
+	// NOTE: the Docker label sync path builds a scratch parsed Config via
+	// newScratchConfig, which mirrors this same alias so mapstructure-decoded
+	// label values land in the live WebhookConfigs.Global store too (#641).
+	// Label-sourced changes to SSRF-sensitive fields (webhook-allowed-hosts,
+	// webhook-preset-cache-ttl, ...) are still gated upstream by the
+	// allow-list filter in splitContainersLabelsIntoJobMapsByType / by
+	// mergeWebhookConfigs — see PR #637.
 	c.WebhookConfigs.Global = &c.Global.WebhookGlobalConfig
 	return c
+}
+
+// newScratchConfig builds a transient Config used by the Docker label sync
+// path. It carries the live config's logger and Global settings (so gating
+// flags like AllowHostJobsFromLabels keep applying) and re-establishes the
+// same WebhookConfigs.Global pointer alias that NewConfig sets up for the
+// live Config — without this, mapstructure decoding into Global.WebhookGlobalConfig
+// from container labels would never reach WebhookConfigs.Global, silently
+// dropping any future label-forwarded fields (#641, prerequisite for #640).
+//
+// The scratch instance intentionally allocates fresh job maps via the
+// zero-value Config: dockerContainersUpdate / mergeJobsFromDockerContainers
+// merge those back into the live config under c.mu.
+func newScratchConfig(c *Config) *Config {
+	scratch := &Config{
+		logger:         c.logger,
+		Global:         c.Global, // value-copy: scratch mutations do not bleed into c
+		WebhookConfigs: NewWebhookConfigs(),
+	}
+	// Mirror the NewConfig invariant so decodeWithMetadata writes into the
+	// embedded WebhookGlobalConfig become visible to the webhook subsystem
+	// (which always reads through WebhookConfigs.Global).
+	scratch.WebhookConfigs.Global = &scratch.Global.WebhookGlobalConfig
+	return scratch
 }
 
 // resolveConfigFiles returns files matching the given pattern. If no file
@@ -402,11 +427,7 @@ func (c *Config) mergeJobsFromDockerContainers() {
 	if err != nil {
 		return
 	}
-	parsed := Config{
-		logger:         c.logger,
-		Global:         c.Global, // Copy Global settings including AllowHostJobsFromLabels
-		WebhookConfigs: NewWebhookConfigs(),
-	}
+	parsed := newScratchConfig(c)
 	_ = parsed.buildFromDockerContainers(dockerContainers)
 
 	mergeJobs(c, c.ExecJobs, parsed.ExecJobs, "exec")
@@ -716,11 +737,7 @@ func addNewJob[J jobConfig](c *Config, name string, j J, prep func(string, J), s
 func (c *Config) dockerContainersUpdate(containers []DockerContainerInfo) {
 	c.logger.Debug("dockerContainersUpdate started")
 
-	parsedLabelConfig := Config{
-		logger:         c.logger,
-		Global:         c.Global, // Copy Global settings including AllowHostJobsFromLabels
-		WebhookConfigs: NewWebhookConfigs(),
-	}
+	parsedLabelConfig := newScratchConfig(c)
 	_ = parsedLabelConfig.buildFromDockerContainers(containers)
 
 	execPrep := func(name string, j *ExecJobConfig) {
@@ -795,8 +812,8 @@ func (c *Config) dockerContainersUpdate(containers []DockerContainerInfo) {
 
 	// Handle deprecated configuration options in parsed labels: migrate then warn
 	ResetDeprecationWarnings()
-	ApplyDeprecationMigrations(&parsedLabelConfig)
-	CheckDeprecations(&parsedLabelConfig)
+	ApplyDeprecationMigrations(parsedLabelConfig)
+	CheckDeprecations(parsedLabelConfig)
 }
 
 func (c *Config) iniConfigUpdate() error {
