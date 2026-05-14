@@ -264,9 +264,37 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 	// reads the env var at most once per call and returns a non-empty,
 	// lowercase-scheme URL ready for both the SDK option and the HTTP
 	// transport, so neither downstream caller has to re-derive it.
-	normalizedHost, _, err := resolveDockerHost(config)
+	normalizedHost, scheme, err := resolveDockerHost(config)
 	if err != nil {
 		return nil, fmt.Errorf("creating docker client: %w", err)
+	}
+
+	// Fail-closed for tcp+tls:// without USABLE TLS material. tcp+tls:// is
+	// an EXPLICIT TLS opt-in (versus tcp:// which is ambiguous and may rely
+	// on stdlib defaults). Without DOCKER_CERT_PATH (or the
+	// ClientConfig.TLSCertPath override), resolveTLSConfig would return
+	// (nil, nil) and the SDK would silently dial TLS against the system CA
+	// pool with no client cert — operators believing they have mTLS would
+	// be getting unauthenticated connections. See
+	// https://github.com/netresearch/ofelia/issues/627.
+	//
+	// We invoke resolveTLSConfig (not just hasTLSMaterial) so a typo or
+	// missing cert files at the path also fails closed at startup instead
+	// of silently downgrading at dial time — the case the security review
+	// of #646 flagged as bypassable.
+	if scheme == schemeTCPTLS {
+		if !hasTLSMaterial(config) {
+			return nil, fmt.Errorf(
+				"%w: set DOCKER_CERT_PATH (or ClientConfig.TLSCertPath); see docs/TROUBLESHOOTING.md",
+				ErrTCPTLSRequiresCertMaterial,
+			)
+		}
+		if _, tlsErr := resolveTLSConfig(config); tlsErr != nil {
+			return nil, fmt.Errorf(
+				"%w: cert material at the configured path is unreadable or invalid; see docs/TROUBLESHOOTING.md: %w",
+				ErrTCPTLSRequiresCertMaterial, tlsErr,
+			)
+		}
 	}
 
 	// Build a local copy of config with the normalized host for createHTTPClient
@@ -521,19 +549,8 @@ func applyPlainTransport(transport *http.Transport, _ *ClientConfig, _ string) {
 
 // hasTLSMaterial reports whether the explicit ClientConfig fields or the
 // DOCKER_CERT_PATH env var would cause resolveTLSConfig to produce a non-nil
-// *tls.Config. It is a cheap precondition check used by sibling PRs that
-// want to gate behavior on TLS material being present.
-//
-// PR #628 removed the only HEAD-tree call to this helper (the dead
-// applyDockerTLS branch in applyTCPTransport). Sibling PRs in flight that
-// depend on this helper:
-//   - #646 (fix/issue-627): fail-closed gate on tcp+tls:// without cert material
-//   - #647 (fix/issue-634): rewrite tcp:// → https:// when TLS material is set
-//
-// Keeping it exported-internal here avoids a build break when those PRs
-// rebase onto #628. Remove the //nolint once either sibling lands.
-//
-//nolint:unused // referenced by sibling PRs #646 and #647 (in flight)
+// *tls.Config. Used by NewClientWithConfig's tcp+tls:// fail-closed gate
+// (#627) to short-circuit before resolveTLSConfig is even invoked.
 func hasTLSMaterial(config *ClientConfig) bool {
 	if config != nil && config.TLSCertPath != "" {
 		return true
