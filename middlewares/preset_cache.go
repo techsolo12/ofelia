@@ -39,14 +39,30 @@ type cacheMetadata struct {
 	Version   string    `yaml:"version,omitempty"`
 }
 
-// NewPresetCache creates a new preset cache
+// NewPresetCache creates a new preset cache.
+//
+// When cacheDir is empty, the default location is the per-user cache dir
+// (os.UserCacheDir — typically $XDG_CACHE_HOME/ofelia/presets on Linux,
+// ~/Library/Caches/ofelia/presets on macOS). Falling back to a per-user
+// location avoids the predictable /tmp/ofelia path that gosec G302 /
+// SonarCloud go:S5445 flag as a symlink/pre-create attack vector on
+// multi-tenant hosts. If the user cache dir is unavailable (no $HOME),
+// we fall back to os.TempDir with restrictive perms.
 func NewPresetCache(cacheDir string, ttl time.Duration) *PresetCache {
 	if cacheDir == "" {
-		cacheDir = filepath.Join(os.TempDir(), "ofelia", "presets")
+		if userCache, err := os.UserCacheDir(); err == nil {
+			cacheDir = filepath.Join(userCache, "ofelia", "presets")
+		} else {
+			// Last-resort fallback when the user cache dir is unavailable.
+			// 0o700 perms on the parent (created below) limit exposure on
+			// multi-user hosts.
+			cacheDir = filepath.Join(os.TempDir(), "ofelia", "presets")
+		}
 	}
 
-	// Ensure cache directory exists
-	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
+	// Ensure cache directory exists. 0o700 keeps the cache visible only to
+	// the running user; cached payloads are written 0o600 (see putToDisk).
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to create preset cache directory: %v\n", err)
 	}
 
