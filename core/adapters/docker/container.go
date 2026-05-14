@@ -450,10 +450,14 @@ func convertToPortMap(pm domain.PortMap) nat.PortMap {
 	return result
 }
 
-// convertToMount converts a domain Mount to the SDK's mount.Mount. Returns
-// the zero value mount.Mount{} when m is nil. Production callers iterate
-// over a slice (where elements are never nil), but the guard prevents a
-// future direct-caller from panicking.
+// convertToMount converts a domain.Mount to a Docker SDK mount.Mount.
+// Returns the zero mount.Mount (no panic) when m is nil — defense-in-depth
+// for an unsafe signature contract. Production callers pass `&loopVar` from
+// a `range` over a slice so m is never nil today, but the helper signature
+// invites unsafe direct calls and every other convertTo* helper in this file
+// (convertToHostConfig, convertToNetworkingConfig, convertToEndpointSettings,
+// convertToContainerConfig) already nil-guards its argument — only this one
+// was asymmetric. Mirrors PR #648 / #626. See #654.
 func convertToMount(m *domain.Mount) mount.Mount {
 	if m == nil {
 		return mount.Mount{}
