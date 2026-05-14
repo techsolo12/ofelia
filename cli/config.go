@@ -468,6 +468,24 @@ func (c *Config) mergeJobsFromDockerContainers() {
 
 	// Merge webhook configs from labels (INI takes precedence)
 	mergeWebhookConfigs(c, parsed.WebhookConfigs)
+
+	// Forward every other allow-listed global key (Slack, Mail, Save,
+	// log-level, max-runtime, notification-cooldown, enable-strict-validation)
+	// from the label-decoded scratch into the live c.Global. Boot path runs
+	// before registerAllJobs, so subsequent mergeNotificationDefaults() calls
+	// will inherit fresh values for every job. See #652 (sibling fix to #650).
+	//
+	// Snapshot LogLevel + NotificationCooldown BEFORE the merge: the daemon
+	// already called ApplyLogLevel and the upcoming InitializeApp body called
+	// initNotificationDedup with the INI-only values. If a label sets either,
+	// we must re-run the corresponding side effect here so the daemon doesn't
+	// silently ignore label-supplied values for the entire process — same
+	// shape as the headline #652 regression but for the process-wide knobs
+	// rather than per-job middleware fields.
+	prevLogLevel := c.Global.LogLevel
+	prevCooldown := c.Global.NotificationCooldown
+	_ = c.applyAllowListedGlobals(parsed)
+	c.refreshRuntimeKnobsAfterGlobalMerge(prevLogLevel, prevCooldown)
 }
 
 // mergeJobs copies jobs from src into dst while respecting INI precedence.
@@ -838,6 +856,29 @@ func (c *Config) dockerContainersUpdate(containers []DockerContainerInfo) {
 	}
 
 	c.mu.Lock()
+	// Forward allow-listed non-webhook globals (Slack, Mail, Save,
+	// log-level, max-runtime, notification-cooldown, enable-strict-validation)
+	// BEFORE syncJobMap so the prep closures above — which call
+	// mergeNotificationDefaults / read c.Global.MaxRuntime — naturally pick
+	// up fresh label values for any new or changed job. See #652.
+	//
+	// LIMITATION (documented in cli/config_global_merge.go header): jobs
+	// whose own labels did not change in this reconcile pass (hash-equal in
+	// replaceIfChanged) keep their previously-inherited per-job middleware
+	// values until the next per-job change or daemon restart. Matches the
+	// existing INI live-reload behavior. See #652 follow-up scope.
+	prevLogLevel := c.Global.LogLevel
+	prevCooldown := c.Global.NotificationCooldown
+	_ = c.applyAllowListedGlobals(parsedLabelConfig)
+	// Re-apply process-wide knobs (log level, notification deduplicator)
+	// BEFORE syncJobMap so prep closures (which inject the dedup pointer
+	// into per-job middlewares via c.injectDedup) see the freshly-rebuilt
+	// dedup state. Otherwise a label changing notification-cooldown 0 → >0
+	// rebuilds the dedup AFTER the prep closure had already snapshotted
+	// the stale dedup pointer for the new job — Copilot review of #661.
+	// Held under c.mu to mirror the INI live-reload path; ApplyLogLevel
+	// and initNotificationDedup do not re-enter c.mu. No deadlock risk.
+	c.refreshRuntimeKnobsAfterGlobalMerge(prevLogLevel, prevCooldown)
 	syncJobMap(c, c.ExecJobs, parsedLabelConfig.ExecJobs, execPrep, JobSourceLabel, "exec")
 	syncJobMap(c, c.RunJobs, parsedLabelConfig.RunJobs, runPrep, JobSourceLabel, "run")
 	syncJobMap(c, c.LocalJobs, parsedLabelConfig.LocalJobs, localPrep, JobSourceLabel, "local")
