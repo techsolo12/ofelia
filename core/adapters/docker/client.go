@@ -287,6 +287,21 @@ func NewClientWithConfig(config *ClientConfig) (*Client, error) {
 		}
 	}
 
+	// Fail-closed for https:// when TLS material IS configured but unloadable.
+	// Asymmetry vs tcp+tls://: https:// without ANY material is fine (operator
+	// uses system CA), so we only gate when hasTLSMaterial reports true.
+	// Without this gate, applyDockerTLS warns-and-continues with TLSClientConfig
+	// nil and the SDK dials with Go default TLS — system CA, no client cert —
+	// silently downgrading declared mTLS to unauthenticated TLS. See #653.
+	if scheme == schemeHTTPS && hasTLSMaterial(config) {
+		if _, tlsErr := resolveTLSConfig(config); tlsErr != nil {
+			return nil, fmt.Errorf(
+				"%w: cert material at the configured path is unreadable or invalid; see docs/TROUBLESHOOTING.md: %w",
+				ErrHTTPSRequiresUsableCertMaterial, tlsErr,
+			)
+		}
+	}
+
 	// Mirror the docker CLI: when the host scheme is plain tcp:// AND TLS
 	// material is configured, rewrite tcp:// to https:// so the SDK and
 	// HTTP transport agree. Without this, Go's http.Transport only triggers

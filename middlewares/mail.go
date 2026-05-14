@@ -7,16 +7,133 @@ import (
 	"bytes"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	mail "github.com/go-mail/mail/v2"
 
 	"github.com/netresearch/ofelia/core"
 )
+
+// SMTPTLSPolicy controls the STARTTLS posture of the outbound SMTP dialer.
+// It maps 1:1 onto go-mail's StartTLSPolicy enum and is exposed as a string
+// in the INI config (`smtp-tls-policy`) so operators don't have to know the
+// upstream library's integer values.
+//
+// Default (empty string) resolves to MandatoryStartTLS — the upstream
+// library's own recommendation for any modern SMTP server. The previous
+// behavior (OpportunisticStartTLS) silently sent credentials and message
+// body in cleartext when the server did not advertise STARTTLS, even when
+// `smtp-tls-skip-verify` was off, which violated the operator's intent.
+// See https://github.com/netresearch/ofelia/issues/653.
+type SMTPTLSPolicy string
+
+// SMTPTLSPolicy constants. The empty string is also accepted (and treated
+// as `mandatory`) so operators upgrading do not have to touch their config.
+const (
+	// SMTPTLSPolicyMandatory requires STARTTLS; the dialer aborts with an
+	// error if the server does not advertise it. This is the default.
+	SMTPTLSPolicyMandatory SMTPTLSPolicy = "mandatory"
+
+	// SMTPTLSPolicyOpportunistic tries STARTTLS when offered but silently
+	// falls back to plaintext if it is not. This is the upstream
+	// go-mail/mail/v2 default and the previous Ofelia behavior. Use only
+	// when sending to a legacy server that cannot offer STARTTLS but the
+	// network path is otherwise trusted (e.g. localhost-only relay).
+	SMTPTLSPolicyOpportunistic SMTPTLSPolicy = "opportunistic"
+
+	// SMTPTLSPolicyNone disables STARTTLS entirely; messages and credentials
+	// are sent in cleartext. Required for some test fixtures (MailHog,
+	// emersion/go-smtp without TLS) and intentionally insecure.
+	SMTPTLSPolicyNone SMTPTLSPolicy = "none"
+)
+
+// ErrInvalidSMTPTLSPolicy is the sentinel returned by Validate when an
+// unknown `smtp-tls-policy` value is encountered. Production callers that
+// want a hard-fail on misconfiguration (rather than the soft-fail-with-warn
+// of resolveSMTPTLSPolicy) can branch on this via errors.Is.
+//
+// resolveSMTPTLSPolicy intentionally does NOT return an error — it
+// normalizes unknown values to the safe default (mandatory) and emits an
+// slog.Warn so a typo cannot weaken transport security at runtime.
+var ErrInvalidSMTPTLSPolicy = errors.New("invalid smtp-tls-policy")
+
+// Valid reports whether p is one of the documented values (or empty,
+// meaning "use default"). Unknown values are rejected so config validation
+// surfaces operator typos that would otherwise be silently normalized.
+func (p SMTPTLSPolicy) Valid() bool {
+	switch p {
+	case "", SMTPTLSPolicyMandatory, SMTPTLSPolicyOpportunistic, SMTPTLSPolicyNone:
+		return true
+	default:
+		return false
+	}
+}
+
+// Validate returns ErrInvalidSMTPTLSPolicy (wrapped with the offending
+// value for diagnostics) when p is not one of the documented values.
+// Returns nil for the empty string (treated as "mandatory") and the three
+// documented constants. Callers that want a hard-fail on misconfiguration
+// at config-load time should use this; callers that should never break
+// existing deployments on a typo should use resolveSMTPTLSPolicy instead.
+func (p SMTPTLSPolicy) Validate() error {
+	if p.Valid() {
+		return nil
+	}
+	return fmt.Errorf("%w: %q (expected mandatory, opportunistic, or none)", ErrInvalidSMTPTLSPolicy, string(p))
+}
+
+// loggedInvalidSMTPTLSPolicy is the one-shot gate for the unknown-policy
+// warning. resolveSMTPTLSPolicy is invoked on every sendMail; without this
+// gate a single typo would emit a warning per delivery (gemini noted this
+// in PR #660 review). The gate keys on the unknown value so different
+// typos still surface independently.
+var loggedInvalidSMTPTLSPolicy sync.Map // map[SMTPTLSPolicy]struct{}
+
+// resolveSMTPTLSPolicy maps the INI-string policy onto go-mail's
+// StartTLSPolicy enum. Unknown / invalid input deliberately falls through
+// to MandatoryStartTLS (the safe default) and emits an slog.Warn (one-shot
+// per unknown value) so a typo cannot silently weaken transport security.
+func resolveSMTPTLSPolicy(p SMTPTLSPolicy) SMTPTLSPolicy {
+	switch p {
+	case "", SMTPTLSPolicyMandatory:
+		return SMTPTLSPolicyMandatory
+	case SMTPTLSPolicyOpportunistic, SMTPTLSPolicyNone:
+		return p
+	default:
+		if _, loaded := loggedInvalidSMTPTLSPolicy.LoadOrStore(p, struct{}{}); !loaded {
+			slog.Default().Warn(
+				"unknown smtp-tls-policy value; falling back to mandatory STARTTLS",
+				"value", string(p),
+				"hint", "valid values: mandatory (default), opportunistic, none",
+			)
+		}
+		return SMTPTLSPolicyMandatory
+	}
+}
+
+// dialerStartTLSPolicy translates the resolved (already-validated) Ofelia
+// policy into go-mail's StartTLSPolicy iota. Kept private so callers go
+// through resolveSMTPTLSPolicy first.
+func dialerStartTLSPolicy(p SMTPTLSPolicy) mail.StartTLSPolicy {
+	switch p {
+	case SMTPTLSPolicyMandatory, "":
+		return mail.MandatoryStartTLS
+	case SMTPTLSPolicyOpportunistic:
+		return mail.OpportunisticStartTLS
+	case SMTPTLSPolicyNone:
+		return mail.NoStartTLS
+	default:
+		// Anything resolveSMTPTLSPolicy might miss → safe default.
+		return mail.MandatoryStartTLS
+	}
+}
 
 // MailConfig configuration for the Mail middleware
 type MailConfig struct {
@@ -25,10 +142,14 @@ type MailConfig struct {
 	SMTPUser          string `gcfg:"smtp-user" mapstructure:"smtp-user" json:"-"`
 	SMTPPassword      string `gcfg:"smtp-password" mapstructure:"smtp-password" json:"-"`
 	SMTPTLSSkipVerify bool   `gcfg:"smtp-tls-skip-verify" mapstructure:"smtp-tls-skip-verify"`
-	EmailTo           string `gcfg:"email-to" mapstructure:"email-to"`
-	EmailFrom         string `gcfg:"email-from" mapstructure:"email-from"`
-	EmailSubject      string `gcfg:"email-subject" mapstructure:"email-subject"`
-	MailOnlyOnError   *bool  `gcfg:"mail-only-on-error" mapstructure:"mail-only-on-error"`
+	// SMTPTLSPolicy controls STARTTLS behavior. See SMTPTLSPolicy for valid
+	// values and the security rationale for the mandatory-by-default change.
+	// Empty string is treated as "mandatory".
+	SMTPTLSPolicy   SMTPTLSPolicy `gcfg:"smtp-tls-policy" mapstructure:"smtp-tls-policy"`
+	EmailTo         string        `gcfg:"email-to" mapstructure:"email-to"`
+	EmailFrom       string        `gcfg:"email-from" mapstructure:"email-from"`
+	EmailSubject    string        `gcfg:"email-subject" mapstructure:"email-subject"`
+	MailOnlyOnError *bool         `gcfg:"mail-only-on-error" mapstructure:"mail-only-on-error"`
 	// Dedup is the notification deduplicator (set by config loader, not INI)
 	Dedup *NotificationDedup `mapstructure:"-" json:"-"`
 
@@ -129,6 +250,12 @@ func (m *Mail) sendMail(ctx *core.Context) error {
 	}))
 
 	d := mail.NewDialer(m.SMTPHost, m.SMTPPort, m.SMTPUser, m.SMTPPassword)
+	// Default to MandatoryStartTLS to close the silent-cleartext-fallback
+	// vector tracked in #653. Operators can opt back into the legacy
+	// behavior with smtp-tls-policy = opportunistic (or = none for plain
+	// SMTP test fixtures). resolveSMTPTLSPolicy normalizes unknown values
+	// to mandatory and warns once via slog.
+	d.StartTLSPolicy = dialerStartTLSPolicy(resolveSMTPTLSPolicy(m.SMTPTLSPolicy))
 	// When TLSConfig.InsecureSkipVerify is true, mail server certificate authority is not validated
 	if m.SMTPTLSSkipVerify {
 		// #nosec G402 -- Allow explicit opt-in for development/legacy servers via config.

@@ -601,6 +601,14 @@ func (c *Config) mergeMailDefaults(job *middlewares.MailConfig) {
 	if global.SMTPTLSSkipVerify && !job.SMTPTLSSkipVerify {
 		job.SMTPTLSSkipVerify = global.SMTPTLSSkipVerify
 	}
+	// SMTPTLSPolicy inherits when the job didn't explicitly set it. The
+	// empty string is the documented "use default (mandatory)" sentinel,
+	// so this preserves operator intent: a job that omits the key inherits
+	// from [global], a job that explicitly sets it (including to "none"
+	// for a test fixture) keeps that value. See #653.
+	if job.SMTPTLSPolicy == "" {
+		job.SMTPTLSPolicy = global.SMTPTLSPolicy
+	}
 	if job.EmailTo == "" {
 		job.EmailTo = global.EmailTo
 	}

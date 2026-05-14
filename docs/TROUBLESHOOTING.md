@@ -1273,6 +1273,65 @@ smtp-password = ${SMTP_PASSWORD}
 smtp-tls-skip-verify = true
 ```
 
+### SMTP STARTTLS posture (`smtp-tls-policy`)
+
+**Symptoms**:
+```
+Error: Mail error: STARTTLS is required, but the server doesn't support it
+Error: Mail error: 502 5.5.1 STARTTLS not advertised
+```
+or — if you upgraded from an Ofelia version older than the `smtp-tls-policy` introduction —
+mail used to send fine and now fails with one of the messages above.
+
+**What changed**: The default STARTTLS posture is now `mandatory` (was `opportunistic`).
+The previous default would silently send credentials and message body in cleartext when
+the server did not advertise STARTTLS, which violated the operator's intent. Tracked in
+[#653](https://github.com/netresearch/ofelia/issues/653).
+
+**Valid `smtp-tls-policy` values**:
+
+- `mandatory` (default) — Require STARTTLS; the dialer aborts with an error if the
+  server does not advertise it. This is the upstream go-mail recommendation for any
+  modern SMTP server (Gmail, SendGrid, Mailgun, AWS SES, Office 365, Postfix on
+  port 587).
+- `opportunistic` — Try STARTTLS when offered; silently fall back to plaintext
+  otherwise. Use **only** when the network path is fully trusted (loopback / sidecar
+  relay) and the upstream cannot offer STARTTLS.
+- `none` — Disable STARTTLS entirely; messages and credentials are sent in
+  cleartext. Required for some test fixtures (MailHog, `emersion/go-smtp` without
+  TLS). Intentionally insecure — never set in production.
+
+**Migration recipes**:
+
+```ini
+# Modern relay (Gmail / SendGrid / Mailgun / Postfix on 587):
+[global]
+smtp-host = smtp.gmail.com
+smtp-port = 587
+# smtp-tls-policy = mandatory  # default; can omit
+```
+
+```ini
+# Localhost MTA sidecar that doesn't speak STARTTLS but is on a trusted
+# loopback path:
+[global]
+smtp-host = 127.0.0.1
+smtp-port = 25
+smtp-tls-policy = opportunistic
+```
+
+```ini
+# Test environment using MailHog or an in-cluster fake SMTP without TLS:
+[global]
+smtp-host = mailhog.test.svc
+smtp-port = 1025
+smtp-tls-policy = none
+```
+
+An unknown value (typo such as `smtp-tls-policy = required`) is normalized to
+`mandatory` at runtime and a `WARN`-level log line is emitted. We refuse to
+silently weaken transport security based on a typo.
+
 ### Slack Notifications Not Working
 
 **Symptoms**:

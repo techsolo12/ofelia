@@ -83,10 +83,11 @@ func TestMailRunSuccess(t *testing.T) {
 	f.ctx.Stop(nil)
 
 	m := NewMail(&MailConfig{
-		SMTPHost:  f.smtpdHost,
-		SMTPPort:  f.smtpdPort,
-		EmailTo:   "foo@foo.com",
-		EmailFrom: "qux@qux.com",
+		SMTPHost:      f.smtpdHost,
+		SMTPPort:      f.smtpdPort,
+		EmailTo:       "foo@foo.com",
+		EmailFrom:     "qux@qux.com",
+		SMTPTLSPolicy: SMTPTLSPolicyNone, // test fixture: plaintext SMTP, see #653
 	})
 
 	done := make(chan struct{})
@@ -118,10 +119,11 @@ func TestMailRunWithEmptyStreams(t *testing.T) {
 	assert.Equal(t, int64(0), f.ctx.Execution.ErrorStream.TotalWritten())
 
 	m := NewMail(&MailConfig{
-		SMTPHost:  f.smtpdHost,
-		SMTPPort:  f.smtpdPort,
-		EmailTo:   "foo@foo.com",
-		EmailFrom: "qux@qux.com",
+		SMTPHost:      f.smtpdHost,
+		SMTPPort:      f.smtpdPort,
+		EmailTo:       "foo@foo.com",
+		EmailFrom:     "qux@qux.com",
+		SMTPTLSPolicy: SMTPTLSPolicyNone, // test fixture: plaintext SMTP, see #653
 	})
 
 	done := make(chan struct{})
@@ -167,10 +169,11 @@ func TestMailRunWithNonEmptyStreams(t *testing.T) {
 	assert.Positive(t, f.ctx.Execution.ErrorStream.TotalWritten())
 
 	m := NewMail(&MailConfig{
-		SMTPHost:  f.smtpdHost,
-		SMTPPort:  f.smtpdPort,
-		EmailTo:   "foo@foo.com",
-		EmailFrom: "qux@qux.com",
+		SMTPHost:      f.smtpdHost,
+		SMTPPort:      f.smtpdPort,
+		EmailTo:       "foo@foo.com",
+		EmailFrom:     "qux@qux.com",
+		SMTPTLSPolicy: SMTPTLSPolicyNone, // test fixture: plaintext SMTP, see #653
 	})
 
 	done := make(chan struct{})
@@ -244,11 +247,12 @@ func TestMailCustomEmailSubject(t *testing.T) {
 	f.ctx.Stop(nil)
 
 	m := NewMail(&MailConfig{
-		SMTPHost:     f.smtpdHost,
-		SMTPPort:     f.smtpdPort,
-		EmailTo:      "foo@foo.com",
-		EmailFrom:    "qux@qux.com",
-		EmailSubject: "[CUSTOM] Job {{.Job.GetName}} - {{status .Execution}}",
+		SMTPHost:      f.smtpdHost,
+		SMTPPort:      f.smtpdPort,
+		EmailTo:       "foo@foo.com",
+		EmailFrom:     "qux@qux.com",
+		EmailSubject:  "[CUSTOM] Job {{.Job.GetName}} - {{status .Execution}}",
+		SMTPTLSPolicy: SMTPTLSPolicyNone, // test fixture: plaintext SMTP, see #653
 	})
 
 	done := make(chan struct{})
@@ -292,10 +296,11 @@ func TestMailDefaultEmailSubject(t *testing.T) {
 	f.ctx.Stop(nil)
 
 	m := NewMail(&MailConfig{
-		SMTPHost:  f.smtpdHost,
-		SMTPPort:  f.smtpdPort,
-		EmailTo:   "foo@foo.com",
-		EmailFrom: "qux@qux.com",
+		SMTPHost:      f.smtpdHost,
+		SMTPPort:      f.smtpdPort,
+		EmailTo:       "foo@foo.com",
+		EmailFrom:     "qux@qux.com",
+		SMTPTLSPolicy: SMTPTLSPolicyNone, // test fixture: plaintext SMTP, see #653
 	})
 
 	done := make(chan struct{})
@@ -358,6 +363,7 @@ func TestMailOnlyOnError_NoSendOnSuccess(t *testing.T) {
 		EmailTo:         "foo@foo.com",
 		EmailFrom:       "qux@qux.com",
 		MailOnlyOnError: &onlyOnError,
+		SMTPTLSPolicy:   SMTPTLSPolicyNone, // test fixture: plaintext SMTP, see #653
 	})
 
 	done := make(chan struct{})
