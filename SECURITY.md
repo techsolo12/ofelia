@@ -127,7 +127,7 @@ The `Pinned-Dependencies` check flags references to reusable workflows that are 
 uses: netresearch/.github/.github/workflows/<workflow>.yml@main
 ```
 
-**Third-party actions** (anything outside the `netresearch/` GitHub organisation) MUST still be pinned by full commit SHA — this is enforced by code review and Renovate configuration. The trivy-action supply-chain incident of 2026 reinforced this rule.
+**Third-party actions** (anything outside the `netresearch/` GitHub organisation) MUST still be pinned by full commit SHA — this is enforced by code review and by the Dependabot configuration (`.github/dependabot.yml`), which auto-bumps every SHA-pinned third-party action in the `github-actions` ecosystem on a weekly schedule. The trivy-action supply-chain incident of 2026 reinforced this rule.
 
 **Rationale for `@main` on first-party workflows:**
 
