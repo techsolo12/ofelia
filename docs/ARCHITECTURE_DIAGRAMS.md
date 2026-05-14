@@ -179,19 +179,21 @@ graph TB
     end
     
     subgraph "Monitoring Mode"
-        Poll[Polling<br/>default: 10s]
-        EventMode[Event-based<br/>--docker-events]
+        EventMode[Event-based<br/>default: --docker-events=true CLI flag]
+        Poll[Polling<br/>opt-in: --docker-poll-interval CLI flag<br/>or docker-poll-interval INI key]
+        Fallback[Polling fallback<br/>polling-fallback INI key, default 10s if events fail]
     end
     
     INI --> Sched
     Labels --> Parser
     
-    Monitor -->|Poll or Events| API
+    Monitor -->|Events or Poll| API
     API -->|Container List| Parser
     Parser -->|Job Definitions| Sched
     
-    Poll -.->|--docker-poll-interval| Monitor
     EventMode -.->|--docker-events| Monitor
+    Poll -.->|--docker-poll-interval| Monitor
+    Fallback -.->|polling-fallback INI| Monitor
     
     Sched -->|Schedule Jobs| Jobs
     

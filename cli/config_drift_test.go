@@ -47,28 +47,44 @@ func TestConfigGlobalKeysAreDocumented(t *testing.T) {
 		t.Fatal("Config.Global field not found - did the struct get renamed?")
 	}
 	globalT := globalField.Type
-	// TODO(#635): also walk non-anonymous (direct) Global fields once the
-	// undocumented direct keys (notification-cooldown, etc.) get docs.
+	// Walk both embedded middleware configs (anonymous fields) AND the direct
+	// fields declared inline on Global (LogLevel, EnableWeb, WebTrustedProxies,
+	// notification-cooldown, etc.). The direct-field walk closed the gap from
+	// #635 / #656 — every operator-tunable key on Global is now drift-checked
+	// against the docs, regardless of whether it lives on an embedded struct
+	// or directly on Global.
 	for i := range globalT.NumField() {
 		f := globalT.Field(i)
-		if !f.Anonymous {
-			continue // only walk embedded middleware configs
+		if f.Anonymous {
+			for j := range f.Type.NumField() {
+				sub := f.Type.Field(j)
+				assertDocumented(t, docs, sub, f.Type.Name())
+			}
+			continue
 		}
-		for j := range f.Type.NumField() {
-			sub := f.Type.Field(j)
-			tag := sub.Tag.Get("mapstructure")
-			if tag == "" {
-				continue
-			}
-			name := strings.SplitN(tag, ",", 2)[0]
-			if name == "" || name == "-" {
-				continue // squash on the embed itself, or explicitly ignored
-			}
-			if !strings.Contains(docs, name) {
-				t.Errorf("operator docs do not mention global key %q (from %s.%s) - drift detected",
-					name, f.Type.Name(), sub.Name)
-			}
-		}
+		assertDocumented(t, docs, f, "Config.Global")
+	}
+}
+
+// assertDocumented checks that the mapstructure tag on a struct field is
+// mentioned in the concatenated docs blob. The container name is used for the
+// error message so failures point at the originating struct (embedded
+// middleware config name, or "Global" for direct fields — note: anonymous
+// struct types report an empty Name(), in which case the message just
+// references the field name).
+func assertDocumented(t *testing.T, docs string, f reflect.StructField, container string) {
+	t.Helper()
+	tag := f.Tag.Get("mapstructure")
+	if tag == "" {
+		return
+	}
+	name := strings.SplitN(tag, ",", 2)[0]
+	if name == "" || name == "-" {
+		return // squash on the embed itself, or explicitly ignored
+	}
+	if !strings.Contains(docs, name) {
+		t.Errorf("operator docs do not mention global key %q (from %s.%s) - drift detected",
+			name, container, f.Name)
 	}
 }
 
