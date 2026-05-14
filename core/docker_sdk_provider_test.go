@@ -589,18 +589,12 @@ func TestSDKDockerProviderWaitContainerContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	containers := mockClient.Containers().(*mock.ContainerService)
-	containers.OnWait = func(ctx context.Context, containerID string) (<-chan domain.WaitResponse, <-chan error) {
-		respCh := make(chan domain.WaitResponse)
-		errCh := make(chan error, 1)
-
-		go func() {
-			<-ctx.Done()
-			errCh <- ctx.Err()
-			close(errCh)
-			close(respCh)
-		}()
-
-		return respCh, errCh
+	// Block forever: never write or close. WaitContainer's select must observe
+	// ctx.Done() as the sole ready case after cancel(). Closing the channels
+	// from a goroutine that also watches ctx.Done() makes the select race
+	// between <-ctx.Done() and <-respCh (closed), which is non-deterministic.
+	containers.OnWait = func(_ context.Context, _ string) (<-chan domain.WaitResponse, <-chan error) {
+		return make(chan domain.WaitResponse), make(chan error)
 	}
 
 	// Cancel context immediately
