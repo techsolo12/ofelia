@@ -206,7 +206,15 @@ func (s *SwarmServiceAdapter) WaitForServiceTasks(ctx context.Context, serviceID
 
 // Conversion functions
 
+// convertToSwarmSpec converts a domain ServiceSpec to the SDK's
+// swarm.ServiceSpec. Returns the zero value swarm.ServiceSpec{} when spec is
+// nil; the Docker SDK rejects the empty spec server-side, so callers get a
+// clean error rather than a panic.
 func convertToSwarmSpec(spec *domain.ServiceSpec) swarm.ServiceSpec {
+	if spec == nil {
+		return swarm.ServiceSpec{}
+	}
+
 	swarmSpec := swarm.ServiceSpec{
 		Annotations: swarm.Annotations{
 			Name:   spec.Name,
@@ -257,7 +265,15 @@ func convertToSwarmSpec(spec *domain.ServiceSpec) swarm.ServiceSpec {
 	return swarmSpec
 }
 
+// convertTaskTemplateToSwarm fills the SDK swarm.TaskSpec from the domain
+// TaskSpec. A nil src or nil dst short-circuits to a no-op so production
+// callers (which always pass non-nil pointers) keep their existing behavior
+// while test callers can pass nil without panicking.
 func convertTaskTemplateToSwarm(src *domain.TaskSpec, dst *swarm.TaskSpec) {
+	if src == nil || dst == nil {
+		return
+	}
+
 	dst.ContainerSpec = &swarm.ContainerSpec{
 		Image:     src.ContainerSpec.Image,
 		Labels:    src.ContainerSpec.Labels,
