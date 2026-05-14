@@ -5,6 +5,7 @@ package middlewares
 
 import (
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -139,13 +140,25 @@ func (v *WebhookSecurityValidator) isAllowedHost(hostname string) bool {
 }
 
 // SetGlobalSecurityConfig sets the global security configuration for webhooks
-// This should be called during initialization with the parsed configuration
+// This should be called during initialization with the parsed configuration.
+//
+// Emits a single startup-time slog.Warn when the resolved AllowedHosts
+// collapses to ["*"] (whether explicitly configured or by default). A typo
+// in the `webhook-allowed-hosts` INI key would otherwise yield wide-open
+// egress with no operator-visible signal that the allow-list they thought
+// they had configured is actually empty. Tracked in
+// https://github.com/netresearch/ofelia/issues/653.
+//
+// Passing nil restores the package defaults silently — used by tests and
+// reload paths that revert state. The warning is reserved for
+// operator-meaningful startup state.
 func SetGlobalSecurityConfig(config *WebhookSecurityConfig) {
 	securityMu.Lock()
 	defer securityMu.Unlock()
 
 	// Update the global validator to use the new config
 	if config != nil {
+		warnIfWideOpenEgress(config)
 		validator := NewWebhookSecurityValidator(config)
 		validateWebhookURLFunc = validator.Validate
 		transportFactoryFunc = func() *http.Transport {
@@ -155,6 +168,34 @@ func SetGlobalSecurityConfig(config *WebhookSecurityConfig) {
 		validateWebhookURLFunc = ValidateWebhookURLImpl
 		transportFactoryFunc = NewSafeTransport
 	}
+}
+
+// warnIfWideOpenEgress emits a single slog.Warn when the resolved
+// AllowedHosts admits everything (empty list or contains the "*" wildcard).
+// Mirrors the silent-downgrade pattern: operator INTENT was to restrict
+// egress; the resolved STATE is wide open. A surfaced warning at startup
+// converts a silent misconfiguration into a visible one.
+//
+// One emission per SetGlobalSecurityConfig call by design — the function
+// is the documented startup seam (called once from NewWebhookManager).
+// Per-validator construction (NewWebhookSecurityValidator) does NOT warn
+// because it is invoked per-request and would be log-spam.
+func warnIfWideOpenEgress(config *WebhookSecurityConfig) {
+	if config == nil {
+		return
+	}
+	allowAll := len(config.AllowedHosts) == 0 || slices.Contains(config.AllowedHosts, "*")
+	if !allowAll {
+		return
+	}
+	slog.Default().Warn(
+		"webhook AllowedHosts admits all hosts; webhook egress is wide open",
+		"allowed_hosts", config.AllowedHosts,
+		"hint", "set webhook-allowed-hosts in [global] to a "+
+			"comma-separated list of hostnames or wildcards "+
+			"(e.g. *.slack.com) to restrict egress",
+		"see", "https://github.com/netresearch/ofelia/issues/653",
+	)
 }
 
 // getValidateWebhookURL returns the current URL validator with thread-safe access

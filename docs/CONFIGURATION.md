@@ -301,6 +301,16 @@ smtp-password = ${SMTP_PASSWORD}  # Environment variable reference
 # the SMTP server uses a private/internal CA that cannot be trusted system-wide.
 # See docs/TROUBLESHOOTING.md for the security trade-off.
 smtp-tls-skip-verify = false
+# STARTTLS posture for the outbound SMTP dialer. Default: mandatory.
+# Valid values:
+#   mandatory     - Require STARTTLS; abort with an error if the server does not advertise it.
+#                   This is the default and prevents silent cleartext fallback.
+#   opportunistic - Use STARTTLS when offered, silently fall back to plaintext otherwise.
+#                   Use only with a fully trusted network path (e.g. localhost relay).
+#   none          - Disable STARTTLS entirely; messages and credentials sent in cleartext.
+#                   Required for some test fixtures (MailHog); intentionally insecure.
+# See docs/TROUBLESHOOTING.md for the rationale and the security trade-offs.
+smtp-tls-policy = mandatory
 
 # Output Settings
 save-folder = /var/log/ofelia

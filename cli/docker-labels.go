@@ -45,6 +45,7 @@ var globalLabelAllowList = map[string]bool{
 	"smtp-user":            true,
 	"smtp-password":        true,
 	"smtp-tls-skip-verify": true,
+	"smtp-tls-policy":      true,
 	"email-to":             true,
 	"email-from":           true,
 	"email-subject":        true,

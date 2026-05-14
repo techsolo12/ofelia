@@ -35,6 +35,26 @@ var ErrNilDockerClient = errors.New("docker adapter: nil SDK client")
 // [#627]: https://github.com/netresearch/ofelia/issues/627
 var ErrTCPTLSRequiresCertMaterial = errors.New("tcp+tls:// requires TLS material")
 
+// ErrHTTPSRequiresUsableCertMaterial is returned by NewClientWithConfig when
+// DOCKER_HOST uses the explicit-TLS scheme `https://` AND TLS material is
+// configured (DOCKER_CERT_PATH or ClientConfig.TLSCertPath) but
+// resolveTLSConfig fails to load it (typo in path, unreadable cert.pem,
+// malformed ca.pem, secrets not yet populated, broken volume mount).
+//
+// Without this gate, applyDockerTLS would emit slog.Warn and leave
+// TLSClientConfig nil; the SDK would then dial with Go's default TLS — the
+// system CA pool, NO client certificate — silently downgrading what the
+// operator declared as mTLS into an unauthenticated TLS handshake.
+//
+// Asymmetry vs ErrTCPTLSRequiresCertMaterial: tcp+tls:// REQUIRES material
+// even when nothing is set (the scheme is an explicit mTLS opt-in). https://
+// is fail-open when no material is configured (operator legitimately relies
+// on the system CA bundle); we only fail closed when material IS configured
+// but unloadable. This is the silent-downgrade vector closed by [#653].
+//
+// [#653]: https://github.com/netresearch/ofelia/issues/653
+var ErrHTTPSRequiresUsableCertMaterial = errors.New("https:// has TLS material configured but it is unreadable or invalid")
+
 // ErrNilContainerConfig is returned by ContainerServiceAdapter.Create when
 // the supplied *domain.ContainerConfig is nil. Production callers always
 // pass a non-nil config (the executor builds it eagerly), so this is

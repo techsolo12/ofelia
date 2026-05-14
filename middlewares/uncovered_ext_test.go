@@ -33,11 +33,12 @@ func TestMailRun_DedupSuppressesDuplicate(t *testing.T) {
 	f.ctx.Stop(errors.New("first error"))
 
 	m := NewMail(&MailConfig{
-		SMTPHost:  f.smtpdHost,
-		SMTPPort:  f.smtpdPort,
-		EmailTo:   "foo@foo.com",
-		EmailFrom: "qux@qux.com",
-		Dedup:     dedup,
+		SMTPHost:      f.smtpdHost,
+		SMTPPort:      f.smtpdPort,
+		EmailTo:       "foo@foo.com",
+		EmailFrom:     "qux@qux.com",
+		Dedup:         dedup,
+		SMTPTLSPolicy: SMTPTLSPolicyNone, // test fixture: plaintext SMTP, see #653
 	})
 
 	done := make(chan struct{})
