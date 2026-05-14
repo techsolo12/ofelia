@@ -75,12 +75,14 @@ No Docker required - runs commands directly on the host system.
 - **Logging middlewares** integrate with email, file saves, and legacy Slack to report
   job output and status.
 - **Dynamic Docker detection** uses Docker events by default for instant container
-  pickup (`--docker-events=true`). `--docker-poll-interval` is an opt-in fallback
-  for environments where events are unavailable; `--polling-fallback` (default
-  `10s`) auto-enables polling if the event stream fails. INI file reloads are
-  controlled by a separate `--config-poll-interval` (default `10s`). The legacy
-  unified `--docker-poll-interval` flag is deprecated — see the [split semantics
-  in Container Detection and Configuration Reloading](#container-detection-and-configuration-reloading).
+  pickup (`--docker-events=true`, the only CLI flag in this group). The other
+  three knobs are INI-only: `docker-poll-interval` (opt-in container polling for
+  environments where events are unavailable), `polling-fallback` (default `10s`
+  — auto-enables polling if the event stream fails), and `config-poll-interval`
+  (default `10s` — drives INI file reload checks). The legacy `--docker-poll-interval`
+  CLI flag is deprecated and now sets the unified `Config.Docker.PollInterval`,
+  which `ApplyDeprecationMigrations` splits into the new INI keys at parse time
+  — see the [split semantics in Container Detection and Configuration Reloading](#container-detection-and-configuration-reloading).
 - **Config validation** via the `validate` command to check your configuration
   before running.
 - **Optional pprof server** enabled with `--enable-pprof` and bound via
@@ -208,7 +210,7 @@ they override values from the config file and Docker labels.
 | --- | --- | --- |
 | `OFELIA_CONFIG` | `--config` | Path or glob pattern to the configuration file(s) |
 | `OFELIA_DOCKER_FILTER` | `--docker-filter` | Docker container filter (comma separated for multiple) |
-| `OFELIA_POLL_INTERVAL` | `--docker-poll-interval` | **Deprecated** — legacy unified poll interval. Use `--config-poll-interval` (INI reloads) and `--docker-poll-interval` (container polling, opt-in) separately. See [Container Detection and Configuration Reloading](#container-detection-and-configuration-reloading). |
+| `OFELIA_POLL_INTERVAL` | `--docker-poll-interval` | **Deprecated** — legacy unified poll interval. The CLI flag stays for backward compatibility; prefer setting `config-poll-interval` (INI reloads) and `docker-poll-interval` (container polling, opt-in) directly in the INI `[global]` section. See [Container Detection and Configuration Reloading](#container-detection-and-configuration-reloading). |
 | `OFELIA_DOCKER_EVENTS` | `--docker-events` | Use Docker events for container detection (default `true`; disable for opt-in polling) |
 | `OFELIA_DOCKER_NO_POLL` | `--docker-no-poll` | Disable polling Docker for labels |
 | `OFELIA_DOCKER_INCLUDE_STOPPED` | `--docker-include-stopped` | Include stopped containers when reading Docker labels (only for job-run) |

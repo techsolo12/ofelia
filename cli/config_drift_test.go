@@ -62,7 +62,7 @@ func TestConfigGlobalKeysAreDocumented(t *testing.T) {
 			}
 			continue
 		}
-		assertDocumented(t, docs, f, globalT.Name())
+		assertDocumented(t, docs, f, "Config.Global")
 	}
 }
 
