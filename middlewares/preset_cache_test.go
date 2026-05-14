@@ -4,8 +4,10 @@
 package middlewares
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +34,79 @@ func TestNewPresetCache_DefaultDir(t *testing.T) {
 
 	assert.NotNil(t, cache)
 	assert.NotEmpty(t, cache.cacheDir)
+}
+
+// TestNewPresetCache_DefaultDir_HardensExistingDir verifies that an
+// upgrade from a prior loose-mode (0o755) cache directory is tightened
+// to 0o700 on next ofelia start. os.MkdirAll alone does not adjust
+// perms on pre-existing entries, so we explicitly chmod when we picked
+// the path ourselves.
+//
+// We isolate the test by pointing XDG_CACHE_HOME at a t.TempDir; this
+// uses the same code path NewPresetCache takes for the default location.
+func TestNewPresetCache_DefaultDir_HardensExistingDir(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", xdg)
+
+	preExisting := filepath.Join(xdg, "ofelia", "presets")
+	require.NoError(t, os.MkdirAll(preExisting, 0o755))
+
+	cache := NewPresetCache("", time.Hour)
+
+	require.NotNil(t, cache)
+	require.Equal(t, preExisting, cache.cacheDir)
+
+	info, err := os.Stat(preExisting)
+	require.NoError(t, err)
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("expected default cache dir to be tightened to 0o700, got %#o", perm)
+	}
+}
+
+// TestNewPresetCache_DefaultDir_TempDirFallback verifies the fallback
+// path used when os.UserCacheDir cannot determine a per-user location
+// (no $HOME, no $XDG_CACHE_HOME, no platform default). The fallback
+// must include the current UID so it cannot be pre-created as a symlink
+// by another local user.
+func TestNewPresetCache_DefaultDir_TempDirFallback(t *testing.T) {
+	// Force os.UserCacheDir to fail by stripping every env var it consults.
+	// On Linux it reads XDG_CACHE_HOME then HOME; on macOS HOME; on Windows
+	// LocalAppData. Clearing all of them covers each platform.
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("HOME", "")
+	t.Setenv("LocalAppData", "")
+
+	// Redirect TempDir so the test does not pollute the real /tmp.
+	t.Setenv("TMPDIR", t.TempDir())
+
+	got := defaultPresetCacheDir()
+
+	uidNamespace := fmt.Sprintf("ofelia-%d", os.Getuid())
+	if !strings.Contains(got, uidNamespace) {
+		t.Errorf("expected TempDir fallback to include %q for UID isolation, got %q", uidNamespace, got)
+	}
+	if !strings.HasSuffix(got, filepath.Join(uidNamespace, "presets")) {
+		t.Errorf("expected fallback path to end with %s/presets, got %q", uidNamespace, got)
+	}
+}
+
+// TestNewPresetCache_ExplicitDir_PreservesPerms verifies that when a
+// caller supplies their own cacheDir, NewPresetCache does NOT chmod it.
+// Operators who configure a custom path are assumed to have set perms
+// deliberately, and silently tightening them would be surprising.
+func TestNewPresetCache_ExplicitDir_PreservesPerms(t *testing.T) {
+	t.Parallel()
+
+	explicit := filepath.Join(t.TempDir(), "explicit-cache")
+	require.NoError(t, os.MkdirAll(explicit, 0o755))
+
+	_ = NewPresetCache(explicit, time.Hour)
+
+	info, err := os.Stat(explicit)
+	require.NoError(t, err)
+	if perm := info.Mode().Perm(); perm != 0o755 {
+		t.Errorf("expected explicit cache dir perms to be preserved (0o755), got %#o", perm)
+	}
 }
 
 func TestPresetCache_PutGet_Memory(t *testing.T) {

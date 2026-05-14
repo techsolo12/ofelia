@@ -39,31 +39,62 @@ type cacheMetadata struct {
 	Version   string    `yaml:"version,omitempty"`
 }
 
+// defaultCacheDirPerm is the directory mode applied when NewPresetCache
+// generates the cache path itself. It matches the 0o600 mode used for the
+// cached payload files (see putToDisk) — only the owning user can read or
+// modify the cache.
+const defaultCacheDirPerm os.FileMode = 0o700
+
+// defaultPresetCacheDir returns the cache directory chosen by NewPresetCache
+// when the caller does not supply one. It prefers os.UserCacheDir
+// (per-user, not pre-creatable by other accounts) and falls back to a
+// UID-namespaced subdirectory under os.TempDir when the user cache dir is
+// unavailable (e.g. a stripped container env without $HOME).
+//
+// The UID namespacing is what makes the TempDir fallback safe against the
+// symlink/pre-create attack that gosec G302 / SonarCloud go:S5445 flag for
+// the predictable /tmp/ofelia path: on hosts with the standard /tmp sticky
+// bit, only the owning user (and root) can create entries named
+// "ofelia-<uid>", so an unprivileged attacker cannot pre-create the path
+// as a symlink before ofelia starts.
+func defaultPresetCacheDir() string {
+	if userCache, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(userCache, "ofelia", "presets")
+	}
+	return filepath.Join(os.TempDir(), fmt.Sprintf("ofelia-%d", os.Getuid()), "presets")
+}
+
 // NewPresetCache creates a new preset cache.
 //
-// When cacheDir is empty, the default location is the per-user cache dir
-// (os.UserCacheDir — typically $XDG_CACHE_HOME/ofelia/presets on Linux,
-// ~/Library/Caches/ofelia/presets on macOS). Falling back to a per-user
-// location avoids the predictable /tmp/ofelia path that gosec G302 /
-// SonarCloud go:S5445 flag as a symlink/pre-create attack vector on
-// multi-tenant hosts. If the user cache dir is unavailable (no $HOME),
-// we fall back to os.TempDir with restrictive perms.
+// When cacheDir is empty, the default location comes from defaultPresetCacheDir
+// (typically $XDG_CACHE_HOME/ofelia/presets on Linux, ~/Library/Caches/ofelia/presets
+// on macOS) and is created with 0o700 perms — both for fresh directories
+// (via os.MkdirAll) and for pre-existing ones (via an explicit os.Chmod,
+// because os.MkdirAll does not adjust modes of existing entries).
+//
+// When the caller supplies an explicit cacheDir, perms are left untouched
+// if the directory already exists, and new directories are created with the
+// previous 0o750 default. Operators who pass their own path are assumed to
+// have set permissions deliberately.
 func NewPresetCache(cacheDir string, ttl time.Duration) *PresetCache {
-	if cacheDir == "" {
-		if userCache, err := os.UserCacheDir(); err == nil {
-			cacheDir = filepath.Join(userCache, "ofelia", "presets")
-		} else {
-			// Last-resort fallback when the user cache dir is unavailable.
-			// 0o700 perms on the parent (created below) limit exposure on
-			// multi-user hosts.
-			cacheDir = filepath.Join(os.TempDir(), "ofelia", "presets")
-		}
+	usingDefault := cacheDir == ""
+	if usingDefault {
+		cacheDir = defaultPresetCacheDir()
 	}
 
-	// Ensure cache directory exists. 0o700 keeps the cache visible only to
-	// the running user; cached payloads are written 0o600 (see putToDisk).
-	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
+	mkdirPerm := os.FileMode(0o750)
+	if usingDefault {
+		mkdirPerm = defaultCacheDirPerm
+	}
+	if err := os.MkdirAll(cacheDir, mkdirPerm); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to create preset cache directory: %v\n", err)
+	} else if usingDefault {
+		// os.MkdirAll does not tighten perms on pre-existing entries.
+		// Apply 0o700 explicitly so an upgrade from a prior loose-mode
+		// version of the cache also picks up the hardening.
+		if err := os.Chmod(cacheDir, defaultCacheDirPerm); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to chmod preset cache directory: %v\n", err)
+		}
 	}
 
 	return &PresetCache{
