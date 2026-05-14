@@ -549,19 +549,8 @@ func applyPlainTransport(transport *http.Transport, _ *ClientConfig, _ string) {
 
 // hasTLSMaterial reports whether the explicit ClientConfig fields or the
 // DOCKER_CERT_PATH env var would cause resolveTLSConfig to produce a non-nil
-// *tls.Config. It is a cheap precondition check used by sibling PRs that
-// want to gate behavior on TLS material being present.
-//
-// PR #628 removed the only HEAD-tree call to this helper (the dead
-// applyDockerTLS branch in applyTCPTransport). Sibling PRs in flight that
-// depend on this helper:
-//   - #646 (fix/issue-627): fail-closed gate on tcp+tls:// without cert material
-//   - #647 (fix/issue-634): rewrite tcp:// → https:// when TLS material is set
-//
-// Keeping it exported-internal here avoids a build break when those PRs
-// rebase onto #628. Remove the //nolint once either sibling lands.
-//
-//nolint:unused // referenced by sibling PRs #646 and #647 (in flight)
+// *tls.Config. Used by NewClientWithConfig's tcp+tls:// fail-closed gate
+// (#627) to short-circuit before resolveTLSConfig is even invoked.
 func hasTLSMaterial(config *ClientConfig) bool {
 	if config != nil && config.TLSCertPath != "" {
 		return true
