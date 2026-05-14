@@ -321,6 +321,14 @@ web-password-hash = $2a$12$...  # bcrypt hash - use 'ofelia hash-password' to ge
 web-secret-key = ${WEB_SECRET_KEY}  # Required for persistent sessions across restarts
 web-token-expiry = 24  # hours
 web-max-login-attempts = 5
+# Trusted proxy CIDRs (comma-separated). Only requests originating from these
+# networks will have their X-Forwarded-For / X-Real-IP headers honored when
+# determining the client IP for login rate-limiting and audit logs.
+# SECURITY: leave empty if Ofelia is exposed directly (no reverse proxy) — any
+# entry here lets a request from that network spoof its source IP via headers.
+# Set to your reverse proxy's network only (e.g. Docker bridge, k8s pod CIDR,
+# load-balancer subnet). Accepts CIDRs ("172.17.0.0/16") or single IPs.
+web-trusted-proxies = 172.17.0.0/16, 10.0.0.0/8
 
 # Monitoring
 enable-pprof = false
