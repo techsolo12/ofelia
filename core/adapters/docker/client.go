@@ -96,10 +96,14 @@ type schemeHandler struct {
 // Documented choices:
 //
 //   - unix:    Unix domain socket dialer; HTTP/1.1 only.
-//   - tcp:     Plain TCP; the docker CLI silently upgrades to HTTPS when
-//     DOCKER_TLS_VERIFY/DOCKER_CERT_PATH are set, so we mirror that to
-//     avoid a plaintext-by-omission downgrade for users following the
-//     canonical Docker mTLS docs (#613).
+//   - tcp:     Plain TCP; HTTP/1.1, no TLS. Operators who want TLS over TCP
+//     must use tcp+tls:// (#616) or https://. The docker CLI rewrites
+//     tcp:// to https:// internally when DOCKER_TLS_VERIFY/DOCKER_CERT_PATH
+//     are set; Ofelia does NOT mirror that rewrite, because Go's
+//     http.Transport only performs TLS on https:// URLs — wiring TLS
+//     material into a tcp:// transport would be silently ineffective
+//     (the cert material would be loaded but never offered on the wire).
+//     See #628 / #634 for the analysis.
 //   - tcp+tls: Explicit TLS over TCP. Requires TLS material via
 //     DOCKER_CERT_PATH / DOCKER_TLS_VERIFY (or ClientConfig.TLSCertPath /
 //     TLSVerify). Re-enabled on the public allow-list in #616 now that the
@@ -493,16 +497,19 @@ func applyTLSTransport(transport *http.Transport, cfg *ClientConfig, _ string) {
 	applyDockerTLS(transport, cfg)
 }
 
-// applyTCPTransport handles plain tcp:// hosts. The docker CLI / SDK
-// silently upgrade tcp:// to HTTPS when DOCKER_TLS_VERIFY / DOCKER_CERT_PATH
-// are set; we mirror that so users following Docker's standard mTLS setup
-// don't see a silent plaintext downgrade. With no TLS material configured
-// this is a plain HTTP/1.1 transport.
-func applyTCPTransport(transport *http.Transport, cfg *ClientConfig, _ string) {
-	if hasTLSMaterial(cfg) {
-		transport.ForceAttemptHTTP2 = true
-	}
-	applyDockerTLS(transport, cfg)
+// applyTCPTransport handles plain tcp:// hosts as a no-frills HTTP/1.1
+// transport. We deliberately do NOT auto-upgrade to TLS when
+// DOCKER_TLS_VERIFY / DOCKER_CERT_PATH are set, even though the docker CLI
+// does: Go's http.Transport only performs TLS on https:// URLs, so wiring
+// TLSClientConfig into a transport whose URL stays tcp:// would silently
+// load the cert material without ever putting it on the wire — worse than
+// failing loud, because operators believe they have mTLS when they do not.
+//
+// Operators who want TLS over a TCP daemon must use tcp+tls:// (#616) or
+// https:// directly. See #628 (this reconciliation) and #634 (the deeper
+// SDK URL-rewrite half of the docker-CLI parity story).
+func applyTCPTransport(transport *http.Transport, _ *ClientConfig, _ string) {
+	transport.ForceAttemptHTTP2 = false
 }
 
 // applyPlainTransport is the no-frills HTTP/1.1 path used for http:// and
@@ -512,12 +519,23 @@ func applyPlainTransport(transport *http.Transport, _ *ClientConfig, _ string) {
 	transport.ForceAttemptHTTP2 = false
 }
 
-// hasTLSMaterial reports whether either the explicit ClientConfig fields or
-// the DOCKER_CERT_PATH env var would cause resolveTLSConfig to produce a
-// non-nil *tls.Config. Used to decide whether tcp:// should be upgraded to
-// HTTPS (mirroring the docker CLI's behavior).
+// hasTLSMaterial reports whether the explicit ClientConfig fields or the
+// DOCKER_CERT_PATH env var would cause resolveTLSConfig to produce a non-nil
+// *tls.Config. It is a cheap precondition check used by sibling PRs that
+// want to gate behavior on TLS material being present.
+//
+// PR #628 removed the only HEAD-tree call to this helper (the dead
+// applyDockerTLS branch in applyTCPTransport). Sibling PRs in flight that
+// depend on this helper:
+//   - #646 (fix/issue-627): fail-closed gate on tcp+tls:// without cert material
+//   - #647 (fix/issue-634): rewrite tcp:// → https:// when TLS material is set
+//
+// Keeping it exported-internal here avoids a build break when those PRs
+// rebase onto #628. Remove the //nolint once either sibling lands.
+//
+//nolint:unused // referenced by sibling PRs #646 and #647 (in flight)
 func hasTLSMaterial(config *ClientConfig) bool {
-	if config.TLSCertPath != "" {
+	if config != nil && config.TLSCertPath != "" {
 		return true
 	}
 	return getenv(client.EnvOverrideCertPath) != ""
