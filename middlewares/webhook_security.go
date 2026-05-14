@@ -176,10 +176,15 @@ func SetGlobalSecurityConfig(config *WebhookSecurityConfig) {
 // egress; the resolved STATE is wide open. A surfaced warning at startup
 // converts a silent misconfiguration into a visible one.
 //
-// One emission per SetGlobalSecurityConfig call by design — the function
-// is the documented startup seam (called once from NewWebhookManager).
-// Per-validator construction (NewWebhookSecurityValidator) does NOT warn
-// because it is invoked per-request and would be log-spam.
+// One emission per SetGlobalSecurityConfig call by design. The function
+// is invoked from two places: (1) NewWebhookManager at daemon startup, and
+// (2) the live-reload path that re-initializes the manager when
+// `webhook-allowed-hosts` changes (cli/config.go's
+// refreshWebhookManagerOnGlobalChange). Both paths are operator-driven,
+// so re-warning on each is the correct cadence — operators who tighten
+// the allow-list at runtime then loosen it back to "*" should hear about
+// the regression. Per-validator construction (NewWebhookSecurityValidator)
+// does NOT warn because it is invoked per-request and would be log-spam.
 func warnIfWideOpenEgress(config *WebhookSecurityConfig) {
 	if config == nil {
 		return

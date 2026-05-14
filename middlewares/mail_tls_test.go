@@ -40,14 +40,15 @@ func TestSMTPTLSPolicy_Valid(t *testing.T) {
 	}
 }
 
-// TestNewMail_RejectsInvalidTLSPolicy ensures a misconfigured smtp-tls-policy
-// is surfaced at startup rather than silently ignored. NewMail returns nil
-// for an empty config; for a non-empty config with an invalid policy it must
-// still construct the middleware (so the rest of the pipeline keeps working)
-// but the policy must be normalized to the safe default — never to a weaker
-// policy than what the operator wrote. We assert the safe-default behavior
-// by checking the resolved dialer policy through the public mapping.
-func TestNewMail_RejectsInvalidTLSPolicy(t *testing.T) {
+// TestResolveSMTPTLSPolicy_UnknownFallsBackToMandatory ensures a misconfigured
+// smtp-tls-policy normalizes to the safe default rather than silently weakening
+// transport security. The resolver is the choke point that NewMail / sendMail
+// flow through; we exercise it directly because the fail-closed contract is
+// the resolver's, not NewMail's. (The test name was tightened per #660 review:
+// the previous name implied NewMail itself rejected the policy, but NewMail
+// happily constructs a middleware with any string — the fail-closed step is
+// here.)
+func TestResolveSMTPTLSPolicy_UnknownFallsBackToMandatory(t *testing.T) {
 	t.Parallel()
 
 	// Unknown policy must NOT silently degrade to NoStartTLS or Opportunistic.
@@ -86,21 +87,25 @@ func TestMail_DefaultPolicyIsMandatory(t *testing.T) {
 		done <- m.Run(f.ctx)
 	}()
 
-	// We expect NO MAIL FROM to be received because the dialer should refuse
-	// to send against a server that does not advertise STARTTLS.
+	// Wait for Run to complete first (it's the deterministic signal — the
+	// dialer either errored on the missing STARTTLS or completed). Then
+	// inspect fromCh non-blockingly to confirm no MAIL FROM was ever
+	// received. Previously this test gated on a 500ms timeout to assert
+	// "no mail was sent", which is flaky on slow CI runners (Copilot
+	// review of #660). The new shape: the dialer's actual completion is
+	// the upper bound — by the time Run returns, any MAIL FROM that was
+	// going to arrive has arrived.
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("Mail.Run did not return within 10s")
+	}
+
 	select {
 	case <-f.fromCh:
 		t.Fatal("expected default policy (mandatory) to refuse plaintext SMTP server, but mail was sent")
-	case <-time.After(500 * time.Millisecond):
-		// Expected: dialer refused.
-	}
-
-	// m.Run returns the underlying job error, not the mail error
-	// (mail errors are logged); just confirm the goroutine completes.
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("Mail.Run did not return")
+	default:
+		// Expected: dialer refused before reaching MAIL FROM.
 	}
 }
 

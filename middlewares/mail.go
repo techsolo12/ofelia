@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	mail "github.com/go-mail/mail/v2"
 
@@ -88,10 +89,17 @@ func (p SMTPTLSPolicy) Validate() error {
 	return fmt.Errorf("%w: %q (expected mandatory, opportunistic, or none)", ErrInvalidSMTPTLSPolicy, string(p))
 }
 
+// loggedInvalidSMTPTLSPolicy is the one-shot gate for the unknown-policy
+// warning. resolveSMTPTLSPolicy is invoked on every sendMail; without this
+// gate a single typo would emit a warning per delivery (gemini noted this
+// in PR #660 review). The gate keys on the unknown value so different
+// typos still surface independently.
+var loggedInvalidSMTPTLSPolicy sync.Map // map[SMTPTLSPolicy]struct{}
+
 // resolveSMTPTLSPolicy maps the INI-string policy onto go-mail's
 // StartTLSPolicy enum. Unknown / invalid input deliberately falls through
-// to MandatoryStartTLS (the safe default) and emits an slog.Warn so a typo
-// cannot silently weaken transport security.
+// to MandatoryStartTLS (the safe default) and emits an slog.Warn (one-shot
+// per unknown value) so a typo cannot silently weaken transport security.
 func resolveSMTPTLSPolicy(p SMTPTLSPolicy) SMTPTLSPolicy {
 	switch p {
 	case "", SMTPTLSPolicyMandatory:
@@ -99,11 +107,13 @@ func resolveSMTPTLSPolicy(p SMTPTLSPolicy) SMTPTLSPolicy {
 	case SMTPTLSPolicyOpportunistic, SMTPTLSPolicyNone:
 		return p
 	default:
-		slog.Default().Warn(
-			"unknown smtp-tls-policy value; falling back to mandatory STARTTLS",
-			"value", string(p),
-			"hint", "valid values: mandatory (default), opportunistic, none",
-		)
+		if _, loaded := loggedInvalidSMTPTLSPolicy.LoadOrStore(p, struct{}{}); !loaded {
+			slog.Default().Warn(
+				"unknown smtp-tls-policy value; falling back to mandatory STARTTLS",
+				"value", string(p),
+				"hint", "valid values: mandatory (default), opportunistic, none",
+			)
+		}
 		return SMTPTLSPolicyMandatory
 	}
 }
