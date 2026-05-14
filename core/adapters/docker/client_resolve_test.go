@@ -113,12 +113,16 @@ func withCountingGetenv(t *testing.T, key string, cnt *atomic.Int64) {
 // Cannot use t.Parallel() — t.Setenv is incompatible.
 func TestNewClientWithConfig_ReadsDOCKERHOSTOnce(t *testing.T) {
 	cases := []struct {
-		name     string
-		cfgHost  string
-		envHost  string
-		wantMax  int64 // upper bound on getenv("DOCKER_HOST") calls
-		wantErr  bool
-		errIsArg error
+		name    string
+		cfgHost string
+		envHost string
+		wantMax int64 // upper bound on getenv("DOCKER_HOST") calls
+		// wantExact, when true, requires exactly wantMax reads (catches a
+		// regression that drops the env read entirely, which the upper-bound
+		// check would silently accept). See issue #633.
+		wantExact bool
+		wantErr   bool
+		errIsArg  error
 	}{
 		{
 			name:    "explicit_config_host",
@@ -127,10 +131,11 @@ func TestNewClientWithConfig_ReadsDOCKERHOSTOnce(t *testing.T) {
 			wantMax: 0,                   // cfg.Host wins; env not read
 		},
 		{
-			name:    "env_only",
-			cfgHost: "",
-			envHost: "tcp://127.0.0.1:0",
-			wantMax: 1,
+			name:      "env_only",
+			cfgHost:   "",
+			envHost:   "tcp://127.0.0.1:0",
+			wantMax:   1,
+			wantExact: true, // #633: exact-1 catches a regression that reads zero times
 		},
 		{
 			name:    "both_empty_falls_back_to_default",
@@ -174,7 +179,14 @@ func TestNewClientWithConfig_ReadsDOCKERHOSTOnce(t *testing.T) {
 				t.Logf("non-fatal: NewClientWithConfig returned err=%v (expected for stub host)", err)
 			}
 
-			if got := count.Load(); got > tc.wantMax {
+			got := count.Load()
+			if tc.wantExact {
+				if got != tc.wantMax {
+					t.Errorf("DOCKER_HOST read %d times during NewClientWithConfig, want exactly %d "+
+						"(issue #633: exact-count catches a regression that drops the env read entirely)",
+						got, tc.wantMax)
+				}
+			} else if got > tc.wantMax {
 				t.Errorf("DOCKER_HOST read %d times during NewClientWithConfig, want <= %d "+
 					"(issue #617: a single resolveDockerHost seam must read DOCKER_HOST at most once)",
 					got, tc.wantMax)
