@@ -870,19 +870,20 @@ func (c *Config) dockerContainersUpdate(containers []DockerContainerInfo) {
 	prevLogLevel := c.Global.LogLevel
 	prevCooldown := c.Global.NotificationCooldown
 	_ = c.applyAllowListedGlobals(parsedLabelConfig)
+	// Re-apply process-wide knobs (log level, notification deduplicator)
+	// BEFORE syncJobMap so prep closures (which inject the dedup pointer
+	// into per-job middlewares via c.injectDedup) see the freshly-rebuilt
+	// dedup state. Otherwise a label changing notification-cooldown 0 → >0
+	// rebuilds the dedup AFTER the prep closure had already snapshotted
+	// the stale dedup pointer for the new job — Copilot review of #661.
+	// Held under c.mu to mirror the INI live-reload path; ApplyLogLevel
+	// and initNotificationDedup do not re-enter c.mu. No deadlock risk.
+	c.refreshRuntimeKnobsAfterGlobalMerge(prevLogLevel, prevCooldown)
 	syncJobMap(c, c.ExecJobs, parsedLabelConfig.ExecJobs, execPrep, JobSourceLabel, "exec")
 	syncJobMap(c, c.RunJobs, parsedLabelConfig.RunJobs, runPrep, JobSourceLabel, "run")
 	syncJobMap(c, c.LocalJobs, parsedLabelConfig.LocalJobs, localPrep, JobSourceLabel, "local")
 	syncJobMap(c, c.ServiceJobs, parsedLabelConfig.ServiceJobs, servicePrep, JobSourceLabel, "service")
 	syncJobMap(c, c.ComposeJobs, parsedLabelConfig.ComposeJobs, composePrep, JobSourceLabel, "compose")
-	// Re-apply process-wide knobs (log level, notification deduplicator) if
-	// the global merge updated them — held under c.mu to mirror the INI
-	// live-reload path (cli/config.go::iniConfigUpdate's globalChanged
-	// branch). ApplyLogLevel only touches the *slog.LevelVar (no re-entry
-	// into c.mu); initNotificationDedup only touches package-global
-	// middleware state plus c.notificationDedup / c.Global.*.Dedup
-	// (no re-entry either). No deadlock risk.
-	c.refreshRuntimeKnobsAfterGlobalMerge(prevLogLevel, prevCooldown)
 	c.mu.Unlock()
 
 	// Sync webhook configs from labels
