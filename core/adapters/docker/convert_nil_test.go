@@ -8,7 +8,10 @@ import (
 	"errors"
 	"testing"
 
+	containertypes "github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
+	mounttypes "github.com/docker/docker/api/types/mount"
+	networktypes "github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/swarm"
 	"github.com/stretchr/testify/assert"
 
@@ -175,6 +178,163 @@ func TestConvertToMount_Nil(t *testing.T) {
 	assert.Equal(t, mount.Mount{}, result)
 }
 
+// Regression tests for #654. PR #648 nil-guarded the *From* swarm/event
+// helpers; sibling-hunt found 4 more helpers in convert.go / container.go
+// with the same defense-in-depth gap.
+
+// TestConvertFromAPIContainer_NilInput pins the contract that
+// convertFromAPIContainer returns the zero domain.Container (no panic)
+// when called with a nil *containertypes.Summary. The previous code
+// dereferenced c.Names / c.ID / c.Image / c.Created / c.Labels / c.State
+// unconditionally.
+func TestConvertFromAPIContainer_NilInput(t *testing.T) {
+	t.Parallel()
+
+	defer failOnPanic(t, "convertFromAPIContainer(nil)")()
+
+	got := convertFromAPIContainer(nil)
+	if got.ID != "" || got.Name != "" || got.Image != "" {
+		t.Errorf("convertFromAPIContainer(nil) = %+v, want zero domain.Container", got)
+	}
+	if got.Labels != nil {
+		t.Errorf("convertFromAPIContainer(nil).Labels = %+v, want nil", got.Labels)
+	}
+	if got.State.Running {
+		t.Errorf("convertFromAPIContainer(nil).State.Running = true, want false")
+	}
+	if !got.Created.IsZero() {
+		t.Errorf("convertFromAPIContainer(nil).Created = %v, want zero", got.Created)
+	}
+}
+
+// TestConvertFromAPIContainer_ValidInput sanity-checks that the new nil
+// guard does not regress the happy path. Mirrors the live ContainerService
+// list translation.
+func TestConvertFromAPIContainer_ValidInput(t *testing.T) {
+	t.Parallel()
+
+	in := &containertypes.Summary{
+		ID:      "abc123",
+		Names:   []string{"/my-container"},
+		Image:   "nginx:latest",
+		Created: 1_700_000_000,
+		Labels:  map[string]string{"env": "prod"},
+		State:   containertypes.StateRunning,
+	}
+
+	got := convertFromAPIContainer(in)
+	if got.ID != "abc123" {
+		t.Errorf("ID = %q, want %q", got.ID, "abc123")
+	}
+	if got.Name != "my-container" {
+		// Leading slash must be stripped (issue #422).
+		t.Errorf("Name = %q, want %q", got.Name, "my-container")
+	}
+	if got.Image != "nginx:latest" {
+		t.Errorf("Image = %q, want %q", got.Image, "nginx:latest")
+	}
+	if got.Labels["env"] != "prod" {
+		t.Errorf("Labels[env] = %q, want %q", got.Labels["env"], "prod")
+	}
+	if !got.State.Running {
+		t.Errorf("State.Running = false, want true")
+	}
+}
+
+// TestConvertFromNetworkResource_NilInput pins the contract that
+// convertFromNetworkResource returns the zero domain.Network (no panic)
+// when called with a nil *networktypes.Summary. The previous code
+// dereferenced n.Name / n.IPAM.Driver / n.Containers unconditionally.
+func TestConvertFromNetworkResource_NilInput(t *testing.T) {
+	t.Parallel()
+
+	defer failOnPanic(t, "convertFromNetworkResource(nil)")()
+
+	got := convertFromNetworkResource(nil)
+	if got.Name != "" || got.ID != "" || got.Driver != "" {
+		t.Errorf("convertFromNetworkResource(nil) = %+v, want zero domain.Network", got)
+	}
+	if got.IPAM.Driver != "" || len(got.IPAM.Config) > 0 {
+		t.Errorf("convertFromNetworkResource(nil).IPAM = %+v, want zero", got.IPAM)
+	}
+	if got.Containers != nil {
+		t.Errorf("convertFromNetworkResource(nil).Containers = %+v, want nil", got.Containers)
+	}
+}
+
+// TestConvertFromNetworkResource_ValidInput sanity-checks that the new
+// nil guard does not regress the happy path.
+func TestConvertFromNetworkResource_ValidInput(t *testing.T) {
+	t.Parallel()
+
+	in := &networktypes.Summary{
+		ID:     "net-1",
+		Name:   "bridge",
+		Driver: "bridge",
+		Scope:  "local",
+	}
+
+	got := convertFromNetworkResource(in)
+	if got.ID != "net-1" {
+		t.Errorf("ID = %q, want %q", got.ID, "net-1")
+	}
+	if got.Name != "bridge" {
+		t.Errorf("Name = %q, want %q", got.Name, "bridge")
+	}
+	if got.Driver != "bridge" {
+		t.Errorf("Driver = %q, want %q", got.Driver, "bridge")
+	}
+	if got.Scope != "local" {
+		t.Errorf("Scope = %q, want %q", got.Scope, "local")
+	}
+}
+
+// TestConvertFromNetworkInspect_NilInput pins the contract that
+// convertFromNetworkInspect returns nil (no panic) when called with a nil
+// *networktypes.Inspect. The previous code dereferenced n.Name / n.IPAM /
+// n.Containers unconditionally; the pointer-returning shape mirrors
+// convertFromSwarmService(nil) -> nil from #648.
+func TestConvertFromNetworkInspect_NilInput(t *testing.T) {
+	t.Parallel()
+
+	defer failOnPanic(t, "convertFromNetworkInspect(nil)")()
+
+	if got := convertFromNetworkInspect(nil); got != nil {
+		t.Errorf("convertFromNetworkInspect(nil) = %+v, want nil", got)
+	}
+}
+
+// TestConvertFromNetworkInspect_ValidInput sanity-checks that the new nil
+// guard does not regress the happy path.
+func TestConvertFromNetworkInspect_ValidInput(t *testing.T) {
+	t.Parallel()
+
+	in := &networktypes.Inspect{
+		ID:     "net-2",
+		Name:   "custom",
+		Driver: "overlay",
+		Scope:  "swarm",
+	}
+
+	got := convertFromNetworkInspect(in)
+	if got == nil {
+		t.Fatal("convertFromNetworkInspect(valid) = nil, want non-nil")
+	}
+	if got.ID != "net-2" {
+		t.Errorf("ID = %q, want %q", got.ID, "net-2")
+	}
+	if got.Name != "custom" {
+		t.Errorf("Name = %q, want %q", got.Name, "custom")
+	}
+	if got.Driver != "overlay" {
+		t.Errorf("Driver = %q, want %q", got.Driver, "overlay")
+	}
+}
+
+// (Note: convertToMount(nil) is exercised by TestConvertToMount_Nil above —
+// PR #654's TestConvertToMount_NilInput would have been a literal duplicate
+// after the rebase merged with #626's existing test, so it is dropped here.)
+
 // TestConvertHelpers_ZeroValueArg verifies that the convert helpers also
 // behave correctly with a non-nil but zero-value pointer argument — the
 // other half of the table-driven nil/zero/valid contract demanded by
@@ -210,4 +370,32 @@ func TestConvertHelpers_ZeroValueArg(t *testing.T) {
 		result := convertToMount(&domain.Mount{})
 		assert.Equal(t, mount.Mount{}, result)
 	})
+}
+
+// TestConvertToMount_ValidInput sanity-checks that the new nil guard
+// does not regress the happy path. Complements TestConvertHelpers_ZeroValueArg
+// by asserting the mapping logic actually copies fields end-to-end. See #654.
+func TestConvertToMount_ValidInput(t *testing.T) {
+	t.Parallel()
+
+	in := &domain.Mount{
+		Type:     domain.MountType("bind"),
+		Source:   "/host/path",
+		Target:   "/container/path",
+		ReadOnly: true,
+	}
+
+	got := convertToMount(in)
+	if got.Type != mounttypes.TypeBind {
+		t.Errorf("Type = %q, want %q", got.Type, mounttypes.TypeBind)
+	}
+	if got.Source != "/host/path" {
+		t.Errorf("Source = %q, want %q", got.Source, "/host/path")
+	}
+	if got.Target != "/container/path" {
+		t.Errorf("Target = %q, want %q", got.Target, "/container/path")
+	}
+	if !got.ReadOnly {
+		t.Errorf("ReadOnly = false, want true")
+	}
 }

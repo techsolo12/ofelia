@@ -124,7 +124,15 @@ func convertFromContainerJSON(c *containertypes.InspectResponse) *domain.Contain
 }
 
 // convertFromAPIContainer converts SDK Container (list result) to domain Container.
+// Returns the zero domain.Container (no panic) when c is nil — defense-in-depth
+// for an unsafe signature contract. Production callers pass `&loopVar` from a
+// `range` over a slice so c is never nil today, but the helper signature
+// invites unsafe direct calls. Mirrors PR #648 / #626. See #654.
 func convertFromAPIContainer(c *containertypes.Summary) domain.Container {
+	if c == nil {
+		return domain.Container{}
+	}
+
 	var name string
 	if len(c.Names) > 0 {
 		// Docker API returns container names with leading slash (e.g., "/my-container").
@@ -145,7 +153,15 @@ func convertFromAPIContainer(c *containertypes.Summary) domain.Container {
 }
 
 // convertFromNetworkResource converts SDK NetworkResource to domain Network.
+// Returns the zero domain.Network (no panic) when n is nil — defense-in-depth
+// for an unsafe signature contract. Production callers pass `&loopVar` from a
+// `range` over a slice so n is never nil today, but the helper signature
+// invites unsafe direct calls. Mirrors PR #648 / #626. See #654.
 func convertFromNetworkResource(n *networktypes.Summary) domain.Network {
+	if n == nil {
+		return domain.Network{}
+	}
+
 	network := domain.Network{
 		Name:       n.Name,
 		ID:         n.ID,
@@ -194,7 +210,16 @@ func convertFromNetworkResource(n *networktypes.Summary) domain.Network {
 }
 
 // convertFromNetworkInspect converts SDK NetworkResource from inspect to domain Network.
+// Returns nil (no panic) when n is nil — defense-in-depth for an unsafe
+// signature contract. Production callers (NetworkServiceAdapter.Inspect)
+// pass `&n` after a successful SDK call so n is never nil today, but the
+// helper signature invites unsafe direct calls. Mirrors PR #648 / #626.
+// See #654.
 func convertFromNetworkInspect(n *networktypes.Inspect) *domain.Network {
+	if n == nil {
+		return nil
+	}
+
 	network := &domain.Network{
 		Name:       n.Name,
 		ID:         n.ID,
