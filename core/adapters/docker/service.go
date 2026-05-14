@@ -335,7 +335,14 @@ func convertTaskTemplateToSwarm(src *domain.TaskSpec, dst *swarm.TaskSpec) {
 	}
 }
 
+// convertFromSwarmService translates a Docker SDK *swarm.Service to its
+// domain counterpart. Returns nil when svc is nil — the inverse contract
+// of convertToSwarmSpec(nil) -> swarm.ServiceSpec{}, see #632 / #626.
 func convertFromSwarmService(svc *swarm.Service) *domain.Service {
+	if svc == nil {
+		return nil
+	}
+
 	service := &domain.Service{
 		ID: svc.ID,
 		Meta: domain.ServiceMeta{
@@ -381,7 +388,15 @@ func convertFromSwarmService(svc *swarm.Service) *domain.Service {
 	return service
 }
 
+// convertTaskTemplateFromSwarm copies fields from a Docker SDK
+// *swarm.TaskSpec into a domain *TaskSpec. No-op (returns silently)
+// when either src or dst is nil — symmetric with the
+// convertTaskTemplateToSwarm guard from #626. See #632.
 func convertTaskTemplateFromSwarm(src *swarm.TaskSpec, dst *domain.TaskSpec) {
+	if src == nil || dst == nil {
+		return
+	}
+
 	if src.ContainerSpec != nil {
 		cs := src.ContainerSpec
 		dst.ContainerSpec = domain.ContainerSpec{
@@ -462,7 +477,14 @@ func convertTaskTemplateFromSwarm(src *swarm.TaskSpec, dst *domain.TaskSpec) {
 	}
 }
 
+// convertFromSwarmTask translates a Docker SDK *swarm.Task to its domain
+// counterpart. Returns the zero domain.Task when task is nil — guards
+// against an SDK list ever yielding a nil entry. See #632.
 func convertFromSwarmTask(task *swarm.Task) domain.Task {
+	if task == nil {
+		return domain.Task{}
+	}
+
 	domainTask := domain.Task{
 		ID:           task.ID,
 		ServiceID:    task.ServiceID,

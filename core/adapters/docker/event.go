@@ -137,7 +137,14 @@ func (s *EventServiceAdapter) SubscribeWithCallback(
 }
 
 // convertFromSDKEvent converts SDK events.Message to domain.Event.
+// Returns the zero domain.Event when e is nil — defense-in-depth for
+// the Subscribe goroutine, see #632. Note that events.Actor is a value
+// type (not a pointer), so only the outer *events.Message can be nil.
 func convertFromSDKEvent(e *events.Message) domain.Event {
+	if e == nil {
+		return domain.Event{}
+	}
+
 	return domain.Event{
 		Type:   string(e.Type),
 		Action: string(e.Action),
