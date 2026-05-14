@@ -13,10 +13,14 @@ import (
 	"github.com/gobs/args"
 )
 
-// localJobEnvResolveTimeout bounds env-from-container resolution for local
-// jobs so a wedged Docker daemon cannot stall the local-exec path
-// indefinitely. Inspecting a Docker container for its environment is a
-// fast read; 10s is a generous upper bound. See issue #638.
+// localJobEnvResolveTimeout bounds the env-resolution step that runs
+// before a `job-local` command is invoked. LocalJob passes a nil
+// DockerProvider into ResolveJobEnvironment, so this timeout does NOT
+// guard against a wedged Docker daemon — `env-from` on local jobs is a
+// no-op. The bound exists strictly to cap env-FILE parsing on local
+// disk (`env-file: /path/to/foo`) so a hung NFS mount or a pathologically
+// large file cannot stall local-job startup. 10s is a generous upper
+// bound for a disk read. See issues #638 / #655.
 const localJobEnvResolveTimeout = 10 * time.Second
 
 type LocalJob struct {
@@ -58,12 +62,12 @@ func (j *LocalJob) buildCommand(ctx *Context) (*exec.Cmd, error) {
 	}
 
 	// Resolve environment from env-file, env-from, and explicit environment.
-	// Bound the resolver context with localJobEnvResolveTimeout so a wedged
-	// Docker daemon (env-from) cannot stall local-job startup indefinitely.
-	// Inherits cancellation from the scheduler's per-run bounded context
-	// when present; otherwise (*Context).RunContext returns
-	// context.Background() so legacy *Context{} literals keep working.
-	// See issue #638.
+	// Bound the resolver context with localJobEnvResolveTimeout to cap
+	// env-FILE disk reads (LocalJob passes a nil provider so env-from is
+	// a no-op — Docker is never contacted on this path). Inherits
+	// cancellation from the scheduler's per-run bounded context when
+	// present; otherwise (*Context).RunContext returns context.Background()
+	// so legacy *Context{} literals keep working. See issues #638 / #655.
 	resolveCtx, cancel := context.WithTimeout(ctx.RunContext(), localJobEnvResolveTimeout)
 	defer cancel()
 	mergedEnv, err := ResolveJobEnvironment(resolveCtx, j.EnvFile, j.EnvFrom, j.Environment, nil, func(msg string) {

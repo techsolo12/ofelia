@@ -41,6 +41,17 @@ func (j *ExecJob) InitializeRuntimeFields() {
 	// No additional initialization needed with DockerProvider
 }
 
+// Run executes the configured command inside the target container via
+// `docker exec`.
+//
+// Limitation (issue #655): when the wrapper-level deadline from
+// #651's boundJobContext fires (or any other ctx cancellation occurs),
+// the SDK read returns promptly but the in-container process is left
+// running. The Docker Engine API exposes no `ExecStop` primitive — once
+// an exec session is started Ofelia cannot kill the inner process from
+// the outside. Operators relying on a hard ceiling for `job-exec` MUST
+// enforce it inside the entrypoint (e.g. `timeout 30s ...`) rather than
+// via `max-runtime` alone.
 func (j *ExecJob) Run(ctx *Context) error {
 	// Use the (deadline-bounded) middleware-chain context for cancellation
 	// propagation. The fallback to context.Background() is centralized in

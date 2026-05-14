@@ -105,6 +105,12 @@ func entrypointSlice(ep *string) []string {
 	return args.GetArgs(*ep)
 }
 
+// jobCleanupTimeout bounds best-effort container/service teardown when
+// the per-run context has already expired (issue #655). 30s mirrors
+// DefaultStopTimeout used elsewhere for graceful shutdown — long enough
+// for a healthy daemon, short enough to fail loudly on a wedged one.
+const jobCleanupTimeout = 30 * time.Second
+
 func (j *RunJob) Run(ctx *Context) error {
 	pull, _ := strconv.ParseBool(j.Pull)
 	// Use the (deadline-bounded) middleware-chain context for cancellation
@@ -129,14 +135,51 @@ func (j *RunJob) Run(ctx *Context) error {
 
 	created := j.Container == ""
 	if created {
-		defer func() {
-			if delErr := j.deleteContainer(runCtx); delErr != nil {
-				ctx.Warn("failed to delete container: " + delErr.Error())
-			}
-		}()
+		defer j.cleanupAfterRun(runCtx, ctx)
 	}
 
 	return j.startAndWait(runCtx, ctx)
+}
+
+// cleanupAfterRun handles deferred container teardown. When the per-run
+// context already fired (wrapper-level deadline from boundJobContext or
+// per-job MaxRuntime), WaitContainer returned early on cancellation so
+// the container is almost certainly still running. Issue an explicit
+// best-effort Stop on a fresh context BEFORE Remove so we don't race
+// the daemon trying to delete a live container, and so the Remove call
+// itself runs on a non-expired context. The fresh background-derived
+// context is intentional: reusing the expired parent would no-op the
+// cleanup, which is precisely the bug being fixed. See issue #655.
+func (j *RunJob) cleanupAfterRun(runCtx context.Context, ctx *Context) {
+	if runCtx.Err() == nil {
+		// Happy path: parent context still alive — reuse it so any
+		// caller-set deadline applies to teardown too.
+		if delErr := j.deleteContainer(runCtx); delErr != nil {
+			ctx.Warn("failed to delete container: " + delErr.Error())
+		}
+		return
+	}
+	// Parent expired — fall through to the fresh-context cleanup path.
+	j.cleanupOnDeadline(runCtx, ctx)
+}
+
+// cleanupOnDeadline issues stop+remove on a fresh background-derived
+// context because the per-run parent already expired. The expired
+// runCtx is accepted for symmetry/diagnostics but intentionally NOT
+// used as the parent of the new context — that would no-op the
+// cleanup, which is precisely the bug being fixed. See issue #655.
+//
+//nolint:contextcheck // intentional fresh ctx; parent already expired
+func (j *RunJob) cleanupOnDeadline(_ context.Context, ctx *Context) {
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), jobCleanupTimeout)
+	defer cancelCleanup()
+	stopTimeout := 10 * time.Second
+	if stopErr := j.stopContainer(cleanupCtx, stopTimeout); stopErr != nil {
+		ctx.Warn("failed to stop container after deadline: " + stopErr.Error())
+	}
+	if delErr := j.deleteContainer(cleanupCtx); delErr != nil {
+		ctx.Warn("failed to delete container: " + delErr.Error())
+	}
 }
 
 // ensureImageAvailable pulls or verifies the image presence according to Pull option.
