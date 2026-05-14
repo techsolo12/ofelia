@@ -105,8 +105,14 @@ func (j *RunServiceJob) Run(ctx *Context) error {
 		deleteCtx = cleanupCtx
 	}
 
-	if delErr := j.deleteService(deleteCtx, ctx, svcID); delErr != nil && watchErr == nil {
-		return delErr
+	if delErr := j.deleteService(deleteCtx, ctx, svcID); delErr != nil {
+		if watchErr == nil {
+			return delErr
+		}
+		// watchErr (typically MaxRuntime / cancellation) takes precedence as
+		// the surfaced return; log delErr so a failed RemoveService isn't
+		// silently swallowed and orphan services are observable.
+		ctx.Log(fmt.Sprintf("RunServiceJob: cleanup deleteService failed (watchErr=%v): %v", watchErr, delErr))
 	}
 	return watchErr
 }
@@ -230,11 +236,18 @@ func (j *RunServiceJob) watchContainer(ctx context.Context, jobCtx *Context, svc
 
 	wg.Wait()
 
-	jobCtx.Logger.Info(fmt.Sprintf("Service ID %s (%s) has completed with exit code %d", svcID, j.Name, exitCode))
-
+	// When the wrapper-level deadline fires before the watcher observes a
+	// terminal task state, exitCode is left at the ExitCodeSwarmError sentinel
+	// — the watcher returned via ctx.Done(), not via observed completion.
+	// Logging "completed with exit code -999" misleads operators into
+	// thinking the swarm task itself failed; surface the cancellation
+	// reason instead. See PR #659 review on exit-code log line at line 216.
 	if err != nil {
+		jobCtx.Logger.Info(fmt.Sprintf("Service ID %s (%s) was canceled before completion: %v", svcID, j.Name, err))
 		return err
 	}
+
+	jobCtx.Logger.Info(fmt.Sprintf("Service ID %s (%s) has completed with exit code %d", svcID, j.Name, exitCode))
 
 	switch exitCode {
 	case 0:
