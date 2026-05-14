@@ -19,14 +19,20 @@ import (
 const webhookSection = "webhook"
 
 // Canonical and legacy Docker label key names that the webhook label reader
-// consumes. Only the webhook-list selector is exposed via labels — the other
-// webhook globals (webhook-allowed-hosts, webhook-allow-remote-presets,
-// webhook-trusted-preset-sources, webhook-preset-cache-dir, and
-// webhook-preset-cache-ttl) are intentionally INI-only to prevent containers
-// from widening the network egress surface or redirecting preset loading. See
-// docker-labels.go (globalLabelAllowList) and #486.
+// consumes. Two webhook globals are exposed via labels:
+//
+//   - webhook-webhooks: the per-job/global selector (operationally tunable).
+//   - webhook-preset-cache-ttl: cache lifetime for remote presets (operationally
+//     tunable, NOT SSRF-sensitive — narrowing or widening the TTL cannot widen
+//     the network egress surface).
+//
+// The SSRF-sensitive globals (webhook-allowed-hosts, webhook-allow-remote-presets,
+// webhook-trusted-preset-sources, webhook-preset-cache-dir) remain INI-only to
+// prevent containers from widening the network egress surface or redirecting
+// preset loading. See docker-labels.go (globalLabelAllowList) and #486.
 const (
-	webhookGlobalKeyWebhooks = "webhook-webhooks"
+	webhookGlobalKeyWebhooks       = "webhook-webhooks"
+	webhookGlobalKeyPresetCacheTTL = "webhook-preset-cache-ttl"
 
 	// Legacy unprefixed form left behind by #618 when the INI side was
 	// renamed to webhook-*. Still accepted with a one-shot deprecation
@@ -205,6 +211,13 @@ func (c *Config) syncWebhookConfigs(parsed *WebhookConfigs) {
 // applyWebhookChanges merges parsed webhook configs into the current config,
 // returning true if any changes were detected. INI-defined webhooks are never
 // overwritten by labels (security: prevents container label hijacking).
+//
+// Also forwards operator-tunable webhook globals (Webhooks selector,
+// AllowedHosts, PresetCacheTTL) via mergeWebhookGlobals so that runtime
+// label edits on a service container actually update the live config —
+// without this, the merge only happened once at startup via
+// mergeWebhookConfigs and subsequent label changes were silently dropped
+// (Code/DRY review of #650).
 func (c *Config) applyWebhookChanges(parsed *WebhookConfigs) bool {
 	changed := false
 
@@ -234,6 +247,13 @@ func (c *Config) applyWebhookChanges(parsed *WebhookConfigs) bool {
 			delete(c.WebhookConfigs.Webhooks, name)
 			changed = true
 		}
+	}
+
+	// Forward operator-tunable webhook globals from a fresh label parse so
+	// that a container that changes its ofelia.webhook-webhooks /
+	// webhook-preset-cache-ttl labels takes effect without restart.
+	if mergeWebhookGlobals(c.WebhookConfigs.Global, parsed.Global) {
+		changed = true
 	}
 
 	return changed
@@ -267,8 +287,14 @@ func (c *Config) rebuildAllMiddlewares() {
 // mergeWebhookConfigs merges label-defined webhooks into the main config.
 // INI-defined webhooks take precedence: label webhooks are added only if no
 // INI webhook with the same name exists.
+//
+// The early-return is intentionally split: per-webhook merge gates on
+// len(parsed.Webhooks) > 0, but the global-selector / cache-TTL merge runs
+// regardless. An operator who sets only `ofelia.webhook-webhooks=slack-alerts`
+// on a service container (referencing INI-defined webhooks) must still see
+// that selector applied — see #640.
 func mergeWebhookConfigs(c *Config, parsed *WebhookConfigs) {
-	if parsed == nil || len(parsed.Webhooks) == 0 {
+	if parsed == nil {
 		return
 	}
 	if c.WebhookConfigs == nil {
@@ -283,13 +309,38 @@ func mergeWebhookConfigs(c *Config, parsed *WebhookConfigs) {
 		c.WebhookConfigs.Webhooks[name] = wh
 	}
 
-	// Merge global webhook settings from labels if not already set from INI
-	if c.WebhookConfigs.Global.Webhooks == "" && parsed.Global.Webhooks != "" {
-		c.WebhookConfigs.Global.Webhooks = parsed.Global.Webhooks
+	mergeWebhookGlobals(c.WebhookConfigs.Global, parsed.Global)
+}
+
+// mergeWebhookGlobals copies operator-tunable webhook globals from a
+// label-parsed scratch config into the live config. Each field uses the
+// "INI is at the documented default → take label" sentinel, mirroring the
+// AllowedHosts="*" pattern. Same ambiguity applies: an INI value set to
+// exactly the default is indistinguishable from unset, but the alternative
+// (tracking explicit-set state per field) would require parser-level changes
+// disproportionate to the gain.
+//
+// Only non-SSRF-sensitive globals are forwarded here. See #486 / #640.
+//
+// Returns true when any field was overwritten so callers (notably
+// applyWebhookChanges in the runtime label-reconcile path) can flip their
+// `changed` flag and trigger webhook-manager re-init.
+func mergeWebhookGlobals(dst, src *middlewares.WebhookGlobalConfig) bool {
+	changed := false
+	if dst.Webhooks == "" && src.Webhooks != "" {
+		dst.Webhooks = src.Webhooks
+		changed = true
 	}
-	if c.WebhookConfigs.Global.AllowedHosts == "*" && parsed.Global.AllowedHosts != "*" {
-		c.WebhookConfigs.Global.AllowedHosts = parsed.Global.AllowedHosts
+	if dst.AllowedHosts == "*" && src.AllowedHosts != "*" && src.AllowedHosts != "" {
+		dst.AllowedHosts = src.AllowedHosts
+		changed = true
 	}
+	defaultTTL := 24 * time.Hour
+	if dst.PresetCacheTTL == defaultTTL && src.PresetCacheTTL != 0 && src.PresetCacheTTL != defaultTTL {
+		dst.PresetCacheTTL = src.PresetCacheTTL
+		changed = true
+	}
+	return changed
 }
 
 // buildWebhookConfigsFromLabels creates WebhookConfig objects from label-parsed webhook params.
@@ -409,18 +460,24 @@ func pickWebhookLabel(globals map[string]any, canonical string, logger *slog.Log
 	return "", false
 }
 
-// applyGlobalWebhookLabels extracts the webhook-list selector from the globals
-// map (populated from service container labels) into the Config's
-// WebhookConfigs.Global. Accepts both the canonical webhook-webhooks form and
-// the legacy unprefixed webhooks form left behind by #618 (with a one-shot
-// deprecation warning).
+// applyGlobalWebhookLabels extracts the operator-tunable webhook globals from
+// the globals map (populated from service container labels) into the Config's
+// WebhookConfigs.Global. Two keys are handled:
+//
+//   - webhook-webhooks: the per-job/global selector. Accepts both the
+//     canonical form and the legacy unprefixed `webhooks` form left behind by
+//     #618 (with a one-shot deprecation warning).
+//   - webhook-preset-cache-ttl: how long remote presets are cached. Not
+//     SSRF-sensitive — narrowing or widening the TTL cannot widen the network
+//     egress surface — and operationally tunable, so exposing it via labels is
+//     a UX win without weakening the #486 boundary.
 //
 // SSRF-sensitive globals (webhook-allowed-hosts, webhook-allow-remote-presets,
-// webhook-trusted-preset-sources, webhook-preset-cache-dir) and the
-// not-yet-merged webhook-preset-cache-ttl are intentionally NOT applied here
-// even when they appear in the map: the production allow-list filters them
-// upstream, and skipping them at the reader is defense-in-depth so any future
-// caller that hands this helper raw label data cannot re-enable the #486 risk.
+// webhook-trusted-preset-sources, webhook-preset-cache-dir) are intentionally
+// NOT applied here even when they appear in the map: the production allow-list
+// filters them upstream, and skipping them at the reader is defense-in-depth
+// so any future caller that hands this helper raw label data cannot re-enable
+// the #486 risk.
 func applyGlobalWebhookLabels(c *Config, globals map[string]any) {
 	if c.WebhookConfigs == nil {
 		c.WebhookConfigs = NewWebhookConfigs()
@@ -428,5 +485,15 @@ func applyGlobalWebhookLabels(c *Config, globals map[string]any) {
 
 	if s, ok := pickWebhookLabel(globals, webhookGlobalKeyWebhooks, c.logger); ok {
 		c.WebhookConfigs.Global.Webhooks = s
+	}
+	if v, ok := globals[webhookGlobalKeyPresetCacheTTL]; ok {
+		if s, ok := v.(string); ok {
+			if d, err := time.ParseDuration(s); err == nil {
+				c.WebhookConfigs.Global.PresetCacheTTL = d
+			} else if c.logger != nil {
+				c.logger.Warn("ignoring invalid webhook-preset-cache-ttl label",
+					"value", s, "error", err.Error())
+			}
+		}
 	}
 }

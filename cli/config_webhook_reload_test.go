@@ -110,3 +110,83 @@ trigger = on-error
 	require.Error(t, middlewares.ValidateWebhookURL("https://forbidden.example.com/path"),
 		"after live-reload tightens webhook-allowed-hosts, the URL validator must reject hosts outside the new whitelist (#620)")
 }
+
+// TestIniConfigUpdate_NewWebhookSection_Applied covers fix (C) for issue #640:
+// when an operator adds a new [webhook "name"] section to the INI file at
+// runtime, iniConfigUpdate must surface it through to c.WebhookConfigs.Webhooks
+// so the manager can register it. Previously the reload only refreshed the
+// embedded global fields (via the dual-store collapse from #620) and never
+// iterated over newly added webhook sections, so a new [webhook] block had
+// no effect until restart.
+//
+// Marked non-parallel for the same reason as the sibling reload test: the
+// URL validator and security config live in package globals.
+func TestIniConfigUpdate_NewWebhookSection_Applied(t *testing.T) {
+	t.Cleanup(func() {
+		middlewares.SetGlobalSecurityConfig(nil)
+	})
+
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.ini")
+
+	// Initial config: a single webhook so InitManager wires up the validator.
+	initial := `[global]
+webhook-allowed-hosts = *
+[webhook "alert"]
+url = https://hooks.slack.com/services/ABC
+trigger = on-error
+`
+	require.NoError(t, os.WriteFile(configPath, []byte(initial), 0o644))
+
+	logger := test.NewTestLogger()
+	config, err := BuildFromFile(configPath, logger)
+	require.NoError(t, err)
+
+	// Mirror the InitializeApp wiring the test bypasses.
+	config.sh = core.NewScheduler(logger)
+	config.dockerHandler = &DockerHandler{ctx: context.Background(), logger: logger}
+	config.configPath = configPath
+	config.levelVar = &slog.LevelVar{}
+	require.NoError(t, config.WebhookConfigs.InitManager(),
+		"webhook manager must initialize before reload so InitManager re-runs on change")
+	config.buildSchedulerMiddlewares(config.sh)
+
+	require.Contains(t, config.WebhookConfigs.Webhooks, "alert",
+		"baseline: the original [webhook \"alert\"] section must be loaded")
+	require.NotContains(t, config.WebhookConfigs.Webhooks, "newhook",
+		"baseline: the new webhook is not yet defined")
+
+	// Operator adds a brand-new [webhook "newhook"] section via INI live-reload.
+	updated := `[global]
+webhook-allowed-hosts = *
+[webhook "alert"]
+url = https://hooks.slack.com/services/ABC
+trigger = on-error
+[webhook "newhook"]
+url = https://example.com/new
+trigger = on-error
+`
+	config.configModTime = time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, os.WriteFile(configPath, []byte(updated), 0o644))
+
+	require.NoError(t, config.iniConfigUpdate())
+
+	// (1) The data store must reflect the newly defined section.
+	wh, ok := config.WebhookConfigs.Webhooks["newhook"]
+	require.True(t, ok,
+		"after live-reload, a newly added [webhook \"name\"] section must be surfaced in c.WebhookConfigs.Webhooks (#640)")
+	assert.Equal(t, "https://example.com/new", wh.URL,
+		"the new webhook must carry its INI-defined URL")
+
+	// (2) The new webhook's name must be tracked as INI-sourced so a label
+	// reconcile cannot subsequently overwrite it.
+	require.NotNil(t, config.WebhookConfigs.iniWebhookNames,
+		"iniWebhookNames must be tracked after a live-reload that adds a webhook")
+	_, isINI := config.WebhookConfigs.iniWebhookNames["newhook"]
+	assert.True(t, isINI,
+		"a newly added INI webhook must be tracked in iniWebhookNames so labels cannot overwrite it (#640)")
+
+	// (3) Enforcement: the manager must have re-registered the new webhook.
+	require.NotNil(t, config.WebhookConfigs.Manager,
+		"manager must remain initialized after live-reload")
+}

@@ -230,10 +230,11 @@ ofelia.webhook.slack.timeout=30s
 ofelia.webhook.slack.retry-count=3
 ofelia.webhook.slack.link=https://logs.example.com
 ofelia.webhook.slack.link-text=View Logs
-# Global webhook selector (on service container).
-# Only this key is exposed via labels — SSRF-sensitive globals
-# (webhook-allowed-hosts, etc.) are INI-only. See webhooks.md, #486.
+# Global webhook keys exposed via labels (on service container).
+# SSRF-sensitive globals (webhook-allowed-hosts, etc.) are INI-only.
+# See webhooks.md, #486.
 ofelia.webhook-webhooks=slack
+ofelia.webhook-preset-cache-ttl=12h
 # Assign webhook to job (on any container)
 ofelia.job-exec.backup.webhooks=slack
 ```

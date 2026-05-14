@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -76,6 +77,12 @@ func TestGlobalLabelAllowList_WebhookKeys_MatchMapstructureTags(t *testing.T) {
 // parity test only catches drift toward the allow-list; this test catches
 // drift the other way (a future change accidentally enabling a sensitive key
 // for labels).
+//
+// webhook-preset-cache-ttl is intentionally NOT in the forbidden list: it is
+// operationally tunable and not SSRF-sensitive (narrowing or widening a cache
+// TTL cannot widen the egress surface), and #640 wired it through the merge
+// path so allow-listing it no longer silently drops the value. See
+// TestGlobalLabelAllowList_AllowsOperationallyTunableWebhookKeys below.
 func TestGlobalLabelAllowList_OmitsSSRFSensitiveWebhookKeys(t *testing.T) {
 	t.Parallel()
 
@@ -84,15 +91,30 @@ func TestGlobalLabelAllowList_OmitsSSRFSensitiveWebhookKeys(t *testing.T) {
 		"webhook-allow-remote-presets",
 		"webhook-trusted-preset-sources",
 		"webhook-preset-cache-dir",
-		// preset-cache-ttl is excluded because mergeWebhookConfigs
-		// does not currently propagate it from labels to the live
-		// config; allow-listing it would silently document a label
-		// that gets dropped on every reconcile.
-		"webhook-preset-cache-ttl",
 	}
 	for _, key := range forbidden {
 		assert.Falsef(t, globalLabelAllowList[key],
 			"globalLabelAllowList must NOT contain %q — see #486 (SSRF) / #620 and the docker-labels.go comment",
+			key)
+	}
+}
+
+// TestGlobalLabelAllowList_AllowsOperationallyTunableWebhookKeys is the
+// positive counterpart to the SSRF guard above: the webhook-* keys that are
+// safe to set from a service-container label MUST be present in the
+// allow-list. Removing one (e.g., the PR #637 review removal of
+// webhook-preset-cache-ttl) silently drops the documented label value at the
+// allow-list filter, which is exactly the regression #640 reports.
+func TestGlobalLabelAllowList_AllowsOperationallyTunableWebhookKeys(t *testing.T) {
+	t.Parallel()
+
+	allowed := []string{
+		"webhook-webhooks",
+		"webhook-preset-cache-ttl",
+	}
+	for _, key := range allowed {
+		assert.Truef(t, globalLabelAllowList[key],
+			"globalLabelAllowList MUST contain %q — operator-tunable, non-SSRF-sensitive label (#640)",
 			key)
 	}
 }
@@ -139,6 +161,10 @@ func TestApplyGlobalWebhookLabels_LegacyKey_BackwardCompat(t *testing.T) {
 // reach this helper directly (bypassing the production allow-list filter),
 // they MUST NOT be applied to WebhookConfigs.Global. The defaults from
 // NewWebhookConfigs must survive untouched.
+//
+// webhook-preset-cache-ttl is exercised in
+// TestApplyGlobalWebhookLabels_PresetCacheTTL_Applied below — that key is
+// operator-tunable and not SSRF-sensitive, so labels are allowed to set it.
 func TestApplyGlobalWebhookLabels_SSRFKeysIgnored(t *testing.T) {
 	t.Parallel()
 
@@ -150,7 +176,6 @@ func TestApplyGlobalWebhookLabels_SSRFKeysIgnored(t *testing.T) {
 		"webhook-allow-remote-presets":   "true",
 		"webhook-trusted-preset-sources": "https://attacker.example/",
 		"webhook-preset-cache-dir":       "/tmp/attacker",
-		"webhook-preset-cache-ttl":       "1ns",
 		// Legacy unprefixed forms must also be ignored.
 		"allow-remote-presets":   "true",
 		"trusted-preset-sources": "https://attacker.example/",
@@ -168,8 +193,47 @@ func TestApplyGlobalWebhookLabels_SSRFKeysIgnored(t *testing.T) {
 		"webhook-trusted-preset-sources is INI-only; labels must not change it (#486)")
 	assert.Equal(t, defaults.PresetCacheDir, cfg.WebhookConfigs.Global.PresetCacheDir,
 		"webhook-preset-cache-dir is INI-only; labels must not change it (#486)")
+	// preset-cache-ttl (legacy, no prefix) has no alias on the canonical key,
+	// so it must not be applied either — only the prefixed form is recognized.
 	assert.Equal(t, defaults.PresetCacheTTL, cfg.WebhookConfigs.Global.PresetCacheTTL,
-		"webhook-preset-cache-ttl is not yet propagated; labels must not change it")
+		"unprefixed legacy preset-cache-ttl has no canonical alias and must not change WebhookConfigs.Global")
+}
+
+// TestApplyGlobalWebhookLabels_PresetCacheTTL_Applied is the positive
+// counterpart to the SSRF-key block above. webhook-preset-cache-ttl is
+// operator-tunable (narrowing or widening a cache TTL cannot widen the
+// network egress surface), so labels are allowed to set it. See #640.
+func TestApplyGlobalWebhookLabels_PresetCacheTTL_Applied(t *testing.T) {
+	t.Parallel()
+
+	cfg := NewConfig(test.NewTestLogger())
+	require.Equal(t, 24*time.Hour, cfg.WebhookConfigs.Global.PresetCacheTTL,
+		"baseline: NewConfig must seed the documented PresetCacheTTL default")
+
+	applyGlobalWebhookLabels(cfg, map[string]any{
+		"webhook-preset-cache-ttl": "12h",
+	})
+
+	assert.Equal(t, 12*time.Hour, cfg.WebhookConfigs.Global.PresetCacheTTL,
+		"webhook-preset-cache-ttl from a Docker label must reach WebhookConfigs.Global (#640)")
+}
+
+// TestApplyGlobalWebhookLabels_PresetCacheTTL_InvalidIgnored asserts that an
+// unparseable webhook-preset-cache-ttl value leaves the existing TTL
+// unchanged. The label parser must not zero the field on a typo or substitute
+// any non-default value silently.
+func TestApplyGlobalWebhookLabels_PresetCacheTTL_InvalidIgnored(t *testing.T) {
+	t.Parallel()
+
+	cfg := NewConfig(test.NewTestLogger())
+	original := cfg.WebhookConfigs.Global.PresetCacheTTL
+
+	applyGlobalWebhookLabels(cfg, map[string]any{
+		"webhook-preset-cache-ttl": "not-a-duration",
+	})
+
+	assert.Equal(t, original, cfg.WebhookConfigs.Global.PresetCacheTTL,
+		"an invalid webhook-preset-cache-ttl label must leave the existing TTL untouched")
 }
 
 // TestApplyGlobalWebhookLabels_PrefixedWinsOverLegacy asserts that when both

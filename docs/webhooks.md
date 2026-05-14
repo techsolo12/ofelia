@@ -79,16 +79,16 @@ All webhook parameters can be set via Docker labels on the service container:
 | `ofelia.webhook.NAME.link` | Optional URL to include in notification |
 | `ofelia.webhook.NAME.link-text` | Display text for link |
 
-Only the webhook-list selector is exposed via Docker labels — the SSRF-sensitive
-globals (`webhook-allowed-hosts`, `webhook-allow-remote-presets`,
-`webhook-trusted-preset-sources`, `webhook-preset-cache-dir`) and
-`webhook-preset-cache-ttl` (whose label-merge path is not yet implemented) must
-be set via the INI `[global]` section. The label name uses the same `webhook-*`
-prefix as the INI key:
+Two operator-tunable, non-SSRF-sensitive webhook globals are exposed via
+Docker labels. The SSRF-sensitive globals (`webhook-allowed-hosts`,
+`webhook-allow-remote-presets`, `webhook-trusted-preset-sources`,
+`webhook-preset-cache-dir`) must be set via the INI `[global]` section. The
+label names use the same `webhook-*` prefix as the INI keys:
 
 | Label | Description |
 |-------|-------------|
 | `ofelia.webhook-webhooks` | Default webhooks for all jobs (comma-separated) |
+| `ofelia.webhook-preset-cache-ttl` | Cache lifetime for remote presets (e.g. `12h`). INI value wins on conflict. |
 
 > **Security:** the SSRF-sensitive webhook globals listed above are intentionally **not** accepted from container labels to prevent a malicious container from widening the network egress surface or pointing the preset cache at an attacker-controlled directory. They must be set in the INI `[global]` section. See [#486](https://github.com/netresearch/ofelia/issues/486).
 

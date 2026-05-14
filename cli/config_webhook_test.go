@@ -590,12 +590,16 @@ func TestApplyWebhookLabelParams_EmptyValues(t *testing.T) {
 	}
 }
 
-// TestApplyGlobalWebhookLabels_OnlyWebhooksKeyApplied asserts that only the
-// webhook-list selector reaches WebhookConfigs.Global. The other webhook
-// globals are SSRF-sensitive (#486) or not yet wired through the label merge
-// path, so they must remain at their NewWebhookConfigs defaults even when
-// passed in. This is a defense-in-depth check; the production allow-list
-// already filters them upstream.
+// TestApplyGlobalWebhookLabels_OnlyWebhooksKeyApplied asserts the policy
+// boundary: the operator-tunable selector (webhook-webhooks, exercised here
+// via its legacy unprefixed alias) reaches WebhookConfigs.Global, while the
+// SSRF-sensitive globals (allowed-hosts, allow-remote-presets,
+// trusted-preset-sources, preset-cache-dir) do NOT. This is a defense-in-depth
+// check; the production allow-list already filters them upstream.
+//
+// webhook-preset-cache-ttl is now operator-tunable via labels (#640) and is
+// covered by TestApplyGlobalWebhookLabels_PresetCacheTTL_Applied in the
+// parity test file.
 func TestApplyGlobalWebhookLabels_OnlyWebhooksKeyApplied(t *testing.T) {
 	t.Parallel()
 	c := NewConfig(nil)
@@ -605,7 +609,6 @@ func TestApplyGlobalWebhookLabels_OnlyWebhooksKeyApplied(t *testing.T) {
 		"webhooks":               "slack-alerts,discord",
 		"allow-remote-presets":   "true",
 		"trusted-preset-sources": "gh:myorg/*",
-		"preset-cache-ttl":       "1h",
 		"preset-cache-dir":       "/tmp/presets",
 		"webhook-allowed-hosts":  "hooks.slack.com,ntfy.internal",
 	}
@@ -620,9 +623,6 @@ func TestApplyGlobalWebhookLabels_OnlyWebhooksKeyApplied(t *testing.T) {
 	}
 	if c.WebhookConfigs.Global.TrustedPresetSources != defaults.TrustedPresetSources {
 		t.Errorf("TrustedPresetSources must remain at default — labels must not change SSRF-sensitive globals (#486), got %q", c.WebhookConfigs.Global.TrustedPresetSources)
-	}
-	if c.WebhookConfigs.Global.PresetCacheTTL != defaults.PresetCacheTTL {
-		t.Errorf("PresetCacheTTL must remain at default — label support pending (mergeWebhookConfigs gap), got %v", c.WebhookConfigs.Global.PresetCacheTTL)
 	}
 	if c.WebhookConfigs.Global.PresetCacheDir != defaults.PresetCacheDir {
 		t.Errorf("PresetCacheDir must remain at default — labels must not change SSRF-sensitive globals (#486), got %q", c.WebhookConfigs.Global.PresetCacheDir)

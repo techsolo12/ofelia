@@ -55,15 +55,17 @@ var globalLabelAllowList = map[string]bool{
 	"restore-history":         true,
 	"restore-history-max-age": true,
 
-	// Webhook global settings — only the webhook-list selector is exposed
-	// via labels. The SSRF-sensitive keys (webhook-allowed-hosts,
+	// Webhook global settings — operator-tunable, non-SSRF-sensitive keys
+	// are exposed via labels. The SSRF-sensitive keys (webhook-allowed-hosts,
 	// webhook-allow-remote-presets, webhook-trusted-preset-sources,
-	// webhook-preset-cache-dir) and webhook-preset-cache-ttl (whose merge
-	// path is not yet implemented) stay INI-only to prevent containers from
+	// webhook-preset-cache-dir) stay INI-only to prevent containers from
 	// widening the network egress surface or redirecting preset loading.
-	// See #486 and #620, plus the negative regression test in
+	// webhook-preset-cache-ttl is exposed because narrowing or widening a
+	// cache TTL cannot widen the egress surface — see #486, #620, #640, plus
+	// the negative regression test in
 	// TestGlobalLabelAllowList_OmitsSSRFSensitiveWebhookKeys.
-	webhookGlobalKeyWebhooks: true,
+	webhookGlobalKeyWebhooks:       true,
+	webhookGlobalKeyPresetCacheTTL: true,
 
 	// Legacy unprefixed form left behind by #618 on the label side. Kept in
 	// the allow-list so values still reach applyGlobalWebhookLabels, which
