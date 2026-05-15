@@ -427,8 +427,10 @@ func TestWebhookTemplateFuncs_Truncate(t *testing.T) {
 // table on the `json` template helper: every byte U+0000-U+001F must
 // produce a valid JSON escape sequence so the receiver's parser doesn't
 // reject the body when stdout contains terminal escapes (`\x1b`), bell
-// (`\x07`), NUL, form feed, etc. Regression for the gap flagged by the
-// parallel reviewer pass on #677.
+// (`\x07`), NUL, form feed, etc. The bundled `json-post` preset added
+// for #676 is the first consumer that routes untrusted command output
+// (Execution.Output / Execution.Stderr) through this helper, which is
+// what surfaced the latent escape gap.
 func TestWebhookTemplateFuncs_JSON_RFC8259EscapeCoverage(t *testing.T) {
 	t.Parallel()
 	fn := webhookTemplateFuncs["json"].(func(string) string)

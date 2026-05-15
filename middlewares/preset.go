@@ -154,8 +154,11 @@ func (l *PresetLoader) AddLocalPresetDir(dir string) {
 //
 // Operators can opt out of the fallback by setting `webhook-default-preset`
 // to an empty string in INI or via Docker label; that path returns "" here,
-// and NewWebhook then fails attachment with a Validate error when the
-// per-webhook config also omits both `preset` and `url`.
+// and NewWebhook then fails attachment for any webhook that omits `preset`
+// — regardless of whether `url` is set — with an error naming
+// webhook-default-preset so operators can grep their way to the docs.
+// (Setting `url` alone is not enough once the fallback is disabled: `url`
+// only overrides the preset's url_scheme, not the preset itself.)
 //
 // See https://github.com/netresearch/ofelia/issues/676.
 func (l *PresetLoader) DefaultPreset() string {
