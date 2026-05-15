@@ -34,10 +34,11 @@ const (
 	webhookGlobalKeyWebhooks       = "webhook-webhooks"
 	webhookGlobalKeyPresetCacheTTL = "webhook-preset-cache-ttl"
 	// webhookGlobalKeyDefaultPreset selects the preset used when a webhook's
-	// per-instance `preset` field is empty (default: "generic"). Operator-
-	// tunable; not SSRF-sensitive — narrowing or widening the default cannot
-	// reach a new network destination because every webhook still goes
-	// through the same URL allow-list and preset loader. See #676.
+	// per-instance `preset` field is empty (default: middlewares.DefaultPresetName,
+	// which is "json-post"). Operator-tunable; not SSRF-sensitive — narrowing or
+	// widening the default cannot reach a new network destination because every
+	// webhook still goes through the same URL allow-list and preset loader.
+	// See #676.
 	webhookGlobalKeyDefaultPreset = "webhook-default-preset"
 
 	// Legacy unprefixed form left behind by #618 when the INI side was

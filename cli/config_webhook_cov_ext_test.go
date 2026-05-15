@@ -455,6 +455,123 @@ func TestApplyGlobalWebhookLabels_InvalidTypes_Coverage(t *testing.T) {
 	assert.Empty(t, cfg.WebhookConfigs.Global.Webhooks)
 }
 
+// TestApplyGlobalWebhookLabels_DefaultPreset covers the three observable
+// inputs for the webhook-default-preset Docker label: missing (no mutation),
+// empty string (explicit opt-out → non-nil ""), and a custom preset name.
+// All three exercise the new branch added for #676.
+func TestApplyGlobalWebhookLabels_DefaultPreset(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing label leaves DefaultPreset at nil", func(t *testing.T) {
+		t.Parallel()
+		cfg := NewConfig(test.NewTestLogger())
+		applyGlobalWebhookLabels(cfg, map[string]any{})
+		assert.Nil(t, cfg.WebhookConfigs.Global.DefaultPreset,
+			"absent label must leave the *string at nil so the bundled fallback wins")
+	})
+
+	t.Run("empty label is captured as non-nil opt-out", func(t *testing.T) {
+		t.Parallel()
+		cfg := NewConfig(test.NewTestLogger())
+		applyGlobalWebhookLabels(cfg, map[string]any{"webhook-default-preset": ""})
+		require.NotNil(t, cfg.WebhookConfigs.Global.DefaultPreset,
+			"empty label must be captured as non-nil to encode explicit opt-out")
+		assert.Empty(t, *cfg.WebhookConfigs.Global.DefaultPreset)
+		assert.Empty(t, cfg.WebhookConfigs.Global.EffectiveDefaultPreset(),
+			"opt-out resolves to empty — NewWebhook then fails Validate for url-only configs")
+	})
+
+	t.Run("custom label overrides the bundled fallback", func(t *testing.T) {
+		t.Parallel()
+		cfg := NewConfig(test.NewTestLogger())
+		applyGlobalWebhookLabels(cfg, map[string]any{"webhook-default-preset": "my-custom"})
+		require.NotNil(t, cfg.WebhookConfigs.Global.DefaultPreset)
+		assert.Equal(t, "my-custom", *cfg.WebhookConfigs.Global.DefaultPreset)
+		assert.Equal(t, "my-custom", cfg.WebhookConfigs.Global.EffectiveDefaultPreset())
+	})
+
+	t.Run("non-string label is silently ignored", func(t *testing.T) {
+		t.Parallel()
+		cfg := NewConfig(test.NewTestLogger())
+		applyGlobalWebhookLabels(cfg, map[string]any{"webhook-default-preset": 42})
+		assert.Nil(t, cfg.WebhookConfigs.Global.DefaultPreset,
+			"non-string label value must not panic and must not set the field")
+	})
+}
+
+// TestMergeWebhookGlobals_DefaultPreset exercises the nil-vs-set merge
+// semantics added for #676. Covers the case where INI did not set the key
+// (dst.DefaultPreset == nil), a label parsed a value into src, and the
+// merge must take the label value without disturbing already-explicit INI.
+func TestMergeWebhookGlobals_DefaultPreset(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil dst + non-nil src adopts label value", func(t *testing.T) {
+		t.Parallel()
+		dst := middlewares.DefaultWebhookGlobalConfig() // nil DefaultPreset
+		require.Nil(t, dst.DefaultPreset)
+		v := "my-custom"
+		src := &middlewares.WebhookGlobalConfig{DefaultPreset: &v}
+
+		changed := mergeWebhookGlobals(dst, src)
+
+		assert.True(t, changed, "label value must register as a change")
+		require.NotNil(t, dst.DefaultPreset)
+		assert.Equal(t, "my-custom", *dst.DefaultPreset)
+	})
+
+	t.Run("nil dst + non-nil empty src adopts explicit opt-out", func(t *testing.T) {
+		t.Parallel()
+		dst := middlewares.DefaultWebhookGlobalConfig()
+		empty := ""
+		src := &middlewares.WebhookGlobalConfig{DefaultPreset: &empty}
+
+		changed := mergeWebhookGlobals(dst, src)
+
+		assert.True(t, changed)
+		require.NotNil(t, dst.DefaultPreset)
+		assert.Empty(t, *dst.DefaultPreset,
+			"explicit opt-out from labels must survive the merge")
+	})
+
+	t.Run("non-nil dst + non-nil src keeps INI value", func(t *testing.T) {
+		t.Parallel()
+		iniValue := "ini-choice"
+		dst := &middlewares.WebhookGlobalConfig{DefaultPreset: &iniValue}
+		labelValue := "label-choice"
+		src := &middlewares.WebhookGlobalConfig{DefaultPreset: &labelValue}
+
+		mergeWebhookGlobals(dst, src)
+
+		require.NotNil(t, dst.DefaultPreset)
+		assert.Equal(t, "ini-choice", *dst.DefaultPreset,
+			"explicit INI must win over conflicting label — the whole point of *string")
+	})
+
+	t.Run("non-nil dst + nil src is a no-op", func(t *testing.T) {
+		t.Parallel()
+		iniValue := "ini-choice"
+		dst := &middlewares.WebhookGlobalConfig{DefaultPreset: &iniValue}
+		src := &middlewares.WebhookGlobalConfig{}
+
+		mergeWebhookGlobals(dst, src)
+
+		require.NotNil(t, dst.DefaultPreset)
+		assert.Equal(t, "ini-choice", *dst.DefaultPreset)
+	})
+
+	t.Run("nil dst + nil src leaves nil", func(t *testing.T) {
+		t.Parallel()
+		dst := middlewares.DefaultWebhookGlobalConfig()
+		src := &middlewares.WebhookGlobalConfig{}
+
+		mergeWebhookGlobals(dst, src)
+
+		assert.Nil(t, dst.DefaultPreset,
+			"no signal anywhere → field stays nil → EffectiveDefaultPreset returns the bundled name")
+	})
+}
+
 // --- parseWebhookName ---
 
 func TestParseWebhookName(t *testing.T) {

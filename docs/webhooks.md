@@ -211,13 +211,20 @@ webhook-allowed-hosts = *
 webhook-default-preset = json-post
 ```
 
-> **INI vs Docker labels:** `webhook-webhooks` is the only entry above that is
-> also accepted via Docker labels (as `ofelia.webhook-webhooks`). The remaining
-> SSRF-sensitive keys (`webhook-trusted-preset-sources`, `webhook-preset-cache-dir`,
-> `webhook-allowed-hosts`, `webhook-allow-remote-presets`) and
-> `webhook-preset-cache-ttl` (whose label-merge path is not yet implemented)
-> must be set in the INI `[global]` section. See [#486](https://github.com/netresearch/ofelia/issues/486)
-> and [#620](https://github.com/netresearch/ofelia/issues/620).
+> **INI vs Docker labels:** the operator-tunable, non-SSRF-sensitive globals are
+> all also accepted via Docker labels on the Ofelia service container:
+>
+> - `ofelia.webhook-webhooks` — global selector
+> - `ofelia.webhook-preset-cache-ttl` — remote preset cache lifetime
+> - `ofelia.webhook-default-preset` — fallback when a webhook omits `preset` (see #676)
+>
+> The SSRF-sensitive keys (`webhook-trusted-preset-sources`, `webhook-preset-cache-dir`,
+> `webhook-allowed-hosts`, `webhook-allow-remote-presets`) remain INI-only and
+> must be set in the INI `[global]` section so a malicious container cannot widen
+> the network egress surface or repoint preset loading. See
+> [#486](https://github.com/netresearch/ofelia/issues/486),
+> [#620](https://github.com/netresearch/ofelia/issues/620), and
+> [#640](https://github.com/netresearch/ofelia/issues/640).
 
 ## Preset Examples
 
@@ -358,8 +365,8 @@ labels:
 
 ### Payload shape
 
-The bundled `json-post` preset POSTs `Content-Type: application/json` with a
-body shaped like:
+The bundled `json-post` preset POSTs `Content-Type: application/json; charset=utf-8`
+with a body shaped like:
 
 ```json
 {
@@ -401,8 +408,10 @@ to empty:
 webhook-default-preset =
 ```
 
-After opting out, any webhook missing `preset` (and not declaring `url` +
-a custom preset) fails attachment with a logged error.
+After opting out, any webhook that omits `preset` fails attachment with a
+logged error — operators must declare `preset` on every webhook explicitly.
+A `url = ...` alone is not enough once the fallback is disabled: the
+preset is required, and `url` only overrides the preset's `url_scheme`.
 
 ## Remote Presets
 

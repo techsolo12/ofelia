@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -721,6 +722,163 @@ func TestNewWebhook_DefaultPresetOptOut(t *testing.T) {
 	require.Error(t, err, "neither preset nor url, fallback disabled → must fail validation")
 	assert.Contains(t, err.Error(), "either preset or url",
 		"opt-out should surface the original validation message")
+}
+
+// TestNewWebhook_DefaultPresetCustom verifies that an operator-chosen
+// default preset (non-nil non-empty) is used as the fallback instead of
+// the bundled json-post when a webhook omits `preset`. Exercises the
+// "operator's choice" arm of the three-intent semantics.
+func TestNewWebhook_DefaultPresetCustom(t *testing.T) {
+	t.Parallel()
+	custom := "slack" // any bundled preset name works for this test
+	global := DefaultWebhookGlobalConfig()
+	global.DefaultPreset = &custom
+	loader := NewPresetLoader(global)
+
+	cfg := &WebhookConfig{
+		Name:    "custom-default",
+		ID:      "T123/B456",
+		Secret:  "xoxb-secret",
+		Trigger: TriggerAlways,
+	}
+	mw, err := NewWebhook(cfg, loader)
+	require.NoError(t, err, "operator default %q should resolve and load", custom)
+	require.NotNil(t, mw)
+	assert.Equal(t, "slack", cfg.Preset,
+		"NewWebhook must fill Preset from the operator's chosen default, not the bundled json-post")
+}
+
+// TestNewWebhook_ExplicitPresetWinsOverDefault verifies that a per-webhook
+// `preset = X` overrides any global default. The default is only a
+// fallback — it must never overwrite explicit operator intent.
+func TestNewWebhook_ExplicitPresetWinsOverDefault(t *testing.T) {
+	t.Parallel()
+	custom := "slack"
+	global := DefaultWebhookGlobalConfig()
+	global.DefaultPreset = &custom
+	loader := NewPresetLoader(global)
+
+	cfg := &WebhookConfig{
+		Name:    "explicit",
+		Preset:  "discord", // operator chose this explicitly
+		ID:      "channel-id",
+		Secret:  "webhook-token",
+		Trigger: TriggerAlways,
+	}
+	_, err := NewWebhook(cfg, loader)
+	require.NoError(t, err)
+	assert.Equal(t, "discord", cfg.Preset,
+		"per-webhook preset must survive — fallback only fires when Preset is empty")
+}
+
+// TestNewWebhook_NilLoaderReturnsError verifies the contract on the new
+// nil-loader guard added during review: webhook construction requires a
+// preset loader, and passing nil is an immediate error (not a panic).
+func TestNewWebhook_NilLoaderReturnsError(t *testing.T) {
+	t.Parallel()
+	_, err := NewWebhook(&WebhookConfig{Name: "x", URL: "https://example.com"}, nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "preset loader is required")
+}
+
+// TestJSONPostPreset_FailedExecutionRendersValidJSON exercises the
+// json-post body template on the FAILURE path, where Execution.Error,
+// Output, and Stderr can contain JSON-hostile characters (quotes,
+// newlines, backslashes). The body MUST still parse as valid JSON
+// because the template wraps every dynamic string through the `json`
+// helper (which escapes \", \\, \n, \r, \t). Regression for any future
+// refactor of the json-post YAML that forgets the escape.
+func TestJSONPostPreset_FailedExecutionRendersValidJSON(t *testing.T) {
+	// Not parallel — overrides global URL validator / transport factory.
+	SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
+	defer SetValidateWebhookURLForTest(ValidateWebhookURLImpl)
+	SetTransportFactoryForTest(func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() })
+	defer SetTransportFactoryForTest(NewSafeTransport)
+
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	loader := NewPresetLoader(DefaultWebhookGlobalConfig())
+	cfg := &WebhookConfig{
+		Name:    "url-only-fail",
+		URL:     srv.URL,
+		Trigger: TriggerAlways,
+		Timeout: 5 * time.Second,
+	}
+	mw, err := NewWebhook(cfg, loader)
+	require.NoError(t, err)
+
+	job := &TestJob{}
+	job.Name = `job "with quotes" and \backslash`
+	job.Command = "sh -c \"echo 'hi' && exit 1\""
+	sh := core.NewScheduler(newDiscardLogger())
+	e, err := core.NewExecution()
+	require.NoError(t, err)
+	ctx := core.NewContext(sh, job, e)
+	ctx.Start()
+	// Failed execution with multi-line / quote-laden error message.
+	ctx.Stop(errors.New("line one\nline \"two\"\nline\tthree"))
+
+	_ = mw.Run(ctx)
+
+	require.NotEmpty(t, gotBody)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(gotBody, &payload),
+		"failed-execution body must parse as valid JSON; got: %s", string(gotBody))
+
+	// Spot-check the escaped fields round-tripped to the expected values.
+	execMap, ok := payload["execution"].(map[string]any)
+	require.True(t, ok, "execution must be an object")
+	assert.True(t, execMap["failed"].(bool), "failed field must be true")
+	assert.Contains(t, execMap["error"], `line "two"`,
+		"escaped quote must round-trip through the template")
+	assert.Contains(t, execMap["error"], "\n",
+		"newline must round-trip — the json helper produces \\n, JSON parse rehydrates")
+
+	jobMap, ok := payload["job"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, `job "with quotes" and \backslash`, jobMap["name"])
+}
+
+// TestJSONPostPreset_OutputTruncation verifies the `truncate 4000`
+// pipeline in the json-post body template caps stdout/stderr at the
+// documented 4000-char limit (plus the "..." ellipsis), so a chatty job
+// can't produce a megabyte payload that drowns the receiver.
+func TestJSONPostPreset_OutputTruncation(t *testing.T) {
+	t.Parallel()
+	loader := NewPresetLoader(DefaultWebhookGlobalConfig())
+	preset, err := loader.Load(DefaultPresetName)
+	require.NoError(t, err)
+
+	long := strings.Repeat("A", 5000)
+	data := map[string]any{
+		"Job": WebhookJobData{Name: "j", Command: "c", Schedule: "@daily", Type: "exec"},
+		"Execution": WebhookExecutionData{
+			ID: "x", Status: "successful",
+			StartTime: time.Now(), EndTime: time.Now(),
+			Output: long, Stderr: long,
+		},
+		"Host":   WebhookHostData{Hostname: "h", Timestamp: time.Now()},
+		"Ofelia": WebhookOfeliaData{Version: "v"},
+		"Preset": PresetDataForTemplate{},
+	}
+
+	body, err := preset.RenderBodyWithPreset(data)
+	require.NoError(t, err)
+
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal([]byte(body), &payload),
+		"truncated body must still parse as JSON")
+	execMap := payload["execution"].(map[string]any)
+	output := execMap["output"].(string)
+	assert.LessOrEqual(t, len(output), 4003, // 4000 + "..."
+		"output must be truncated to ~4000 chars, got %d", len(output))
+	assert.True(t, strings.HasSuffix(output, "..."),
+		"truncated output must end with ellipsis marker")
 }
 
 func TestGetJobType_AllVariants(t *testing.T) {
