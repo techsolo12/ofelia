@@ -4,7 +4,33 @@ Ofelia supports sending webhook notifications when jobs complete. You can config
 
 ## Quick Start
 
-### INI Configuration
+### Simplest case: just POST to a URL
+
+If you only need to POST a JSON payload to an existing webhook endpoint
+(Healthchecks.io, Better Stack, a custom internal service, etc.), set
+`url =` and skip `preset` entirely — Ofelia uses the bundled `json-post`
+preset and posts a structured JSON body. No custom preset YAML needed.
+
+```ini
+[webhook "healthchecks"]
+url = https://hc.example.com/ping/00000000-0000-0000-0000-000000000000
+trigger = always
+
+[job-exec "backup-database"]
+schedule = @daily
+container = postgres
+command = pg_dump -U postgres mydb > /backup/db.sql
+webhooks = healthchecks
+```
+
+See [Custom Webhooks](#custom-webhooks-url-only-no-custom-preset) for the
+exact payload shape and how to opt out of the fallback.
+
+### With a bundled preset (Slack, Discord, Teams, Matrix, etc.)
+
+Use `preset = slack` (or `discord` / `teams` / `matrix` / `ntfy` /
+`gotify` / `pushover` / `pagerduty`) when the receiver expects a
+service-specific payload format:
 
 ```ini
 [global]
@@ -89,6 +115,7 @@ label names use the same `webhook-*` prefix as the INI keys:
 |-------|-------------|
 | `ofelia.webhook-webhooks` | Default webhooks for all jobs (comma-separated) |
 | `ofelia.webhook-preset-cache-ttl` | Cache lifetime for remote presets (e.g. `12h`). INI value wins on conflict. |
+| `ofelia.webhook-default-preset` | Preset name used when a webhook omits `preset` (default: `json-post`, the bundled JSON POST preset). Set to empty to opt out — every webhook must then declare `preset` explicitly. INI value wins on conflict. See [Custom Webhooks](#custom-webhooks-url-only-no-custom-preset). |
 
 > **Security:** the SSRF-sensitive webhook globals listed above are intentionally **not** accepted from container labels to prevent a malicious container from widening the network egress surface or pointing the preset cache at an attacker-controlled directory. They must be set in the INI `[global]` section. See [#486](https://github.com/netresearch/ofelia/issues/486).
 
@@ -399,9 +426,21 @@ is set on the webhook config, a `link` object is included.
 
 ### Opting out of the default
 
-If you do not want any webhook to use the bundled fallback (e.g. you only
-want webhooks that explicitly declare a `preset`), set the global selector
-to empty:
+Use cases for opting out:
+
+- **Audit policy** — your security team requires every outbound webhook to
+  declare its preset explicitly, so silent fallbacks during config drift
+  cannot surprise a future audit.
+- **"Ban implicit fallback"** — you want a noisy startup error when an
+  operator forgets `preset` instead of unintended JSON traffic to whatever
+  is in `url`.
+- **Bring-your-own-default** — you maintain a local preset (e.g. a
+  Loki-formatted JSON shape) and want every webhook that omits `preset` to
+  resolve to *that*, not `json-post`. Set `webhook-default-preset = my-loki`
+  instead of `=` (empty).
+
+To opt out entirely (require explicit `preset` on every webhook), set the
+global selector to empty:
 
 ```ini
 [global]
@@ -409,9 +448,10 @@ webhook-default-preset =
 ```
 
 After opting out, any webhook that omits `preset` fails attachment with a
-logged error — operators must declare `preset` on every webhook explicitly.
-A `url = ...` alone is not enough once the fallback is disabled: the
-preset is required, and `url` only overrides the preset's `url_scheme`.
+logged error that names `webhook-default-preset` so operators can grep
+straight to this section. A `url = ...` alone is not enough once the
+fallback is disabled: the preset is required, and `url` only overrides
+the preset's `url_scheme`.
 
 ## Remote Presets
 

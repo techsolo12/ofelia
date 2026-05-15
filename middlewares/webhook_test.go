@@ -701,15 +701,98 @@ func TestNewWebhook_URLOnly_UsesJSONPostFallback(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(gotBody, &payload),
 		"json-post body must parse as valid JSON; got: %s", string(gotBody))
-	assert.NotNil(t, payload["job"], "payload must include 'job' object")
-	assert.NotNil(t, payload["execution"], "payload must include 'execution' object")
-	assert.NotNil(t, payload["host"], "payload must include 'host' object")
+
+	// Field-VALUE assertions, not just key-presence. Without these a template
+	// refactor that hard-codes any field (e.g. `"name": "ofelia"`) would
+	// still pass — the receiver-facing contract is broken silently.
+	jobMap, ok := payload["job"].(map[string]any)
+	require.True(t, ok, "job must be an object")
+	assert.Equal(t, "url-only-job", jobMap["name"])
+	assert.Equal(t, "echo hi", jobMap["command"])
+
+	execMap, ok := payload["execution"].(map[string]any)
+	require.True(t, ok, "execution must be an object")
+	assert.Equal(t, "successful", execMap["status"])
+	assert.False(t, execMap["failed"].(bool))
+	assert.False(t, execMap["skipped"].(bool))
+
+	hostMap, ok := payload["host"].(map[string]any)
+	require.True(t, ok, "host must be an object")
+	assert.NotEmpty(t, hostMap["hostname"], "host.hostname must be populated")
+
+	_, hasLink := payload["link"]
+	assert.False(t, hasLink, "no link configured → JSON must omit the optional link key")
+}
+
+// TestJSONPostPreset_OptionalLinkBlock_RendersValidJSON exercises the
+// `{{if .Preset.Link}}...{{end}}` conditional in json-post.yaml. The
+// preset YAML places this block at the tail of the object so that the
+// comma-after-ofelia / no-trailing-comma rules apply — a misplaced
+// brace or comma would silently produce malformed JSON for one branch.
+// This test runs BOTH branches (Link set, Link unset) end-to-end.
+func TestJSONPostPreset_OptionalLinkBlock_RendersValidJSON(t *testing.T) {
+	// Not parallel — overrides global URL validator / transport factory.
+	SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
+	defer SetValidateWebhookURLForTest(ValidateWebhookURLImpl)
+	SetTransportFactoryForTest(func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() })
+	defer SetTransportFactoryForTest(NewSafeTransport)
+
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	loader := NewPresetLoader(DefaultWebhookGlobalConfig())
+
+	runOnce := func(t *testing.T, link, linkText string) map[string]any {
+		t.Helper()
+		gotBody = nil
+		cfg := &WebhookConfig{
+			Name: "with-link", URL: srv.URL,
+			Link: link, LinkText: linkText,
+			Trigger: TriggerAlways, Timeout: 5 * time.Second,
+		}
+		mw, err := NewWebhook(cfg, loader)
+		require.NoError(t, err)
+
+		job := &TestJob{}
+		job.Name = "linked-job"
+		job.Command = "echo"
+		sh := core.NewScheduler(newDiscardLogger())
+		e, err := core.NewExecution()
+		require.NoError(t, err)
+		ctx := core.NewContext(sh, job, e)
+		ctx.Start()
+		ctx.Stop(nil)
+
+		_ = mw.Run(ctx)
+		require.NotEmpty(t, gotBody, "test server must have received a request body")
+		var payload map[string]any
+		require.NoError(t, json.Unmarshal(gotBody, &payload),
+			"body must parse as JSON in both link branches; got: %s", string(gotBody))
+		return payload
+	}
+
+	// Branch 1: link configured → optional block must render with both fields.
+	payload := runOnce(t, "https://logs.example.com/run/abc", "View Logs")
+	linkMap, ok := payload["link"].(map[string]any)
+	require.True(t, ok, "link configured → JSON must include the optional 'link' object")
+	assert.Equal(t, "https://logs.example.com/run/abc", linkMap["url"])
+	assert.Equal(t, "View Logs", linkMap["text"])
+
+	// Branch 2: link absent → optional block must be omitted entirely.
+	payload = runOnce(t, "", "")
+	_, hasLink := payload["link"]
+	assert.False(t, hasLink, "no link configured → JSON must omit the optional link key")
 }
 
 // TestNewWebhook_DefaultPresetOptOut verifies that setting
-// webhook-default-preset to non-nil empty disables the fallback: a
-// webhook with neither preset nor url fails validation just like before
-// the json-post default existed.
+// webhook-default-preset to non-nil empty disables the fallback. The
+// error message must name `webhook-default-preset` so operators can
+// grep their way to the docs from a log line, and must name the
+// bundled fallback so they know what they opted out of.
 func TestNewWebhook_DefaultPresetOptOut(t *testing.T) {
 	t.Parallel()
 	empty := ""
@@ -719,9 +802,11 @@ func TestNewWebhook_DefaultPresetOptOut(t *testing.T) {
 
 	cfg := &WebhookConfig{Name: "opt-out", Trigger: TriggerAlways}
 	_, err := NewWebhook(cfg, loader)
-	require.Error(t, err, "neither preset nor url, fallback disabled → must fail validation")
-	assert.Contains(t, err.Error(), "either preset or url",
-		"opt-out should surface the original validation message")
+	require.Error(t, err, "url-only with fallback disabled → must fail attach")
+	assert.Contains(t, err.Error(), "webhook-default-preset",
+		"error must name the operator-tunable knob so it's greppable from logs")
+	assert.Contains(t, err.Error(), DefaultPresetName,
+		"error must name the bundled fallback so operators know what they opted out of")
 }
 
 // TestNewWebhook_DefaultPresetCustom verifies that an operator-chosen

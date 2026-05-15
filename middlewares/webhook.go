@@ -45,11 +45,28 @@ func NewWebhook(config *WebhookConfig, loader *PresetLoader) (core.Middleware, e
 	// Fall back to the global default preset (e.g. "json-post", the bundled
 	// JSON POST preset) when the per-webhook config omits `preset`. Lets
 	// operators define a webhook with just a `url` and get a sensible
-	// JSON POST without authoring a custom preset. See #676. An empty
-	// default (operator opt-out) leaves Preset empty so Validate fails
-	// with the original "either preset or url" message.
+	// JSON POST without authoring a custom preset. See #676.
 	if config.Preset == "" {
 		config.Preset = loader.DefaultPreset()
+	}
+
+	// If preset is STILL empty after the fallback, the operator has
+	// explicitly opted out of the json-post default (set
+	// [global] webhook-default-preset to an empty string) and not
+	// declared `preset` on this webhook. Surface that with a message
+	// that names webhook-default-preset so operators can grep their way
+	// to the docs. Runs before Validate so the resulting error mentions
+	// the actual knob, not a generic "either preset or url" message
+	// that doesn't hint at why the previously-working url-only config
+	// stopped working. See #676.
+	if config.Preset == "" {
+		return nil, fmt.Errorf(
+			"webhook %q: preset is required when [global] webhook-default-preset "+
+				"is set to an empty string (opt-out). Declare `preset` on this "+
+				"webhook, or unset webhook-default-preset to restore the "+
+				"bundled %q fallback for url-only configs (see #676)",
+			config.Name, DefaultPresetName,
+		)
 	}
 
 	// Validate configuration

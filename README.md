@@ -71,7 +71,7 @@ No Docker required - runs commands directly on the host system.
 
 - **Job types** for running commands in running containers, new containers,
   on the host or as one-off swarm services.
-- **Webhook notifications** send job execution results to Slack, Discord, Teams, Matrix, ntfy, Pushover, PagerDuty, Gotify, or custom endpoints with preset-based configuration and SSRF protection.
+- **Webhook notifications** send job execution results to Slack, Discord, Teams, Matrix, ntfy, Pushover, PagerDuty, Gotify, or *any HTTP endpoint* — set a bundled `preset` for service-specific formatting, or just `url = ...` to POST a JSON payload via the bundled `json-post` fallback. SSRF protection on top.
 - **Logging middlewares** integrate with email, file saves, and legacy Slack to report
   job output and status.
 - **Dynamic Docker detection** uses Docker events by default for instant container
@@ -289,6 +289,7 @@ See [Architecture overview](docs/architecture.md) for details about the schedule
 - `save-only-on-error` - only save a report if the execution was not successful.
 
 - `webhook-webhooks` - comma-separated list of webhook names to apply to every job by default.
+- `webhook-default-preset` - preset name used when a webhook configuration omits `preset` (default: `json-post`, the bundled JSON POST preset that lets `url = ...` work without authoring a custom preset). Set to empty (`webhook-default-preset =`) to opt out — webhooks must then declare `preset` explicitly or attachment fails. See [Webhook Documentation](docs/webhooks.md#custom-webhooks-url-only-no-custom-preset).
 - `webhook-allow-remote-presets` - allow fetching presets from remote URLs (default: `false`).
 - `webhook-trusted-preset-sources` - comma-separated allow-list of remote preset sources (supports glob, e.g. `gh:netresearch/*`).
 - `webhook-preset-cache-ttl` - cache duration for remote presets (default: `24h`).

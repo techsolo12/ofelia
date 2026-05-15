@@ -356,6 +356,123 @@ func TestPerJobWebhookAssignmentViaLabels(t *testing.T) {
 		"expected exec job webhooks field to be set from label")
 }
 
+// TestURLOnlyWebhookFromLabels_UsesJSONPostFallback exercises the full
+// Docker-label pipeline for issue #676: a service-container webhook
+// defined with only `url` (no `preset`) must flow through
+// buildFromDockerContainers → applyGlobalWebhookLabels → InitManager →
+// NewWebhook and resolve to the bundled `json-post` preset via the
+// global DefaultPreset fallback. Without this test the only e2e path is
+// programmatic config construction, which doesn't prove the label
+// pipeline ever wires the new default.
+func TestURLOnlyWebhookFromLabels_UsesJSONPostFallback(t *testing.T) {
+	t.Parallel()
+	c := NewConfig(test.NewTestLogger())
+
+	containers := []DockerContainerInfo{
+		{
+			Name:  "ofelia-service",
+			State: domain.ContainerState{Running: true},
+			Labels: map[string]string{
+				"ofelia.enabled":                  "true",
+				"ofelia.service":                  "true",
+				"ofelia.webhook.url-only.url":     "https://example.com/hook",
+				"ofelia.webhook.url-only.trigger": "always",
+				"ofelia.webhook.url-only.timeout": "10s",
+			},
+		},
+	}
+	require.NoError(t, c.buildFromDockerContainers(containers))
+	require.NoError(t, c.WebhookConfigs.InitManager())
+
+	mws, err := c.WebhookConfigs.Manager.GetMiddlewares([]string{"url-only"})
+	require.NoError(t, err, "url-only webhook must resolve via the bundled fallback")
+	require.Len(t, mws, 1)
+
+	wh, ok := mws[0].(*middlewares.Webhook)
+	require.True(t, ok)
+	assert.Equal(t, middlewares.DefaultPresetName, wh.Config.Preset,
+		"NewWebhook must have filled Preset from the json-post fallback")
+	assert.Equal(t, "https://example.com/hook", wh.Config.URL)
+}
+
+// TestCustomDefaultPresetViaLabel_AppliesToURLOnlyWebhook exercises the
+// label-driven side of the operator-choice arm of webhook-default-preset.
+// A label `ofelia.webhook-default-preset: slack` MUST flow through
+// applyGlobalWebhookLabels → mergeWebhookGlobals → live config, so that
+// a sibling url-only webhook on the same service container resolves to
+// `slack` instead of `json-post`.
+func TestCustomDefaultPresetViaLabel_AppliesToURLOnlyWebhook(t *testing.T) {
+	t.Parallel()
+	c := NewConfig(test.NewTestLogger())
+
+	containers := []DockerContainerInfo{
+		{
+			Name:  "ofelia-service",
+			State: domain.ContainerState{Running: true},
+			Labels: map[string]string{
+				"ofelia.enabled":                   "true",
+				"ofelia.service":                   "true",
+				"ofelia.webhook-default-preset":    "slack",
+				"ofelia.webhook.my-alerts.id":      "T123/B456",
+				"ofelia.webhook.my-alerts.secret":  "xoxb-secret",
+				"ofelia.webhook.my-alerts.trigger": "always",
+			},
+		},
+	}
+	require.NoError(t, c.buildFromDockerContainers(containers))
+
+	require.NotNil(t, c.WebhookConfigs.Global.DefaultPreset,
+		"label-set webhook-default-preset must be captured as non-nil *string")
+	assert.Equal(t, "slack", *c.WebhookConfigs.Global.DefaultPreset)
+
+	require.NoError(t, c.WebhookConfigs.InitManager())
+	mws, err := c.WebhookConfigs.Manager.GetMiddlewares([]string{"my-alerts"})
+	require.NoError(t, err)
+	require.Len(t, mws, 1)
+	wh := mws[0].(*middlewares.Webhook)
+	assert.Equal(t, "slack", wh.Config.Preset,
+		"label-driven custom default must apply to webhooks that omit preset")
+}
+
+// TestDefaultPresetOptOutViaLabel_FailsURLOnlyWebhook pins the third
+// intent (explicit empty → opt-out) through the label pipeline. The
+// resulting EffectiveDefaultPreset returns "" so a sibling url-only
+// webhook fails Validate with the original "either preset or url"
+// error — Same behavior as on the INI side, exercised end-to-end.
+func TestDefaultPresetOptOutViaLabel_FailsURLOnlyWebhook(t *testing.T) {
+	t.Parallel()
+	c := NewConfig(test.NewTestLogger())
+
+	containers := []DockerContainerInfo{
+		{
+			Name:  "ofelia-service",
+			State: domain.ContainerState{Running: true},
+			Labels: map[string]string{
+				"ofelia.enabled":                "true",
+				"ofelia.service":                "true",
+				"ofelia.webhook-default-preset": "",
+				"ofelia.webhook.bad.url":        "https://example.com/hook",
+			},
+		},
+	}
+	require.NoError(t, c.buildFromDockerContainers(containers))
+
+	require.NotNil(t, c.WebhookConfigs.Global.DefaultPreset,
+		"empty-string label must be captured as non-nil empty (opt-out)")
+	assert.Empty(t, *c.WebhookConfigs.Global.DefaultPreset)
+
+	require.NoError(t, c.WebhookConfigs.InitManager())
+	_, err := c.WebhookConfigs.Manager.GetMiddlewares([]string{"bad"})
+	require.Error(t, err, "opt-out must reject url-only webhooks at attach time")
+	// Must mention webhook-default-preset by name so operators can grep
+	// straight to the docs from a log line. The bundled fallback name
+	// must also appear so they know what changing the setting restores.
+	assert.Contains(t, err.Error(), "webhook-default-preset",
+		"error must name the operator-tunable knob")
+	assert.Contains(t, err.Error(), middlewares.DefaultPresetName,
+		"error must name the bundled fallback so operators know what they opted out of")
+}
+
 func TestGlobalLabelAllowListBlocksSecurityKeys(t *testing.T) {
 	t.Parallel()
 	logger, handler := test.NewTestLoggerWithHandler()
