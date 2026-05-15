@@ -48,6 +48,9 @@ This file explains repo‑wide conventions and where to find scoped rules.
 - `./middlewares/AGENTS.md` — notification and middleware logic
 - `./test/AGENTS.md` — testing utilities and integration tests
 
+## Recurring friction notes
+- `./docs/feedback/golangci-lint-cache-cross-worktree.md` — run `golangci-lint cache clean` before pushing if you use multiple sibling worktrees; stale cache entries from siblings get replayed as findings and block the `pre-push` hook.
+
 ## Repository hygiene
 - Manage dependencies exclusively with Go modules.
 - Do **not** vendor or commit downloaded modules. Avoid running `go mod vendor`.
