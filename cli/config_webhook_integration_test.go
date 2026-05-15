@@ -227,7 +227,7 @@ func TestBuildMiddlewares_IncludesWebhooks(t *testing.T) {
 	jobConfig.Webhooks = "test-slack"
 
 	// Build middlewares with manager
-	jobConfig.buildMiddlewares(manager)
+	jobConfig.buildMiddlewares(nil, manager)
 
 	// Verify middleware count increased (overlap + slack + save + mail + webhook)
 	// The job should have at least one middleware from the webhook
@@ -273,7 +273,7 @@ func TestBuildMiddlewares_MultipleWebhooks_AllAttached(t *testing.T) {
 	jobConfig.Schedule = "@daily"
 	jobConfig.Webhooks = "wh-success, wh-error"
 
-	jobConfig.buildMiddlewares(manager)
+	jobConfig.buildMiddlewares(nil, manager)
 
 	var (
 		individual []string
@@ -324,25 +324,25 @@ func TestBuildMiddlewares_MultipleWebhooks_AllAttached(t *testing.T) {
 // job is left without webhook middleware, instead of the previous silent
 // swallow that hid misconfigurations from operators.
 //
+// Uses a per-test slog.Logger passed via buildMiddlewares' logger parameter
+// so the assertion is hermetic — other parallel tests' egress warnings
+// don't contaminate the buffer and we don't have to mutate slog.Default().
+//
 // See https://github.com/netresearch/ofelia/issues/670.
 func TestBuildMiddlewares_WebhookAttachFailureLogged(t *testing.T) {
-	// Not parallel: mutates slog.Default(). Other tests that call
-	// middlewares.NewWebhookManager hit warnIfWideOpenEgress, which writes to
-	// the same logger and would otherwise contaminate this buffer.
+	t.Parallel()
 	globalConfig := middlewares.DefaultWebhookGlobalConfig()
 	manager := middlewares.NewWebhookManager(globalConfig)
 
 	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError}))
 
 	jobConfig := &ExecJobConfig{}
 	jobConfig.Name = "test-job"
 	jobConfig.Schedule = "@daily"
 	jobConfig.Webhooks = "missing-webhook"
 
-	jobConfig.buildMiddlewares(manager)
+	jobConfig.buildMiddlewares(logger, manager)
 
 	for _, mw := range jobConfig.ExecJob.Middlewares() {
 		if _, ok := mw.(*middlewares.Webhook); ok {
@@ -359,6 +359,69 @@ func TestBuildMiddlewares_WebhookAttachFailureLogged(t *testing.T) {
 	}
 	if !strings.Contains(logged, "missing-webhook") {
 		t.Errorf("expected log to mention the missing webhook name, got: %q", logged)
+	}
+	if !strings.Contains(logged, "job=test-job") {
+		t.Errorf("expected log to scope by job name, got: %q", logged)
+	}
+}
+
+// TestBuildMiddlewares_GlobalAndPerJobWebhooks_BothAttached verifies that
+// global webhooks (from `[global] webhook-webhooks = ...`) are unioned with
+// per-job webhook names so jobs that declare their own webhooks ALSO fire
+// the global ones. Previously the scheduler's *WebhookMiddleware shadowed
+// the per-job composite during scheduler→job propagation (same type, dropped
+// by core.middlewareContainer.Use's reflect-type dedup), so a job that
+// listed any webhook at all silently lost the global notifications.
+// See https://github.com/netresearch/ofelia/issues/670.
+func TestBuildMiddlewares_GlobalAndPerJobWebhooks_BothAttached(t *testing.T) {
+	t.Parallel()
+	globalConfig := middlewares.DefaultWebhookGlobalConfig()
+	globalConfig.Webhooks = "global-hook"
+	manager := middlewares.NewWebhookManager(globalConfig)
+
+	for _, name := range []string{"global-hook", "job-hook"} {
+		err := manager.Register(&middlewares.WebhookConfig{
+			Name:    name,
+			Preset:  "slack",
+			ID:      "T123/B456",
+			Secret:  "xoxb-secret",
+			Trigger: middlewares.TriggerAlways,
+		})
+		if err != nil {
+			t.Fatalf("register %s: %v", name, err)
+		}
+	}
+
+	jobConfig := &ExecJobConfig{}
+	jobConfig.Name = "test-job"
+	jobConfig.Schedule = "@daily"
+	jobConfig.Webhooks = "job-hook"
+
+	jobConfig.buildMiddlewares(nil, manager)
+
+	var composite *middlewares.WebhookMiddleware
+	for _, mw := range jobConfig.ExecJob.Middlewares() {
+		if w, ok := mw.(*middlewares.WebhookMiddleware); ok {
+			composite = w
+		}
+	}
+	if composite == nil {
+		t.Fatal("expected *middlewares.WebhookMiddleware composite carrying both global and per-job webhooks")
+	}
+
+	got := make(map[string]bool)
+	for _, mw := range composite.Webhooks() {
+		w, ok := mw.(*middlewares.Webhook)
+		if !ok {
+			continue
+		}
+		got[w.Config.Name] = true
+	}
+	if !got["global-hook"] {
+		t.Errorf("global-hook missing from composite — global webhooks not unioned into per-job")
+	}
+	if !got["job-hook"] {
+		t.Errorf("job-hook missing from composite")
 	}
 }
 

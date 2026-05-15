@@ -512,7 +512,7 @@ func (c *Config) registerAllJobs() {
 		j.Name = name
 		c.mergeNotificationDefaults(&j.SlackConfig, &j.MailConfig, &j.SaveConfig)
 		c.injectDedup(&j.SlackConfig, &j.MailConfig)
-		j.buildMiddlewares(wm)
+		j.buildMiddlewares(c.logger, wm)
 		_ = c.sh.AddJob(j)
 	}
 	for name, j := range c.RunJobs {
@@ -526,7 +526,7 @@ func (c *Config) registerAllJobs() {
 		j.Name = name
 		c.mergeNotificationDefaults(&j.SlackConfig, &j.MailConfig, &j.SaveConfig)
 		c.injectDedup(&j.SlackConfig, &j.MailConfig)
-		j.buildMiddlewares(wm)
+		j.buildMiddlewares(c.logger, wm)
 		_ = c.sh.AddJob(j)
 	}
 	for name, j := range c.LocalJobs {
@@ -534,7 +534,7 @@ func (c *Config) registerAllJobs() {
 		j.Name = name
 		c.mergeNotificationDefaults(&j.SlackConfig, &j.MailConfig, &j.SaveConfig)
 		c.injectDedup(&j.SlackConfig, &j.MailConfig)
-		j.buildMiddlewares(wm)
+		j.buildMiddlewares(c.logger, wm)
 		_ = c.sh.AddJob(j)
 	}
 	for name, j := range c.ServiceJobs {
@@ -548,7 +548,7 @@ func (c *Config) registerAllJobs() {
 		j.Name = name
 		c.mergeNotificationDefaults(&j.SlackConfig, &j.MailConfig, &j.SaveConfig)
 		c.injectDedup(&j.SlackConfig, &j.MailConfig)
-		j.buildMiddlewares(wm)
+		j.buildMiddlewares(c.logger, wm)
 		_ = c.sh.AddJob(j)
 	}
 	for name, j := range c.ComposeJobs {
@@ -556,7 +556,7 @@ func (c *Config) registerAllJobs() {
 		j.Name = name
 		c.mergeNotificationDefaults(&j.SlackConfig, &j.MailConfig, &j.SaveConfig)
 		c.injectDedup(&j.SlackConfig, &j.MailConfig)
-		j.buildMiddlewares(wm)
+		j.buildMiddlewares(c.logger, wm)
 		_ = c.sh.AddJob(j)
 	}
 }
@@ -674,42 +674,52 @@ func (c *Config) buildSchedulerMiddlewares(sh *core.Scheduler) {
 	sh.Use(middlewares.NewSave(&c.Global.SaveConfig))
 	sh.Use(middlewares.NewMail(&c.Global.MailConfig))
 
-	// Add global webhook middlewares wrapped in a composite. Individual
-	// *middlewares.Webhook entries cannot be added to the same container
-	// directly: core.middlewareContainer.Use() deduplicates by reflect type,
-	// so the second and any subsequent webhook would be silently dropped.
-	// See https://github.com/netresearch/ofelia/issues/670.
-	if wm := c.getWebhookManager(); wm != nil {
-		attachWebhookMiddlewares(c.logger, "<global>", wm.GetGlobalMiddlewares, sh.Use)
-	}
+	// Note: global webhooks are intentionally NOT attached to the scheduler
+	// chain. core.Scheduler.AddJobWithTags() calls j.Use(s.Middlewares()...)
+	// to propagate scheduler middlewares to each job, and
+	// core.middlewareContainer.Use() would dedup the scheduler's
+	// *WebhookMiddleware against the per-job one (same type), silently
+	// dropping every global webhook. Instead, attachJobWebhookMiddlewares
+	// merges the global names into each job's webhook list at attach time
+	// so a single per-job composite carries both sets. See #670.
 }
 
-// attachWebhookMiddlewares fetches webhook middlewares via getMiddlewares and
-// attaches them through use, wrapping them in middlewares.NewWebhookMiddleware
-// so that multiple webhook instances survive the type-based deduplication in
-// core.middlewareContainer.Use(). Errors are logged so misconfigurations
-// (unknown webhook name, preset load failure, required-variable missing) are
-// visible instead of silently disabling notifications.
+// attachJobWebhookMiddlewares resolves the union of global + per-job webhook
+// names to middlewares and attaches them through use, wrapped in a single
+// middlewares.NewWebhookMiddleware composite. Wrapping is required because
+// core.middlewareContainer.Use() deduplicates by reflect type — adding
+// individual *middlewares.Webhook instances would lose every webhook past
+// the first. Errors from resolution (unknown name, preset load, missing
+// required variable) are logged so misconfigurations are visible instead
+// of silently disabling notifications.
 //
-// scope is a short label used only in the error log (job name, or "<global>"
-// for scheduler-level webhooks).
+// jobName is used only in the error log so operators can locate the offending
+// job from a multi-job daemon.
 //
 // See https://github.com/netresearch/ofelia/issues/670.
-func attachWebhookMiddlewares(
+func attachJobWebhookMiddlewares(
 	logger *slog.Logger,
-	scope string,
-	getMiddlewares func() ([]core.Middleware, error),
+	jobName string,
+	wm *middlewares.WebhookManager,
+	perJobNames []string,
 	use func(...core.Middleware),
 ) {
-	mws, err := getMiddlewares()
+	if wm == nil {
+		return
+	}
+	names := unionWebhookNames(wm.GlobalWebhookNames(), perJobNames)
+	if len(names) == 0 {
+		return
+	}
+	mws, err := wm.GetMiddlewares(names)
 	if err != nil {
 		if logger == nil {
 			logger = slog.Default()
 		}
 		const msg = "webhook middleware attach failed; webhook notifications " +
-			"disabled for this scope until config changes trigger a rebuild " +
-			"(or daemon restart)"
-		logger.Error(msg, "scope", scope, "error", err)
+			"disabled for this job until config changes trigger a rebuild " +
+			"(or daemon restart). enable log-level=debug for resolution details."
+		logger.Error(msg, "job", jobName, "webhooks", names, "error", err)
 		return
 	}
 	if composite := middlewares.NewWebhookMiddleware(mws); composite != nil {
@@ -717,11 +727,46 @@ func attachWebhookMiddlewares(
 	}
 }
 
+// unionWebhookNames returns the deduplicated union of global and per-job
+// webhook names, in global-first order. Duplicates (where a per-job entry
+// names a webhook already in the global list) are silently dropped so each
+// webhook resolves and fires exactly once per execution.
+func unionWebhookNames(global, perJob []string) []string {
+	if len(global) == 0 {
+		return perJob
+	}
+	if len(perJob) == 0 {
+		return global
+	}
+	seen := make(map[string]struct{}, len(global)+len(perJob))
+	out := make([]string, 0, len(global)+len(perJob))
+	for _, n := range global {
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	for _, n := range perJob {
+		if _, dup := seen[n]; dup {
+			continue
+		}
+		seen[n] = struct{}{}
+		out = append(out, n)
+	}
+	return out
+}
+
 // jobConfig is implemented by all job configuration types that can be
 // scheduled. It allows handling job maps in a generic way.
+//
+// The logger parameter on buildMiddlewares is used for webhook-attachment
+// error logging so it reaches the daemon's configured handler/level rather
+// than slog.Default(); nil falls back to slog.Default() for tests that don't
+// care about log capture.
 type jobConfig interface {
 	core.Job
-	buildMiddlewares(wm *middlewares.WebhookManager)
+	buildMiddlewares(logger *slog.Logger, wm *middlewares.WebhookManager)
 	Hash() (string, error)
 	GetJobSource() JobSource
 	SetJobSource(JobSource)
@@ -793,7 +838,7 @@ func replaceIfChanged[J jobConfig](c *Config, name string, oldJob, newJob J, pre
 		return false
 	}
 	_ = c.sh.RemoveJob(oldJob)
-	newJob.buildMiddlewares(c.getWebhookManager())
+	newJob.buildMiddlewares(c.logger, c.getWebhookManager())
 	_ = c.sh.AddJob(newJob)
 	// caller updates current map entry
 	return true
@@ -818,7 +863,7 @@ func addNewJob[J jobConfig](c *Config, name string, j J, prep func(string, J), s
 		}
 	}
 
-	j.buildMiddlewares(c.getWebhookManager())
+	j.buildMiddlewares(c.logger, c.getWebhookManager())
 	_ = c.sh.AddJob(j)
 	current[name] = j
 }
@@ -974,7 +1019,7 @@ func (c *Config) iniConfigUpdate() error {
 		for _, j := range allJobs {
 			if jc, ok := j.(jobConfig); ok {
 				jc.ResetMiddlewares()
-				jc.buildMiddlewares(wm)
+				jc.buildMiddlewares(c.logger, wm)
 				j.Use(c.sh.Middlewares()...)
 			}
 		}
@@ -1063,17 +1108,33 @@ type ExecJobConfig struct {
 	JobSource                 JobSource `json:"-" mapstructure:"-"`
 }
 
-func (c *ExecJobConfig) buildMiddlewares(wm *middlewares.WebhookManager) {
-	c.ExecJob.Use(middlewares.NewOverlap(&c.OverlapConfig))
-	c.ExecJob.Use(middlewares.NewSlack(&c.SlackConfig)) //nolint:staticcheck // deprecated but kept for backwards compatibility
-	c.ExecJob.Use(middlewares.NewSave(&c.SaveConfig))
-	c.ExecJob.Use(middlewares.NewMail(&c.MailConfig))
-	if wm != nil {
-		names := c.GetWebhookNames()
-		attachWebhookMiddlewares(nil, c.ExecJob.GetName(),
-			func() ([]core.Middleware, error) { return wm.GetMiddlewares(names) },
-			c.ExecJob.Use)
-	}
+// buildJobMiddlewares attaches the standard per-job middleware stack
+// (Overlap, Slack, Save, Mail) to job j, then the webhook composite resolved
+// from per-job names unioned with the global selector. Extracted from five
+// identical per-type buildMiddlewares methods because core.Job already
+// promotes GetName() and Use(...) from the embedded BareJob, so there's no
+// remaining per-type variation worth duplicating.
+func buildJobMiddlewares(
+	logger *slog.Logger,
+	j core.Job,
+	overlap *middlewares.OverlapConfig,
+	slack *middlewares.SlackConfig,
+	save *middlewares.SaveConfig,
+	mail *middlewares.MailConfig,
+	wm *middlewares.WebhookManager,
+	webhookNames []string,
+) {
+	j.Use(middlewares.NewOverlap(overlap))
+	j.Use(middlewares.NewSlack(slack)) //nolint:staticcheck // deprecated but kept for backwards compatibility
+	j.Use(middlewares.NewSave(save))
+	j.Use(middlewares.NewMail(mail))
+	attachJobWebhookMiddlewares(logger, j.GetName(), wm, webhookNames, j.Use)
+}
+
+func (c *ExecJobConfig) buildMiddlewares(logger *slog.Logger, wm *middlewares.WebhookManager) {
+	buildJobMiddlewares(logger, &c.ExecJob,
+		&c.OverlapConfig, &c.SlackConfig, &c.SaveConfig, &c.MailConfig,
+		wm, c.GetWebhookNames())
 }
 
 func (c *ExecJobConfig) GetJobSource() JobSource  { return c.JobSource }
@@ -1103,17 +1164,10 @@ type RunJobConfig struct {
 	JobSource                 JobSource `json:"-" mapstructure:"-"`
 }
 
-func (c *RunJobConfig) buildMiddlewares(wm *middlewares.WebhookManager) {
-	c.RunJob.Use(middlewares.NewOverlap(&c.OverlapConfig))
-	c.RunJob.Use(middlewares.NewSlack(&c.SlackConfig)) //nolint:staticcheck // deprecated but kept for backwards compatibility
-	c.RunJob.Use(middlewares.NewSave(&c.SaveConfig))
-	c.RunJob.Use(middlewares.NewMail(&c.MailConfig))
-	if wm != nil {
-		names := c.GetWebhookNames()
-		attachWebhookMiddlewares(nil, c.RunJob.GetName(),
-			func() ([]core.Middleware, error) { return wm.GetMiddlewares(names) },
-			c.RunJob.Use)
-	}
+func (c *RunJobConfig) buildMiddlewares(logger *slog.Logger, wm *middlewares.WebhookManager) {
+	buildJobMiddlewares(logger, &c.RunJob,
+		&c.OverlapConfig, &c.SlackConfig, &c.SaveConfig, &c.MailConfig,
+		wm, c.GetWebhookNames())
 }
 
 func (c *RunJobConfig) GetJobSource() JobSource  { return c.JobSource }
@@ -1155,43 +1209,22 @@ type ComposeJobConfig struct {
 func (c *ComposeJobConfig) GetJobSource() JobSource  { return c.JobSource }
 func (c *ComposeJobConfig) SetJobSource(s JobSource) { c.JobSource = s }
 
-func (c *LocalJobConfig) buildMiddlewares(wm *middlewares.WebhookManager) {
-	c.LocalJob.Use(middlewares.NewOverlap(&c.OverlapConfig))
-	c.LocalJob.Use(middlewares.NewSlack(&c.SlackConfig)) //nolint:staticcheck // deprecated but kept for backwards compatibility
-	c.LocalJob.Use(middlewares.NewSave(&c.SaveConfig))
-	c.LocalJob.Use(middlewares.NewMail(&c.MailConfig))
-	if wm != nil {
-		names := c.GetWebhookNames()
-		attachWebhookMiddlewares(nil, c.LocalJob.GetName(),
-			func() ([]core.Middleware, error) { return wm.GetMiddlewares(names) },
-			c.LocalJob.Use)
-	}
+func (c *LocalJobConfig) buildMiddlewares(logger *slog.Logger, wm *middlewares.WebhookManager) {
+	buildJobMiddlewares(logger, &c.LocalJob,
+		&c.OverlapConfig, &c.SlackConfig, &c.SaveConfig, &c.MailConfig,
+		wm, c.GetWebhookNames())
 }
 
-func (c *ComposeJobConfig) buildMiddlewares(wm *middlewares.WebhookManager) {
-	c.ComposeJob.Use(middlewares.NewOverlap(&c.OverlapConfig))
-	c.ComposeJob.Use(middlewares.NewSlack(&c.SlackConfig)) //nolint:staticcheck // deprecated but kept for backwards compatibility
-	c.ComposeJob.Use(middlewares.NewSave(&c.SaveConfig))
-	c.ComposeJob.Use(middlewares.NewMail(&c.MailConfig))
-	if wm != nil {
-		names := c.GetWebhookNames()
-		attachWebhookMiddlewares(nil, c.ComposeJob.GetName(),
-			func() ([]core.Middleware, error) { return wm.GetMiddlewares(names) },
-			c.ComposeJob.Use)
-	}
+func (c *ComposeJobConfig) buildMiddlewares(logger *slog.Logger, wm *middlewares.WebhookManager) {
+	buildJobMiddlewares(logger, &c.ComposeJob,
+		&c.OverlapConfig, &c.SlackConfig, &c.SaveConfig, &c.MailConfig,
+		wm, c.GetWebhookNames())
 }
 
-func (c *RunServiceConfig) buildMiddlewares(wm *middlewares.WebhookManager) {
-	c.RunServiceJob.Use(middlewares.NewOverlap(&c.OverlapConfig))
-	c.RunServiceJob.Use(middlewares.NewSlack(&c.SlackConfig)) //nolint:staticcheck // deprecated but kept for backwards compatibility
-	c.RunServiceJob.Use(middlewares.NewSave(&c.SaveConfig))
-	c.RunServiceJob.Use(middlewares.NewMail(&c.MailConfig))
-	if wm != nil {
-		names := c.GetWebhookNames()
-		attachWebhookMiddlewares(nil, c.RunServiceJob.GetName(),
-			func() ([]core.Middleware, error) { return wm.GetMiddlewares(names) },
-			c.RunServiceJob.Use)
-	}
+func (c *RunServiceConfig) buildMiddlewares(logger *slog.Logger, wm *middlewares.WebhookManager) {
+	buildJobMiddlewares(logger, &c.RunServiceJob,
+		&c.OverlapConfig, &c.SlackConfig, &c.SaveConfig, &c.MailConfig,
+		wm, c.GetWebhookNames())
 }
 
 type DockerConfig struct {

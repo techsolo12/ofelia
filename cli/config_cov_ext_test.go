@@ -392,7 +392,7 @@ func TestBuildMiddlewares_WithWebhookManager(t *testing.T) {
 			fn: func() {
 				wm := middlewares.NewWebhookManager(middlewares.DefaultWebhookGlobalConfig())
 				j := &ExecJobConfig{}
-				j.buildMiddlewares(wm)
+				j.buildMiddlewares(nil, wm)
 			},
 		},
 		{
@@ -400,7 +400,7 @@ func TestBuildMiddlewares_WithWebhookManager(t *testing.T) {
 			fn: func() {
 				wm := middlewares.NewWebhookManager(middlewares.DefaultWebhookGlobalConfig())
 				j := &RunJobConfig{}
-				j.buildMiddlewares(wm)
+				j.buildMiddlewares(nil, wm)
 			},
 		},
 		{
@@ -408,7 +408,7 @@ func TestBuildMiddlewares_WithWebhookManager(t *testing.T) {
 			fn: func() {
 				wm := middlewares.NewWebhookManager(middlewares.DefaultWebhookGlobalConfig())
 				j := &LocalJobConfig{}
-				j.buildMiddlewares(wm)
+				j.buildMiddlewares(nil, wm)
 			},
 		},
 		{
@@ -416,7 +416,7 @@ func TestBuildMiddlewares_WithWebhookManager(t *testing.T) {
 			fn: func() {
 				wm := middlewares.NewWebhookManager(middlewares.DefaultWebhookGlobalConfig())
 				j := &ComposeJobConfig{}
-				j.buildMiddlewares(wm)
+				j.buildMiddlewares(nil, wm)
 			},
 		},
 		{
@@ -424,42 +424,42 @@ func TestBuildMiddlewares_WithWebhookManager(t *testing.T) {
 			fn: func() {
 				wm := middlewares.NewWebhookManager(middlewares.DefaultWebhookGlobalConfig())
 				j := &RunServiceConfig{}
-				j.buildMiddlewares(wm)
+				j.buildMiddlewares(nil, wm)
 			},
 		},
 		{
 			name: "ExecJobConfig_NilManager",
 			fn: func() {
 				j := &ExecJobConfig{}
-				j.buildMiddlewares(nil)
+				j.buildMiddlewares(nil, nil)
 			},
 		},
 		{
 			name: "RunJobConfig_NilManager",
 			fn: func() {
 				j := &RunJobConfig{}
-				j.buildMiddlewares(nil)
+				j.buildMiddlewares(nil, nil)
 			},
 		},
 		{
 			name: "LocalJobConfig_NilManager",
 			fn: func() {
 				j := &LocalJobConfig{}
-				j.buildMiddlewares(nil)
+				j.buildMiddlewares(nil, nil)
 			},
 		},
 		{
 			name: "ComposeJobConfig_NilManager",
 			fn: func() {
 				j := &ComposeJobConfig{}
-				j.buildMiddlewares(nil)
+				j.buildMiddlewares(nil, nil)
 			},
 		},
 		{
 			name: "RunServiceConfig_NilManager",
 			fn: func() {
 				j := &RunServiceConfig{}
-				j.buildMiddlewares(nil)
+				j.buildMiddlewares(nil, nil)
 			},
 		},
 	}

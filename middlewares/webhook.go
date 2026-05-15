@@ -355,12 +355,20 @@ func (m *WebhookManager) GetMiddlewares(names []string) ([]core.Middleware, erro
 
 // GetGlobalMiddlewares returns middlewares for globally configured webhooks
 func (m *WebhookManager) GetGlobalMiddlewares() ([]core.Middleware, error) {
-	if m.globalConfig.Webhooks == "" {
-		return nil, nil
-	}
+	return m.GetMiddlewares(m.GlobalWebhookNames())
+}
 
-	names := strings.Split(m.globalConfig.Webhooks, ",")
-	return m.GetMiddlewares(names)
+// GlobalWebhookNames returns the parsed names of globally configured webhooks
+// (the `[global] webhook-webhooks = ...` selector). Returns nil when no globals
+// are configured.
+//
+// Used by the per-job attach path so each job can union global + per-job
+// webhook names into a single composite — propagating globals via the
+// scheduler's middleware chain doesn't work because core.middlewareContainer
+// would dedup the scheduler's *WebhookMiddleware against the job's own. See
+// https://github.com/netresearch/ofelia/issues/670.
+func (m *WebhookManager) GlobalWebhookNames() []string {
+	return ParseWebhookNames(m.globalConfig.Webhooks)
 }
 
 // ParseWebhookNames parses a comma-separated list of webhook names
@@ -389,20 +397,35 @@ type WebhookMiddleware struct {
 	webhooks []core.Middleware
 }
 
-// NewWebhookMiddleware creates a composite middleware from multiple webhook middlewares
+// NewWebhookMiddleware creates a composite middleware from multiple webhook
+// middlewares. Returns nil for an empty slice and the single webhook directly
+// when there is only one — the composite is only needed to bypass the
+// core.middlewareContainer.Use() type dedup that strikes when a second
+// *Webhook joins the same chain.
 func NewWebhookMiddleware(webhooks []core.Middleware) core.Middleware {
-	if len(webhooks) == 0 {
+	switch len(webhooks) {
+	case 0:
 		return nil
+	case 1:
+		return webhooks[0]
+	default:
+		return &WebhookMiddleware{webhooks: webhooks}
 	}
-	return &WebhookMiddleware{webhooks: webhooks}
 }
 
-// Webhooks returns the inner webhook middlewares.
+// Webhooks returns a shallow copy of the inner webhook middlewares.
 //
 // Exposed for tests that need to verify multi-webhook attachment without
-// reaching into unexported fields. Callers must not mutate the returned slice.
+// reaching into unexported fields. The returned slice header is copied so
+// callers cannot append, reorder, or replace the composite's stored list —
+// but each element aliases the composite's stored *Webhook, so callers must
+// not mutate Webhook.Config (URL/Secret/Trigger) on the returned entries.
+// In practice send() re-validates URL on every dispatch, so this is
+// documentation-grade rather than security-grade.
 func (w *WebhookMiddleware) Webhooks() []core.Middleware {
-	return w.webhooks
+	out := make([]core.Middleware, len(w.webhooks))
+	copy(out, w.webhooks)
+	return out
 }
 
 // ContinueOnStop returns true because we want to report final status

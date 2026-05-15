@@ -225,7 +225,7 @@ func TestIniConfigUpdate(t *testing.T) {
 		j.Provider = cfg.dockerHandler.GetDockerProvider()
 		j.InitializeRuntimeFields() // Initialize monitor and dockerOps after client is set
 		j.Name = name
-		j.buildMiddlewares(nil)
+		j.buildMiddlewares(nil, nil)
 		_ = cfg.sh.AddJob(j)
 	}
 
@@ -278,7 +278,7 @@ func TestIniConfigUpdateEnvChange(t *testing.T) {
 		j.Provider = cfg.dockerHandler.GetDockerProvider()
 		j.InitializeRuntimeFields() // Initialize monitor and dockerOps after client is set
 		j.Name = name
-		j.buildMiddlewares(nil)
+		j.buildMiddlewares(nil, nil)
 		_ = cfg.sh.AddJob(j)
 	}
 
@@ -314,7 +314,7 @@ func TestIniConfigUpdateNoReload(t *testing.T) {
 		j.Provider = cfg.dockerHandler.GetDockerProvider()
 		j.InitializeRuntimeFields() // Initialize monitor and dockerOps after client is set
 		j.Name = name
-		j.buildMiddlewares(nil)
+		j.buildMiddlewares(nil, nil)
 		_ = cfg.sh.AddJob(j)
 	}
 
@@ -346,7 +346,7 @@ func TestIniConfigUpdateLabelConflict(t *testing.T) {
 		j.Provider = cfg.dockerHandler.GetDockerProvider()
 		j.InitializeRuntimeFields() // Initialize monitor and dockerOps after client is set
 		j.Name = name
-		j.buildMiddlewares(nil)
+		j.buildMiddlewares(nil, nil)
 		_ = cfg.sh.AddJob(j)
 	}
 
@@ -389,7 +389,7 @@ func TestIniConfigUpdateGlob(t *testing.T) {
 		j.Provider = cfg.dockerHandler.GetDockerProvider()
 		j.InitializeRuntimeFields() // Initialize monitor and dockerOps after client is set
 		j.Name = name
-		j.buildMiddlewares(nil)
+		j.buildMiddlewares(nil, nil)
 		_ = cfg.sh.AddJob(j)
 	}
 

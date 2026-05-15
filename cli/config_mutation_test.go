@@ -117,7 +117,7 @@ func TestReplaceIfChanged_DifferentHash(t *testing.T) {
 	oldJob := &ExecJobConfig{ExecJob: core.ExecJob{BareJob: core.BareJob{Schedule: "@every 5s", Command: "echo old"}}}
 	_ = defaults.Set(oldJob)
 	oldJob.Name = "testjob"
-	oldJob.buildMiddlewares(nil)
+	oldJob.buildMiddlewares(nil, nil)
 	_ = cfg.sh.AddJob(oldJob)
 	assert.Len(t, cfg.sh.Entries(), 1)
 
@@ -147,7 +147,7 @@ func TestReplaceIfChanged_SameHash(t *testing.T) {
 	oldJob := &ExecJobConfig{ExecJob: core.ExecJob{BareJob: core.BareJob{Schedule: "@every 5s", Command: "echo test"}}}
 	_ = defaults.Set(oldJob)
 	oldJob.Name = "testjob"
-	oldJob.buildMiddlewares(nil)
+	oldJob.buildMiddlewares(nil, nil)
 	_ = cfg.sh.AddJob(oldJob)
 
 	newJob := &ExecJobConfig{ExecJob: core.ExecJob{BareJob: core.BareJob{Schedule: "@every 5s", Command: "echo test"}}}
@@ -236,7 +236,7 @@ func TestSyncJobMap_RemovesStaleLabelJobs(t *testing.T) {
 	}
 	_ = defaults.Set(existingJob)
 	existingJob.Name = "oldjob"
-	existingJob.buildMiddlewares(nil)
+	existingJob.buildMiddlewares(nil, nil)
 	_ = cfg.sh.AddJob(existingJob)
 	cfg.ExecJobs["oldjob"] = existingJob
 	assert.Len(t, cfg.sh.Entries(), 1)
@@ -270,7 +270,7 @@ func TestSyncJobMap_SkipsINIJobsWhenSyncingLabels(t *testing.T) {
 	}
 	_ = defaults.Set(iniJob)
 	iniJob.Name = "shared"
-	iniJob.buildMiddlewares(nil)
+	iniJob.buildMiddlewares(nil, nil)
 	_ = cfg.sh.AddJob(iniJob)
 	cfg.ExecJobs["shared"] = iniJob
 
@@ -302,7 +302,7 @@ func TestSyncJobMap_INIOverridesLabel(t *testing.T) {
 	}
 	_ = defaults.Set(labelJob)
 	labelJob.Name = "shared"
-	labelJob.buildMiddlewares(nil)
+	labelJob.buildMiddlewares(nil, nil)
 	_ = cfg.sh.AddJob(labelJob)
 	cfg.ExecJobs["shared"] = labelJob
 
@@ -343,7 +343,7 @@ func TestSyncJobMap_LabelIgnoredWhenINIExists(t *testing.T) {
 	}
 	_ = defaults.Set(iniJob)
 	iniJob.Name = "shared"
-	iniJob.buildMiddlewares(nil)
+	iniJob.buildMiddlewares(nil, nil)
 	_ = cfg.sh.AddJob(iniJob)
 	cfg.ExecJobs["shared"] = iniJob
 
@@ -489,7 +489,7 @@ func TestReplaceIfChanged_ValidationFailReturnsEarlyFalse(t *testing.T) {
 	}
 	_ = defaults.Set(oldJob)
 	oldJob.Name = "testjob"
-	oldJob.buildMiddlewares(nil)
+	oldJob.buildMiddlewares(nil, nil)
 	_ = cfg.sh.AddJob(oldJob)
 
 	// New job with invalid config (RunJob without image should fail validation)
@@ -727,7 +727,7 @@ func TestBuildMiddlewares_NilWebhookManager(t *testing.T) {
 		j := &RunJobConfig{RunJob: core.RunJob{BareJob: core.BareJob{Schedule: "@daily", Command: "echo test"}}}
 		_ = defaults.Set(j)
 		j.Name = "test-run"
-		j.buildMiddlewares(nil) // wm is nil
+		j.buildMiddlewares(nil, nil) // wm is nil
 		// Should not panic and should have base middlewares
 	})
 
@@ -736,7 +736,7 @@ func TestBuildMiddlewares_NilWebhookManager(t *testing.T) {
 		j := &LocalJobConfig{LocalJob: core.LocalJob{BareJob: core.BareJob{Schedule: "@daily", Command: "echo test"}}}
 		_ = defaults.Set(j)
 		j.Name = "test-local"
-		j.buildMiddlewares(nil)
+		j.buildMiddlewares(nil, nil)
 	})
 
 	t.Run("ComposeJobConfig", func(t *testing.T) {
@@ -744,7 +744,7 @@ func TestBuildMiddlewares_NilWebhookManager(t *testing.T) {
 		j := &ComposeJobConfig{ComposeJob: core.ComposeJob{BareJob: core.BareJob{Schedule: "@daily", Command: "echo test"}}}
 		_ = defaults.Set(j)
 		j.Name = "test-compose"
-		j.buildMiddlewares(nil)
+		j.buildMiddlewares(nil, nil)
 	})
 
 	t.Run("ExecJobConfig", func(t *testing.T) {
@@ -752,7 +752,7 @@ func TestBuildMiddlewares_NilWebhookManager(t *testing.T) {
 		j := &ExecJobConfig{ExecJob: core.ExecJob{BareJob: core.BareJob{Schedule: "@daily", Command: "echo test"}}}
 		_ = defaults.Set(j)
 		j.Name = "test-exec"
-		j.buildMiddlewares(nil)
+		j.buildMiddlewares(nil, nil)
 	})
 }
 
@@ -768,7 +768,7 @@ func TestBuildMiddlewares_WithEmptyWebhookManager(t *testing.T) {
 		j := &RunJobConfig{RunJob: core.RunJob{BareJob: core.BareJob{Schedule: "@daily", Command: "echo test"}}}
 		_ = defaults.Set(j)
 		j.Name = "test"
-		j.buildMiddlewares(wm)
+		j.buildMiddlewares(nil, wm)
 	})
 
 	t.Run("LocalJobConfig_with_wm", func(t *testing.T) {
@@ -776,7 +776,7 @@ func TestBuildMiddlewares_WithEmptyWebhookManager(t *testing.T) {
 		j := &LocalJobConfig{LocalJob: core.LocalJob{BareJob: core.BareJob{Schedule: "@daily", Command: "echo test"}}}
 		_ = defaults.Set(j)
 		j.Name = "test"
-		j.buildMiddlewares(wm)
+		j.buildMiddlewares(nil, wm)
 	})
 
 	t.Run("ComposeJobConfig_with_wm", func(t *testing.T) {
@@ -784,7 +784,7 @@ func TestBuildMiddlewares_WithEmptyWebhookManager(t *testing.T) {
 		j := &ComposeJobConfig{ComposeJob: core.ComposeJob{BareJob: core.BareJob{Schedule: "@daily", Command: "echo test"}}}
 		_ = defaults.Set(j)
 		j.Name = "test"
-		j.buildMiddlewares(wm)
+		j.buildMiddlewares(nil, wm)
 	})
 }
 

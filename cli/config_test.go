@@ -79,7 +79,7 @@ func TestExecJobBuild(t *testing.T) {
 
 	j := &ExecJobConfig{}
 	j.OverlapConfig.NoOverlap = true
-	j.buildMiddlewares(nil)
+	j.buildMiddlewares(nil, nil)
 
 	assert.Len(t, j.Middlewares(), 1)
 }
