@@ -211,8 +211,14 @@ func (w *Webhook) send(ctx *core.Context) error {
 		return fmt.Errorf("render body: %w", err)
 	}
 
-	// Create request with context
-	reqCtx, cancel := context.WithTimeout(context.Background(), w.Config.Timeout)
+	// Create request with a context that observes BOTH the per-request
+	// timeout AND scheduler / job cancellation. Deriving from
+	// ctx.RunContext() (not context.Background()) means an in-flight HTTP
+	// write is also drained on SIGTERM / job-level deadline expiry — not
+	// just the inter-attempt backoff in sendWithRetry. Without this,
+	// shutdown still blocked for up to w.Config.Timeout per in-flight
+	// request. See https://github.com/netresearch/ofelia/issues/673.
+	reqCtx, cancel := context.WithTimeout(ctx.RunContext(), w.Config.Timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, w.Preset.Method, targetURL, strings.NewReader(body))

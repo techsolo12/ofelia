@@ -661,3 +661,90 @@ func TestSendWithRetry_HonorsContextCancellation(t *testing.T) {
 		"sendWithRetry should drain promptly on ctx cancel (elapsed=%v, retryDelay=%v)",
 		elapsed, retryDelay)
 }
+
+// TestSend_HonorsContextCancellationDuringInFlightRequest pins the second
+// half of the #673 fix: even an in-flight HTTP request (not just the
+// inter-attempt backoff) must drain on ctx cancellation.
+//
+// Pre-fix, (*Webhook).send built its request ctx from context.Background()
+// and ignored the scheduler / job ctx. The "first attempt is slow to
+// respond" scenario then blocked daemon shutdown for up to the full
+// per-request Timeout, defeating the SIGTERM-drains-promptly contract.
+//
+// We assert the first-attempt cancel path here. The handler blocks until
+// signaled so the only way out is ctx cancellation; we assert the
+// returned error wraps context.Canceled and the call returns well under
+// the Timeout (would otherwise block for ~ Timeout).
+func TestSend_HonorsContextCancellationDuringInFlightRequest(t *testing.T) {
+	// Not parallel — modifies global security config.
+	SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
+	defer SetValidateWebhookURLForTest(ValidateWebhookURLImpl)
+	SetTransportFactoryForTest(func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() })
+	defer SetTransportFactoryForTest(NewSafeTransport)
+
+	// Server blocks on the request's own context — never writes a response
+	// unless the test cancels. Lets us isolate the in-flight-request cancel
+	// path from the retry-backoff cancel path.
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-release:
+			w.WriteHeader(http.StatusOK)
+		case <-time.After(30 * time.Second):
+			t.Errorf("test ran longer than 30s — cancel did not reach handler")
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+
+	const requestTimeout = 30 * time.Second
+	config := &WebhookConfig{
+		Name:       "test-ctx-cancel-inflight",
+		Preset:     "slack",
+		ID:         "T12345/B67890",
+		Secret:     "xoxb-test-secret",
+		URL:        server.URL,
+		Trigger:    TriggerAlways,
+		Timeout:    requestTimeout, // big enough that without the fix we'd block
+		RetryCount: 0,              // exactly one attempt — cancel hits send(), not the backoff
+		RetryDelay: time.Millisecond,
+	}
+
+	loader := NewPresetLoader(nil)
+	middleware, err := NewWebhook(config, loader)
+	require.NoError(t, err)
+	webhook := middleware.(*Webhook)
+
+	job := &TestJob{}
+	job.Name = "test-job"
+	job.Command = "echo hello"
+	sh := core.NewScheduler(newDiscardLogger())
+	e, err := core.NewExecution()
+	require.NoError(t, err)
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	ctx := core.NewContextWithContext(cancelCtx, sh, job, e)
+	ctx.Start()
+	ctx.Stop(nil)
+
+	// Cancel mid-flight: long enough for the request to be in-flight,
+	// short enough that without the fix we'd block for the full timeout.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err = webhook.sendWithRetry(ctx)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled,
+		"sendWithRetry should propagate context.Canceled when send() is canceled mid-flight")
+	assert.Less(t, elapsed, 5*time.Second,
+		"send() should drain promptly on ctx cancel (elapsed=%v, requestTimeout=%v); "+
+			"if reqCtx regresses to context.Background(), elapsed approaches requestTimeout",
+		elapsed, requestTimeout)
+}
