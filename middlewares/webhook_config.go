@@ -19,6 +19,33 @@ const (
 	TriggerSkipped TriggerType = "skipped" // Send only on skipped executions
 )
 
+// DefaultPresetName is the name of the bundled preset used as the
+// documented fallback when [global] webhook-default-preset is unset.
+// Returned by (*WebhookGlobalConfig).EffectiveDefaultPreset() when
+// DefaultPreset is nil. The matching preset YAML lives at
+// middlewares/presets/json-post.yaml and is embedded into the binary.
+// See https://github.com/netresearch/ofelia/issues/676.
+const DefaultPresetName = "json-post"
+
+// EffectiveDefaultPreset returns the preset name to use as the fallback
+// when a per-webhook config omits `preset`. Resolves the three intents
+// encoded on (*string) DefaultPreset:
+//
+//   - nil          → fall back to DefaultPresetName ("json-post").
+//   - non-nil ""   → operator explicitly opted out — no fallback.
+//   - non-nil "X"  → operator's chosen fallback name.
+//
+// Called at webhook attach time (NewWebhook) rather than at startup, so
+// late mutations to DefaultPreset via INI reload or label sync take
+// effect on the next attach without restart. Mirrors the access-time
+// resolution pattern of SaveConfig.RestoreHistoryEnabled.
+func (g *WebhookGlobalConfig) EffectiveDefaultPreset() string {
+	if g == nil || g.DefaultPreset == nil {
+		return DefaultPresetName
+	}
+	return *g.DefaultPreset
+}
+
 // WebhookConfig holds configuration for a single webhook endpoint
 type WebhookConfig struct {
 	// Name is the unique identifier for this webhook (from INI section name)
@@ -89,6 +116,22 @@ type WebhookGlobalConfig struct {
 	// Set to specific hosts for whitelist mode: "hooks.slack.com, ntfy.internal, 192.168.1.20"
 	// Supports wildcards: "*.example.com"
 	AllowedHosts string `gcfg:"webhook-allowed-hosts" mapstructure:"webhook-allowed-hosts"`
+
+	// DefaultPreset is the preset name used when a per-webhook configuration
+	// omits the `preset` field. Pointer-typed so we can distinguish three
+	// operator intents (mirrors the SaveConfig.RestoreHistory pattern):
+	//
+	//   - nil → operator did not set the key at all; resolve at access time
+	//     to DefaultPresetName ("json-post", the bundled JSON POST preset)
+	//     via EffectiveDefaultPreset(). Lets a webhook with just `url = ...`
+	//     work out of the box.
+	//   - non-nil "" (empty string) → operator explicitly opted out of the
+	//     fallback; webhooks missing `preset` fail attachment with a logged
+	//     error.
+	//   - non-nil non-empty → operator's chosen fallback (custom preset name).
+	//
+	// See https://github.com/netresearch/ofelia/issues/676.
+	DefaultPreset *string `gcfg:"webhook-default-preset" mapstructure:"webhook-default-preset"`
 }
 
 // WebhookData is the data structure passed to webhook templates
@@ -156,6 +199,10 @@ func DefaultWebhookGlobalConfig() *WebhookGlobalConfig {
 		PresetCacheTTL:       24 * time.Hour,
 		PresetCacheDir:       cacheDir,
 		AllowedHosts:         "*", // Default: allow all hosts (consistent with local command trust model)
+		// DefaultPreset intentionally left nil so unset-vs-explicit can be
+		// distinguished by mergeWebhookGlobals and EffectiveDefaultPreset.
+		// The effective fallback is DefaultPresetName.
+		DefaultPreset: nil,
 	}
 }
 

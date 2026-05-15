@@ -1,0 +1,49 @@
+name: json-post
+description: "Generic JSON POST webhook. POSTs job and execution metadata as application/json to the URL configured on the webhook. Used as the default fallback when a webhook omits `preset` (controlled by [global] webhook-default-preset)."
+version: "1.0.0"
+
+url_scheme: "{url}"
+
+method: POST
+headers:
+  Content-Type: "application/json; charset=utf-8"
+
+variables:
+  url:
+    description: "Webhook destination URL (full URL the JSON payload is POSTed to)."
+    required: true
+    example: "https://example.com/hooks/ofelia"
+
+body: |
+  {
+    "job": {
+      "name": "{{json .Job.Name}}",
+      "command": "{{json .Job.Command}}",
+      "schedule": "{{json .Job.Schedule}}",
+      "type": "{{json .Job.Type}}"
+    },
+    "execution": {
+      "id": "{{json .Execution.ID}}",
+      "status": "{{json .Execution.Status}}",
+      "failed": {{.Execution.Failed}},
+      "skipped": {{.Execution.Skipped}},
+      "duration": "{{.Execution.Duration}}",
+      "duration_ns": {{.Execution.Duration.Nanoseconds}},
+      "start_time": "{{isoTime .Execution.StartTime}}",
+      "end_time": "{{isoTime .Execution.EndTime}}",
+      "error": "{{json .Execution.Error}}",
+      "output": "{{json (truncate 4000 .Execution.Output)}}",
+      "stderr": "{{json (truncate 4000 .Execution.Stderr)}}"
+    },
+    "host": {
+      "hostname": "{{json .Host.Hostname}}",
+      "timestamp": "{{isoTime .Host.Timestamp}}"
+    },
+    "ofelia": {
+      "version": "{{json .Ofelia.Version}}"
+    }{{if .Preset.Link}},
+    "link": {
+      "url": "{{json .Preset.Link}}",
+      "text": "{{json .Preset.LinkText}}"
+    }{{end}}
+  }

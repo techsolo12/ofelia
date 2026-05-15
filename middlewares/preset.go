@@ -143,6 +143,26 @@ func (l *PresetLoader) AddLocalPresetDir(dir string) {
 	l.localPresetDirs = append(l.localPresetDirs, dir)
 }
 
+// DefaultPreset returns the effective global default preset name —
+// (*WebhookGlobalConfig).EffectiveDefaultPreset() unwrapped, with a nil
+// globalConfig also resolving to the bundled DefaultPresetName so tests
+// that construct a loader without a global config still get the fallback.
+// Callers fill this into WebhookConfig.Preset when the per-webhook value
+// is empty, so url-only webhooks work without each one redeclaring `preset`.
+//
+// Operators can opt out of the fallback by setting `webhook-default-preset`
+// to an empty string in INI or via Docker label; that path returns "" here,
+// and NewWebhook then fails attachment with a Validate error when the
+// per-webhook config also omits both `preset` and `url`.
+//
+// See https://github.com/netresearch/ofelia/issues/676.
+func (l *PresetLoader) DefaultPreset() string {
+	if l.globalConfig == nil {
+		return DefaultPresetName
+	}
+	return l.globalConfig.EffectiveDefaultPreset()
+}
+
 // Load loads a preset by name or path
 // Supports:
 // - Built-in preset names: "slack", "discord", etc.

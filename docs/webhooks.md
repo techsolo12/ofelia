@@ -201,6 +201,14 @@ webhook-preset-cache-dir =
 ; wildcards (`*.example.com`). When set to a specific list, requests to any
 ; other host are blocked at delivery time. INI-only.
 webhook-allowed-hosts = *
+
+; Preset name used when a webhook configuration omits `preset` (default:
+; `json-post`, the bundled JSON POST preset that turns a bare `url = ...`
+; entry into a working webhook without authoring a custom preset).
+; Set to an empty string to opt out — in that case every webhook MUST set
+; `preset` explicitly or attachment fails with a logged error.
+; Operator-tunable; also accepted via Docker label `ofelia.webhook-default-preset`.
+webhook-default-preset = json-post
 ```
 
 > **INI vs Docker labels:** `webhook-webhooks` is the only entry above that is
@@ -323,9 +331,12 @@ secret = app-token-here
 trigger = always
 ```
 
-## Custom Webhooks
+## Custom Webhooks (URL-only, no custom preset)
 
-You can configure webhooks without a preset by providing a URL directly:
+You can configure a webhook with just a `url =` and Ofelia will POST a JSON
+payload describing the job execution to that URL — no preset authoring
+required. This works because every webhook that omits `preset` falls back
+to the bundled `json-post` preset (see `[global] webhook-default-preset`).
 
 ```ini
 [webhook "custom-hook"]
@@ -335,7 +346,63 @@ timeout = 10s
 retry-count = 2
 ```
 
-This sends a JSON payload with job execution data to the specified URL.
+Equivalent Docker labels (on the Ofelia service container):
+
+```yaml
+labels:
+  ofelia.service: "true"
+  ofelia.enabled: "true"
+  ofelia.webhook.custom-hook.url: "https://api.example.com/webhook"
+  ofelia.webhook.custom-hook.trigger: "always"
+```
+
+### Payload shape
+
+The bundled `json-post` preset POSTs `Content-Type: application/json` with a
+body shaped like:
+
+```json
+{
+  "job": {
+    "name": "backup",
+    "command": "/run-backup.sh",
+    "schedule": "@hourly",
+    "type": "exec"
+  },
+  "execution": {
+    "id": "abc123",
+    "status": "successful",
+    "failed": false,
+    "skipped": false,
+    "duration": "1.234s",
+    "duration_ns": 1234000000,
+    "start_time": "2026-05-15T14:00:00+02:00",
+    "end_time": "2026-05-15T14:00:01+02:00",
+    "error": "",
+    "output": "...",
+    "stderr": ""
+  },
+  "host": { "hostname": "...", "timestamp": "..." },
+  "ofelia": { "version": "..." }
+}
+```
+
+`output` and `stderr` are truncated to 4 000 characters each. If `link =`
+is set on the webhook config, a `link` object is included.
+
+### Opting out of the default
+
+If you do not want any webhook to use the bundled fallback (e.g. you only
+want webhooks that explicitly declare a `preset`), set the global selector
+to empty:
+
+```ini
+[global]
+webhook-default-preset =
+```
+
+After opting out, any webhook missing `preset` (and not declaring `url` +
+a custom preset) fails attachment with a logged error.
 
 ## Remote Presets
 

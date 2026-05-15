@@ -4,7 +4,9 @@
 package middlewares
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -597,6 +599,128 @@ func TestWebhookMiddleware_Run_DispatchesToAll(t *testing.T) {
 	err := wm.Run(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, []string{"s1", "s2"}, called)
+}
+
+// TestBundledPreset_JSONPostExists verifies the bundled json-post preset
+// loaded into the binary and is the documented default fallback name.
+// Regression for https://github.com/netresearch/ofelia/issues/676.
+func TestBundledPreset_JSONPostExists(t *testing.T) {
+	t.Parallel()
+	loader := NewPresetLoader(nil)
+	preset, err := loader.Load(DefaultPresetName)
+	require.NoError(t, err, "bundled %q preset must load", DefaultPresetName)
+	assert.Equal(t, DefaultPresetName, preset.Name)
+	assert.NotEmpty(t, preset.Body, "json-post preset must define a body")
+	assert.Equal(t, http.MethodPost, preset.Method)
+	require.Contains(t, preset.Variables, "url")
+	assert.True(t, preset.Variables["url"].Required, "json-post.url must be required")
+}
+
+// TestEffectiveDefaultPreset_ThreeIntents pins the *string semantics on
+// WebhookGlobalConfig.DefaultPreset: nil resolves to the bundled name,
+// non-nil empty is the explicit opt-out, non-nil non-empty is the
+// operator's chosen fallback. See #676.
+func TestEffectiveDefaultPreset_ThreeIntents(t *testing.T) {
+	t.Parallel()
+	empty := ""
+	custom := "my-custom"
+
+	tests := []struct {
+		name string
+		dp   *string
+		want string
+	}{
+		{"nil → bundled fallback", nil, DefaultPresetName},
+		{"non-nil empty → opt-out (empty)", &empty, ""},
+		{"non-nil custom → operator choice", &custom, "my-custom"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := &WebhookGlobalConfig{DefaultPreset: tt.dp}
+			assert.Equal(t, tt.want, cfg.EffectiveDefaultPreset())
+		})
+	}
+
+	// nil receiver — defensive, since callers may pass globalConfig=nil.
+	var nilCfg *WebhookGlobalConfig
+	assert.Equal(t, DefaultPresetName, nilCfg.EffectiveDefaultPreset(),
+		"nil receiver must still return the bundled fallback")
+}
+
+// TestNewWebhook_URLOnly_UsesJSONPostFallback is the headline end-to-end
+// regression for #676: a webhook config with only `url` set (no preset)
+// must attach successfully against an HTTP test server and dispatch a
+// JSON POST whose body parses as valid JSON.
+func TestNewWebhook_URLOnly_UsesJSONPostFallback(t *testing.T) {
+	// Not parallel — overrides global URL validator / transport factory.
+	SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
+	defer SetValidateWebhookURLForTest(ValidateWebhookURLImpl)
+	SetTransportFactoryForTest(func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() })
+	defer SetTransportFactoryForTest(NewSafeTransport)
+
+	var (
+		gotContentType string
+		gotBody        []byte
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotContentType = r.Header.Get("Content-Type")
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	loader := NewPresetLoader(DefaultWebhookGlobalConfig())
+	cfg := &WebhookConfig{
+		Name:    "url-only",
+		URL:     srv.URL,
+		Trigger: TriggerAlways,
+		Timeout: 5 * time.Second,
+	}
+	mw, err := NewWebhook(cfg, loader)
+	require.NoError(t, err, "url-only config must attach via the json-post fallback")
+	require.NotNil(t, mw)
+	assert.Equal(t, DefaultPresetName, cfg.Preset,
+		"NewWebhook must fill the missing preset from the loader's effective default")
+
+	job := &TestJob{}
+	job.Name = "url-only-job"
+	job.Command = "echo hi"
+	sh := core.NewScheduler(newDiscardLogger())
+	e, err := core.NewExecution()
+	require.NoError(t, err)
+	ctx := core.NewContext(sh, job, e)
+	ctx.Start()
+	ctx.Stop(nil)
+
+	_ = mw.Run(ctx)
+
+	require.NotEmpty(t, gotBody, "test server must have received a request body")
+	assert.Equal(t, "application/json; charset=utf-8", gotContentType)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(gotBody, &payload),
+		"json-post body must parse as valid JSON; got: %s", string(gotBody))
+	assert.NotNil(t, payload["job"], "payload must include 'job' object")
+	assert.NotNil(t, payload["execution"], "payload must include 'execution' object")
+	assert.NotNil(t, payload["host"], "payload must include 'host' object")
+}
+
+// TestNewWebhook_DefaultPresetOptOut verifies that setting
+// webhook-default-preset to non-nil empty disables the fallback: a
+// webhook with neither preset nor url fails validation just like before
+// the json-post default existed.
+func TestNewWebhook_DefaultPresetOptOut(t *testing.T) {
+	t.Parallel()
+	empty := ""
+	global := DefaultWebhookGlobalConfig()
+	global.DefaultPreset = &empty
+	loader := NewPresetLoader(global)
+
+	cfg := &WebhookConfig{Name: "opt-out", Trigger: TriggerAlways}
+	_, err := NewWebhook(cfg, loader)
+	require.Error(t, err, "neither preset nor url, fallback disabled → must fail validation")
+	assert.Contains(t, err.Error(), "either preset or url",
+		"opt-out should surface the original validation message")
 }
 
 func TestGetJobType_AllVariants(t *testing.T) {

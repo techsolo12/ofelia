@@ -33,6 +33,12 @@ const webhookSection = "webhook"
 const (
 	webhookGlobalKeyWebhooks       = "webhook-webhooks"
 	webhookGlobalKeyPresetCacheTTL = "webhook-preset-cache-ttl"
+	// webhookGlobalKeyDefaultPreset selects the preset used when a webhook's
+	// per-instance `preset` field is empty (default: "generic"). Operator-
+	// tunable; not SSRF-sensitive — narrowing or widening the default cannot
+	// reach a new network destination because every webhook still goes
+	// through the same URL allow-list and preset loader. See #676.
+	webhookGlobalKeyDefaultPreset = "webhook-default-preset"
 
 	// Legacy unprefixed form left behind by #618 when the INI side was
 	// renamed to webhook-*. Still accepted with a one-shot deprecation
@@ -340,6 +346,18 @@ func mergeWebhookGlobals(dst, src *middlewares.WebhookGlobalConfig) bool {
 		dst.PresetCacheTTL = src.PresetCacheTTL
 		changed = true
 	}
+	// DefaultPreset uses the *string nil-vs-set pattern (same shape as
+	// SaveConfig.RestoreHistory / mergeSaveGlobals) instead of the
+	// documented-default sentinel trick used for sibling fields above.
+	// Lets operators distinguish three intents unambiguously: nil = "did
+	// not set" (live fallback to DefaultPresetName), non-nil "" =
+	// "explicit opt-out", non-nil "X" = "use X as fallback". Label only
+	// wins when INI didn't set the key at all.
+	if dst.DefaultPreset == nil && src.DefaultPreset != nil {
+		v := *src.DefaultPreset
+		dst.DefaultPreset = &v
+		changed = true
+	}
 	return changed
 }
 
@@ -494,6 +512,14 @@ func applyGlobalWebhookLabels(c *Config, globals map[string]any) {
 				c.logger.Warn("ignoring invalid webhook-preset-cache-ttl label",
 					"value", s, "error", err.Error())
 			}
+		}
+	}
+	if v, ok := globals[webhookGlobalKeyDefaultPreset]; ok {
+		// Capture even an empty string explicitly so operators can opt out of
+		// the json-post fallback via `ofelia.webhook-default-preset:` with no
+		// value. nil means "not set"; non-nil "" means "explicit opt-out".
+		if s, ok := v.(string); ok {
+			c.WebhookConfigs.Global.DefaultPreset = &s
 		}
 	}
 }

@@ -38,6 +38,15 @@ func NewWebhook(config *WebhookConfig, loader *PresetLoader) (core.Middleware, e
 	// Apply defaults
 	config.ApplyDefaults()
 
+	// Fall back to the global default preset (e.g. "json-post", the bundled
+	// JSON POST preset) when the per-webhook config omits `preset`. Lets
+	// operators define a webhook with just a `url` and get a sensible
+	// JSON POST without authoring a custom preset. See #676. Loader may
+	// be nil in tests; an empty default opts out of the fallback.
+	if config.Preset == "" && loader != nil {
+		config.Preset = loader.DefaultPreset()
+	}
+
 	// Validate configuration
 	if err := config.Validate(); err != nil {
 		return nil, err
