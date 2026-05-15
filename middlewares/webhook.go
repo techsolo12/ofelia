@@ -433,15 +433,32 @@ func (w *WebhookMiddleware) ContinueOnStop() bool {
 	return true
 }
 
-// Run executes all webhook middlewares
+// Run dispatches to each inner webhook in order, after the chain below the
+// composite (typically just the job itself) has executed.
+//
+// Re-entrancy invariant: ctx.Next() runs the rest of the chain (and the job)
+// then we call ctx.Stop(err) and loop calling each inner webhook.Run(ctx).
+// Each inner Webhook.Run also calls ctx.Next() + ctx.Stop. This is safe NOT
+// because the composite happens to be the last middleware, but because
+// core.Context.doNext() short-circuits on !Execution.IsRunning before
+// re-running the job (core/common.go:136), and ctx.Stop is idempotent under
+// the same flag (core/common.go:157). The IsRunning gate — not composite
+// position — enforces single-job-execution, so the invariant survives any
+// future middleware appended after the composite. Be aware, however, that
+// any post-composite middleware whose ContinueOnStop()==true will run N
+// times (once per inner webhook) on the same Context.
+//
+// Errors from individual webhook.Run calls are intentionally discarded —
+// Webhook.Run returns the underlying *job* error (not a notification error)
+// and logs its own delivery failures internally via ctx.Logger.Error. The
+// outer return value preserves the job's error so callers up the middleware
+// chain still see job failures.
 func (w *WebhookMiddleware) Run(ctx *core.Context) error {
 	err := ctx.Next()
 	ctx.Stop(err)
 
-	// Execute all webhooks (they handle their own conditions)
 	for _, webhook := range w.webhooks {
-		// Create a wrapper context for the webhook
-		// The webhook will check conditions and send if appropriate
+		// Intentional discard — see Run godoc above for rationale.
 		_ = webhook.Run(ctx)
 	}
 
