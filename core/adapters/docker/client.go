@@ -485,7 +485,9 @@ func createHTTPClient(config *ClientConfig) *http.Client {
 		// Unknown / unrecognized scheme: plain HTTP/1.1. This branch is
 		// unreachable when NewClientWithConfig validated the host, but
 		// defensive against future direct callers passing exotic schemes.
+		// Same hijack risk applies (#668) — suppress HTTP/2 auto-config too.
 		transport.ForceAttemptHTTP2 = false
+		disableHTTP2AutoConfig(transport)
 	}
 
 	return &http.Client{
@@ -537,14 +539,11 @@ func resolveHostForDispatch(cfg *ClientConfig) (host, scheme string) {
 // on tcp:// (handshake hits a plain HTTP response) or "dial http: unknown
 // network http" on http:// (tls.Dial passes the URL scheme to net.Dial).
 //
-// Suppressing HTTP/2 here costs nothing on plain TCP / Unix / npipe Docker
-// hosts -- the Docker daemon's stream APIs are HTTP/1.1 with Upgrade-based
-// hijack. TLS Docker hosts (https://, tcp+tls://) leave TLSNextProto nil so
-// ALPN h2 negotiation still works there.
+// TLS Docker hosts (https://, tcp+tls://) leave TLSNextProto nil so ALPN h2
+// negotiation still works there.
 //
 // See https://github.com/netresearch/ofelia/issues/668 and the upstream
-// hint in moby/moby's client/client.go (dialerFromTransport): "I honestly
-// don't know why it doesn't do that".
+// dialer at moby/moby's client/client.go:dialerFromTransport.
 func disableHTTP2AutoConfig(transport *http.Transport) {
 	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 }

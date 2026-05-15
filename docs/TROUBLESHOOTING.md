@@ -240,6 +240,41 @@ networks:
 - Issue: [#605](https://github.com/netresearch/ofelia/issues/605)
 - Fix: [#606](https://github.com/netresearch/ofelia/pull/606)
 
+### `run_exec` / exec-attach fails with `tls: first record does not look like a TLS handshake` (v0.25.0 only)
+
+**Symptoms**:
+
+```
+[Job "..." (...)] Finished in "...", failed: true, error: job run: exec run:
+run_exec container "...": cannot connect to the Docker daemon. Is 'docker daemon'
+running on this host?: tls: first record does not look like a TLS handshake
+```
+
+Container discovery succeeds (Ofelia logs the job as registered and started); only the `run_exec` execution fails. Same root cause affects `ContainerAttach` and `ContainerLogs --follow` if they're ever exercised over the same transport.
+
+**Affected Versions**: v0.25.0 only (fixed in v0.25.1+).
+
+**Affected Configurations**:
+
+- `DOCKER_HOST=tcp://...` (plain HTTP, no TLS material) — typically routed through `tecnativa/docker-socket-proxy` or another plain-HTTP socket proxy.
+- Not affected: `unix://`, `tcp+tls://`, `https://`, and `tcp://` + `DOCKER_CERT_PATH` (which auto-upgrades to `https://` per [#634](https://github.com/netresearch/ofelia/issues/634)).
+
+**Root Cause**:
+
+Go's `net/http` lazily auto-configures HTTP/2 on the first request through a transport. As part of that setup it *allocates* `*http.Transport.TLSClientConfig` in place (to seed `NextProtos=[h2 http/1.1]` for ALPN) — even when no TLS is in use. The Docker SDK's hijack-path dialer reads `baseTransport.TLSClientConfig != nil` as its "TLS is required" signal. So after the first ordinary HTTP request mutates the transport, every subsequent hijack call (`ContainerExecAttach` / `ContainerAttach` / `ContainerLogs --follow`) misroutes to `tls.Dial` against a plain-HTTP daemon and the handshake fails.
+
+The regular HTTP path doesn't consult `cli.tlsConfig()` and is unaffected — which is why container discovery worked but `run_exec` failed.
+
+**Solutions**:
+
+1. **Upgrade to v0.25.1+** (recommended). The fix sets `*http.Transport.TLSNextProto` to a non-nil empty map on the non-TLS apply paths — the documented stdlib opt-out for HTTP/2 auto-config — which keeps `TLSClientConfig` nil so the SDK's hijack dialer correctly falls to `net.Dial("tcp", …)`.
+2. **No clean workaround for v0.25.0**. Switching to `unix://` (bind-mounting the socket directly) sidesteps the bug but defeats the security purpose of running a socket proxy. Operators who must stay on v0.25.0 should disable `run_exec` jobs or pin to v0.24.1 until the upgrade is feasible.
+
+**References**:
+- Issue: [#668](https://github.com/netresearch/ofelia/issues/668)
+- Fix: [#681](https://github.com/netresearch/ofelia/pull/681)
+- Related (separate `http://` hijack failure): [#682](https://github.com/netresearch/ofelia/issues/682)
+
 ### Unsupported `DOCKER_HOST` Scheme
 
 **Symptoms**:
@@ -395,6 +430,8 @@ The bounds are: 5s for `/health` and `/ready`, 10s for the startup sanity Pings,
 - Fix: [#611](https://github.com/netresearch/ofelia/pull/611), [#636](https://github.com/netresearch/ofelia/pull/636)
 
 ### HTTP/2 Protocol Errors (v0.11.0 Only)
+
+> **Different bug:** if you're on **v0.25.0** and seeing `tls: first record does not look like a TLS handshake` from `run_exec` jobs, that's a separate HTTP/2-related regression — see [`run_exec` / exec-attach fails with `tls: first record does not look like a TLS handshake`](#run_exec--exec-attach-fails-with-tls-first-record-does-not-look-like-a-tls-handshake-v0250-only) above.
 
 **Symptoms**:
 ```
