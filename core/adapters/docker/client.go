@@ -521,6 +521,34 @@ func resolveHostForDispatch(cfg *ClientConfig) (host, scheme string) {
 	return host, strings.ToLower(rawScheme)
 }
 
+// disableHTTP2AutoConfig suppresses Go std lib's lazy HTTP/2 auto-config on
+// the given transport. Setting TLSNextProto to a non-nil (empty) map is the
+// documented stdlib contract for "don't auto-enable HTTP/2".
+//
+// Why we need this on the non-TLS apply paths (unix/tcp/plain): the SDK's
+// hijack-path dialer (used by ContainerExecAttach -> ofelia's run_exec, plus
+// ContainerAttach / ContainerLogs follow) reads baseTransport.TLSClientConfig
+// as its "TLS is required" signal. The first ordinary HTTP request through
+// the transport triggers http2configureTransports, which lazily ALLOCATES
+// TLSClientConfig on the transport in place (to seed NextProtos=[h2 http/1.1]
+// for ALPN). After that mutation, the SDK misreads the auto-installed config
+// as operator-configured TLS and calls tls.Dial against the plain Docker
+// daemon -- producing "tls: first record does not look like a TLS handshake"
+// on tcp:// (handshake hits a plain HTTP response) or "dial http: unknown
+// network http" on http:// (tls.Dial passes the URL scheme to net.Dial).
+//
+// Suppressing HTTP/2 here costs nothing on plain TCP / Unix / npipe Docker
+// hosts -- the Docker daemon's stream APIs are HTTP/1.1 with Upgrade-based
+// hijack. TLS Docker hosts (https://, tcp+tls://) leave TLSNextProto nil so
+// ALPN h2 negotiation still works there.
+//
+// See https://github.com/netresearch/ofelia/issues/668 and the upstream
+// hint in moby/moby's client/client.go (dialerFromTransport): "I honestly
+// don't know why it doesn't do that".
+func disableHTTP2AutoConfig(transport *http.Transport) {
+	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+}
+
 // applyUnixTransport configures the transport to dial a Unix domain socket
 // at the path encoded in host. HTTP/2 is disabled (Docker over a Unix
 // socket is HTTP/1.1).
@@ -531,6 +559,7 @@ func applyUnixTransport(transport *http.Transport, cfg *ClientConfig, host strin
 		return dialer.DialContext(ctx, schemeUnix, socketPath)
 	}
 	transport.ForceAttemptHTTP2 = false
+	disableHTTP2AutoConfig(transport)
 }
 
 // applyTLSTransport wires the transport for HTTPS / tcp+tls hosts: HTTP/2
@@ -553,6 +582,7 @@ func applyTLSTransport(transport *http.Transport, cfg *ClientConfig, _ string) {
 // SDK URL-rewrite half of the docker-CLI parity story).
 func applyTCPTransport(transport *http.Transport, _ *ClientConfig, _ string) {
 	transport.ForceAttemptHTTP2 = false
+	disableHTTP2AutoConfig(transport)
 }
 
 // applyPlainTransport is the no-frills HTTP/1.1 path used for http:// and
@@ -560,6 +590,7 @@ func applyTCPTransport(transport *http.Transport, _ *ClientConfig, _ string) {
 // the connection will fail at dial time — see docs/TROUBLESHOOTING.md).
 func applyPlainTransport(transport *http.Transport, _ *ClientConfig, _ string) {
 	transport.ForceAttemptHTTP2 = false
+	disableHTTP2AutoConfig(transport)
 }
 
 // upgradeTCPToHTTPSIfTLSMaterial mirrors the docker CLI's silent scheme
