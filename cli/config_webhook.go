@@ -278,7 +278,7 @@ func (c *Config) rebuildAllMiddlewares() {
 	for _, j := range c.sh.Jobs {
 		if jc, ok := j.(jobConfig); ok {
 			jc.ResetMiddlewares()
-			jc.buildMiddlewares(wm)
+			jc.buildMiddlewares(c.logger, wm)
 			j.Use(c.sh.Middlewares()...)
 		}
 	}

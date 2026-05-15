@@ -1411,6 +1411,19 @@ docker inspect --format '{{json .Config.Labels}}' ofelia-service | jq 'to_entrie
    - `success` — only fires when the job succeeds
    - `always` — fires on every execution
 
+5. **Only the first webhook in the list fires (≤ v0.25.0)**: Fixed in the
+   next release. Versions up to and including v0.25.0 silently dropped every
+   webhook after the first when a job listed multiple (e.g.
+   `webhooks: "wh-success, wh-error"`), and dropped the global selector
+   entirely for jobs that declared their own `webhooks:`. The dedup happened
+   in the middleware container by reflect type, so there was no log signal.
+   Workaround on affected versions: list the most important webhook FIRST
+   in the `webhooks:` string. Permanent fix: upgrade to the next release
+   ([#670](https://github.com/netresearch/ofelia/issues/670)). After upgrade,
+   webhook-attach failures (unknown name, preset-load failure, missing
+   required variable) are logged at `ERROR` level keyed by job name —
+   `docker logs ofelia 2>&1 | grep "webhook middleware attach failed"`.
+
 ### Output Saving Issues
 
 **Symptoms**:

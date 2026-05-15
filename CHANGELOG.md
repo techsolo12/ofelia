@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Jobs that reference more than one webhook now fire every listed webhook, including any globally-configured ones. `core.middlewareContainer.Use()` deduplicates by reflect type, so handing it two `*middlewares.Webhook` instances kept only the first one and silently dropped the rest — leaving the second webhook (typically the error-trigger one) attached to nothing and never invoked. The same dedup also shadowed the scheduler-level `*middlewares.WebhookMiddleware` against per-job webhooks during scheduler→job middleware propagation, so any job that declared `webhooks:` silently lost the global notifications too. The fix attaches a single per-job composite (`middlewares.NewWebhookMiddleware`) that carries the union of `[global] webhook-webhooks` and the job's own `webhooks` selector, deduplicated by name. The previously-silent `wm.GetMiddlewares` error path (unknown webhook name, preset-load failure, missing required variable) now emits a `slog.Error` keyed by job name and webhook list, so misconfigured webhooks are visible in the log. To verify after upgrade: register two webhooks with different `trigger` values on a job that fails (e.g. `wh-success` with `trigger: success`, `wh-error` with `trigger: error`); only the error webhook should receive a payload on failure, but both must be wired and the success one must fire on success. ([#670](https://github.com/netresearch/ofelia/issues/670))
+
 ## [0.25.0] - 2026-05-14
 
 ### Added

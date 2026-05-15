@@ -355,12 +355,20 @@ func (m *WebhookManager) GetMiddlewares(names []string) ([]core.Middleware, erro
 
 // GetGlobalMiddlewares returns middlewares for globally configured webhooks
 func (m *WebhookManager) GetGlobalMiddlewares() ([]core.Middleware, error) {
-	if m.globalConfig.Webhooks == "" {
-		return nil, nil
-	}
+	return m.GetMiddlewares(m.GlobalWebhookNames())
+}
 
-	names := strings.Split(m.globalConfig.Webhooks, ",")
-	return m.GetMiddlewares(names)
+// GlobalWebhookNames returns the parsed names of globally configured webhooks
+// (the `[global] webhook-webhooks = ...` selector). Returns nil when no globals
+// are configured.
+//
+// Used by the per-job attach path so each job can union global + per-job
+// webhook names into a single composite — propagating globals via the
+// scheduler's middleware chain doesn't work because core.middlewareContainer
+// would dedup the scheduler's *WebhookMiddleware against the job's own. See
+// https://github.com/netresearch/ofelia/issues/670.
+func (m *WebhookManager) GlobalWebhookNames() []string {
+	return ParseWebhookNames(m.globalConfig.Webhooks)
 }
 
 // ParseWebhookNames parses a comma-separated list of webhook names
@@ -380,17 +388,44 @@ func ParseWebhookNames(s string) []string {
 	return names
 }
 
-// WebhookMiddleware is a composite middleware that dispatches to multiple webhooks
+// WebhookMiddleware is a composite middleware that dispatches to multiple webhooks.
+//
+// A composite wrapper is required because core.middlewareContainer.Use()
+// deduplicates middlewares by their reflect type — adding two *Webhook
+// instances directly would silently drop the second one. See #670.
 type WebhookMiddleware struct {
 	webhooks []core.Middleware
 }
 
-// NewWebhookMiddleware creates a composite middleware from multiple webhook middlewares
+// NewWebhookMiddleware creates a composite middleware from multiple webhook
+// middlewares. Returns nil for an empty slice and the single webhook directly
+// when there is only one — the composite is only needed to bypass the
+// core.middlewareContainer.Use() type dedup that strikes when a second
+// *Webhook joins the same chain.
 func NewWebhookMiddleware(webhooks []core.Middleware) core.Middleware {
-	if len(webhooks) == 0 {
+	switch len(webhooks) {
+	case 0:
 		return nil
+	case 1:
+		return webhooks[0]
+	default:
+		return &WebhookMiddleware{webhooks: webhooks}
 	}
-	return &WebhookMiddleware{webhooks: webhooks}
+}
+
+// Webhooks returns a shallow copy of the inner webhook middlewares.
+//
+// Exposed for tests that need to verify multi-webhook attachment without
+// reaching into unexported fields. The returned slice header is copied so
+// callers cannot append, reorder, or replace the composite's stored list —
+// but each element aliases the composite's stored *Webhook, so callers must
+// not mutate Webhook.Config (URL/Secret/Trigger) on the returned entries.
+// In practice send() re-validates URL on every dispatch, so this is
+// documentation-grade rather than security-grade.
+func (w *WebhookMiddleware) Webhooks() []core.Middleware {
+	out := make([]core.Middleware, len(w.webhooks))
+	copy(out, w.webhooks)
+	return out
 }
 
 // ContinueOnStop returns true because we want to report final status
@@ -398,15 +433,32 @@ func (w *WebhookMiddleware) ContinueOnStop() bool {
 	return true
 }
 
-// Run executes all webhook middlewares
+// Run dispatches to each inner webhook in order, after the chain below the
+// composite (typically just the job itself) has executed.
+//
+// Re-entrancy invariant: ctx.Next() runs the rest of the chain (and the job)
+// then we call ctx.Stop(err) and loop calling each inner webhook.Run(ctx).
+// Each inner Webhook.Run also calls ctx.Next() + ctx.Stop. This is safe NOT
+// because the composite happens to be the last middleware, but because
+// core.Context.doNext() short-circuits on !Execution.IsRunning before
+// re-running the job (core/common.go:136), and ctx.Stop is idempotent under
+// the same flag (core/common.go:157). The IsRunning gate — not composite
+// position — enforces single-job-execution, so the invariant survives any
+// future middleware appended after the composite. Be aware, however, that
+// any post-composite middleware whose ContinueOnStop()==true will run N
+// times (once per inner webhook) on the same Context.
+//
+// Errors from individual webhook.Run calls are intentionally discarded —
+// Webhook.Run returns the underlying *job* error (not a notification error)
+// and logs its own delivery failures internally via ctx.Logger.Error. The
+// outer return value preserves the job's error so callers up the middleware
+// chain still see job failures.
 func (w *WebhookMiddleware) Run(ctx *core.Context) error {
 	err := ctx.Next()
 	ctx.Stop(err)
 
-	// Execute all webhooks (they handle their own conditions)
 	for _, webhook := range w.webhooks {
-		// Create a wrapper context for the webhook
-		// The webhook will check conditions and send if appropriate
+		// Intentional discard — see Run godoc above for rationale.
 		_ = webhook.Run(ctx)
 	}
 
