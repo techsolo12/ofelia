@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -592,20 +593,27 @@ func applyTCPTransport(transport *http.Transport, _ *ClientConfig, _ string) {
 // DialContext.
 //
 // Why the explicit DialContext: the Docker SDK's hijack-path dialer
-// (used by ContainerExecAttach / ContainerAttach / ContainerLogs follow)
-// consults baseTransport.DialContext first; when it's nil the SDK falls
-// to a switch keyed on cli.proto and ultimately net.Dial(cli.proto, addr).
-// For proto == "http" that becomes net.Dial("http", addr), which Go's net
-// package rejects with "unknown network http" — the bug tracked in
+// (ContainerExecAttach / ContainerAttach / ContainerLogs follow) consults
+// baseTransport.DialContext first; when it's nil the SDK falls to a
+// switch keyed on cli.proto and ultimately net.Dial(cli.proto, addr).
+// For proto == "http" that becomes net.Dial("http", addr), which Go's
+// net package rejects with "unknown network http" — the bug tracked in
 // https://github.com/netresearch/ofelia/issues/682. Installing a TCP
 // dialer here lets the SDK pick up our DialContext via dialerFromTransport
 // and never hits the broken fallback.
 //
-// The dial network is hard-coded to "tcp" regardless of cli.proto; the
-// SDK passes its proto through but our DialContext signature ignores it
-// and always dials TCP, which is what http:// means.
+// url.Parse handles path-bearing hosts (http://host:port/v1.43) and IPv6
+// literals (http://[::1]:2375) the same way the Docker SDK's ParseHostURL
+// handles tcp://, so http:// and tcp:// dial to the same target for any
+// given operator-supplied DOCKER_HOST value. A plain strings.TrimPrefix
+// would have fed "host:port/v1.43" to net.Dial("tcp", …), failing.
 func applyHTTPTransport(transport *http.Transport, cfg *ClientConfig, host string) {
-	addr := strings.TrimPrefix(host, schemeHTTP+"://")
+	addr := host
+	if parsed, err := url.Parse(host); err == nil && parsed.Host != "" {
+		addr = parsed.Host
+	} else {
+		addr = strings.TrimPrefix(host, schemeHTTP+"://")
+	}
 	transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
 		dialer := &net.Dialer{Timeout: cfg.DialTimeout}
 		return dialer.DialContext(ctx, schemeTCP, addr)

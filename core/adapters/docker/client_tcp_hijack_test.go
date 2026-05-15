@@ -18,100 +18,80 @@ import (
 	containertypes "github.com/docker/docker/api/types/container"
 )
 
-// TestPlainTCPHijack_ContainerExecAttachWorks pins the fix for
-// https://github.com/netresearch/ofelia/issues/668.
+// TestPlainHijack_ContainerExecAttachWorks pins the hijack-path fixes for
+// both #668 (tcp://) and #682 (http://). Replaces the t.Skip placeholder
+// TestPlainHTTPHijack_ContainerExecAttach_FollowUp introduced in PR #681.
 //
-// Repro: with DOCKER_HOST=tcp://socket-proxy:2375 (plain HTTP, no TLS) the
-// regular HTTP path works but ContainerExecAttach (the hijack path used by
-// ofelia's run_exec) failed with
+// Failure modes pinned:
+//   - tcp://: pre-#681, the first plain-HTTP request mutated
+//     baseTransport.TLSClientConfig (Go's lazy HTTP/2 auto-config), and the
+//     SDK's hijack dialer then mis-routed to tls.Dial — surfacing as
+//     "tls: first record does not look like a TLS handshake".
+//   - http://: pre-#682, the SDK's hijack dialer fell to
+//     net.Dial("http", addr) which Go rejects with "unknown network http".
 //
-//	tls: first record does not look like a TLS handshake
-//
-// Root cause: Go's net/http lazily auto-configures HTTP/2 on the first
-// request and ALLOCATES Transport.TLSClientConfig in place (to seed
-// NextProtos=[h2 http/1.1] for ALPN). The Docker SDK's hijack dialer reads
-// baseTransport.TLSClientConfig as its "TLS is required" signal, so after
-// the first plain-HTTP request lands the hijack path calls tls.Dial against
-// a plain Docker daemon and the handshake fails.
-//
-// The fix sets transport.TLSNextProto to a non-nil empty map on non-TLS
-// apply paths (disableHTTP2AutoConfig), which is the documented stdlib
-// contract for "don't auto-enable HTTP/2". This test drives the full hijack
-// path against a plain HTTP TCP listener that issues 101 Switching
-// Protocols, asserting ContainerExecAttach returns cleanly.
-//
-// This is the exact-shape regression test the existing client_tcp_upgrade
-// suite lacked — DaemonHost() assertions never exercise the hijack dialer.
-func TestPlainTCPHijack_ContainerExecAttachWorks(t *testing.T) {
+// Subtests share the same plain-HTTP TCP listener and a tight helper, so
+// only the host string differs. The path-component and IPv6 cases pin the
+// url.Parse behavior in applyHTTPTransport against a future regression to
+// strings.TrimPrefix (which would feed "host:port/v1.43" to net.Dial).
+func TestPlainHijack_ContainerExecAttachWorks(t *testing.T) {
 	srv, addr := newFakePlainDockerProxy(t)
 	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
 
-	cfg := DefaultConfig()
-	cfg.Host = "tcp://" + addr
-	cfg.NegotiateTimeout = 500 * time.Millisecond
+	// IPv6 sibling addr — same listener bound to ::1 so the dialer
+	// resolution path is exercised. Skipped on hosts without IPv6 loopback.
+	v6Addr := newFakePlainDockerProxyV6(t)
 
-	c, err := NewClientWithConfig(cfg)
-	if err != nil {
-		t.Fatalf("NewClientWithConfig: %v", err)
+	cases := []struct {
+		name       string
+		host       string
+		skipIfNoV6 bool
+	}{
+		{"tcp", "tcp://" + addr, false},
+		{"http", "http://" + addr, false},
+		// Path-bearing host: the SDK's ParseHostURL splits the path off
+		// for tcp:// (via url.Parse), so http:// should behave the same.
+		// Pre-url.Parse our TrimPrefix would have fed "addr/v1.43" to
+		// net.Dial and failed.
+		{"http+pathcomponent", "http://" + addr + "/v1.43", false},
+		// IPv6 literal — square brackets must round-trip through url.Parse.
+		{"http+ipv6", "http://" + v6Addr, true},
 	}
-	t.Cleanup(func() { _ = c.Close() })
-
-	// Prime: force the regular HTTP path to run first so we trigger Go's
-	// lazy http2 setup that previously mutated TLSClientConfig in place.
-	// Without this priming step a naive impl could still pass the hijack
-	// call by chance. The bug requires *first* ordinary request -> hijack.
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if _, pingErr := c.SDK().Ping(ctx); pingErr != nil {
-		t.Fatalf("Ping: %v", pingErr)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.skipIfNoV6 && v6Addr == "" {
+				t.Skip("no IPv6 loopback listener available")
+			}
+			assertHijackOK(t, tc.host)
+		})
 	}
-
-	// Now exercise the hijack path. With the fix this returns cleanly;
-	// without it this fails with "tls: first record does not look like a TLS
-	// handshake".
-	resp, err := c.SDK().ContainerExecAttach(ctx, "deadbeef", containertypes.ExecAttachOptions{})
-	if err != nil {
-		t.Fatalf("ContainerExecAttach over plain tcp://: %v", err)
-	}
-	defer resp.Close()
-	_, _ = io.Copy(io.Discard, resp.Reader)
 }
 
-// TestPlainHTTPHijack_ContainerExecAttachWorks pins the fix for
-// https://github.com/netresearch/ofelia/issues/682. Sibling bug to #668.
-//
-// Pre-fix, http:// hijack failed with "dial http: unknown network http"
-// because the SDK's default-case dialer fell to net.Dial("http", addr),
-// which Go's net package rejects ("http" is not a valid network name).
-// The fix installs an explicit TCP DialContext on the http:// transport
-// (applyHTTPTransport) so the SDK picks our dialer via dialerFromTransport
-// and never reaches the broken fallback.
-//
-// Same plain-HTTP TCP listener as the tcp:// test — only the host scheme
-// changes — so we exercise exactly the path #682 reported.
-func TestPlainHTTPHijack_ContainerExecAttachWorks(t *testing.T) {
-	srv, addr := newFakePlainDockerProxy(t)
-	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
-
+// assertHijackOK builds a Docker client against host, primes the regular
+// HTTP path with a Ping (the request that previously mutated
+// TLSClientConfig — see #668), then drives ContainerExecAttach down the
+// hijack path. Verified bidirectionally for both #668 and #682.
+func assertHijackOK(t *testing.T, host string) {
+	t.Helper()
 	cfg := DefaultConfig()
-	cfg.Host = "http://" + addr
+	cfg.Host = host
 	cfg.NegotiateTimeout = 500 * time.Millisecond
 
 	c, err := NewClientWithConfig(cfg)
 	if err != nil {
-		t.Fatalf("NewClientWithConfig: %v", err)
+		t.Fatalf("NewClientWithConfig(%q): %v", host, err)
 	}
 	t.Cleanup(func() { _ = c.Close() })
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if _, pingErr := c.SDK().Ping(ctx); pingErr != nil {
-		t.Fatalf("Ping: %v", pingErr)
+		t.Fatalf("Ping(%q): %v", host, pingErr)
 	}
 
 	resp, err := c.SDK().ContainerExecAttach(ctx, "deadbeef", containertypes.ExecAttachOptions{})
 	if err != nil {
-		t.Fatalf("ContainerExecAttach over plain http://: %v", err)
+		t.Fatalf("ContainerExecAttach(%q): %v", host, err)
 	}
 	defer resp.Close()
 	_, _ = io.Copy(io.Discard, resp.Reader)
@@ -217,6 +197,37 @@ func (a *addrServer) Shutdown(ctx context.Context) error {
 func newFakePlainDockerProxy(t *testing.T) (*addrServer, string) {
 	t.Helper()
 	return startTestServer(t, fakePlainDockerHandler())
+}
+
+// newFakePlainDockerProxyV6 stands up the same handler on the IPv6
+// loopback. Returns the bracketed address (e.g. "[::1]:NNNN") suitable
+// for DOCKER_HOST. Returns "" if [::1] isn't listenable on this host
+// (CI environments without IPv6 loopback enabled).
+func newFakePlainDockerProxyV6(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "[::1]:0")
+	if err != nil {
+		// IPv6 loopback may be disabled (some CI / container envs); skip.
+		return ""
+	}
+	done := make(chan struct{})
+	var once sync.Once
+	srv := &addrServer{
+		Server: &http.Server{
+			Handler:           fakePlainDockerHandler(),
+			ReadHeaderTimeout: 2 * time.Second,
+		},
+		Addr: ln.Addr().String(),
+		done: done,
+	}
+	go func() {
+		defer once.Do(func() { close(done) })
+		if serveErr := srv.Server.Serve(ln); serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			t.Logf("fake proxy v6 serve: %v", serveErr)
+		}
+	}()
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+	return srv.Addr
 }
 
 // httpTestServer is a generic plain-HTTP listener used by the helper-only

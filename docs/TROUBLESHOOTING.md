@@ -305,7 +305,7 @@ The Docker SDK's hijack-path dialer falls through to `net.Dial(cli.proto, cli.ad
 
 **References**:
 - Issue: [#682](https://github.com/netresearch/ofelia/issues/682)
-- Fix: this PR
+- Fix: [#686](https://github.com/netresearch/ofelia/pull/686)
 
 ### Unsupported `DOCKER_HOST` Scheme
 

@@ -30,7 +30,8 @@ func TestSchemeHandlers_ApplyDirect(t *testing.T) {
 		// wantHTTP2 pins the ForceAttemptHTTP2 flag the handler should set.
 		wantHTTP2 bool
 		// wantDialerSet asserts whether the handler installed a custom
-		// DialContext (only the unix handler does).
+		// DialContext (unix and http handlers do; tcp and tls handlers
+		// don't because Go's net.Dial accepts "tcp" as a network name).
 		wantDialerSet bool
 	}
 
