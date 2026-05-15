@@ -4,6 +4,7 @@
 package middlewares
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -579,4 +580,84 @@ func TestWebhookMiddleware_Run_DispatchesToAllInnerWebhooks(t *testing.T) {
 		"TriggerSuccess webhook must NOT fire on failed execution")
 	assert.Equal(t, int32(1), atomic.LoadInt32(&errorCalled),
 		"TriggerError webhook MUST fire on failed execution (the #670 regression)")
+}
+
+// TestSendWithRetry_HonorsContextCancellation pins the fix for
+// https://github.com/netresearch/ofelia/issues/673.
+//
+// Before the fix the inter-attempt backoff used a bare time.Sleep that
+// did not observe ctx cancellation, so SIGTERM on a daemon mid-retry kept
+// a goroutine pinned for up to RetryDelay × RetryCount waiting for the
+// sleep to return. The fix replaces the sleep with a select over
+// (time.After, ctx.Done) so retries drain promptly on shutdown.
+//
+// We assert two things:
+//  1. After cancellation, sendWithRetry returns within a small window
+//     (well under the RetryDelay budget) instead of blocking through it.
+//  2. The returned error wraps context.Canceled so callers can branch on it.
+func TestSendWithRetry_HonorsContextCancellation(t *testing.T) {
+	// Not parallel — modifies global security config.
+	SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
+	defer SetValidateWebhookURLForTest(ValidateWebhookURLImpl)
+	SetTransportFactoryForTest(func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() })
+	defer SetTransportFactoryForTest(NewSafeTransport)
+
+	// Server always fails so we enter the retry loop.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	// Big retry budget so a naive time.Sleep impl would block the test
+	// well past its deadline.
+	const retryDelay = 30 * time.Second
+	config := &WebhookConfig{
+		Name:       "test-ctx-cancel",
+		Preset:     "slack",
+		ID:         "T12345/B67890",
+		Secret:     "xoxb-test-secret",
+		URL:        server.URL,
+		Trigger:    TriggerAlways,
+		Timeout:    2 * time.Second,
+		RetryCount: 5,
+		RetryDelay: retryDelay,
+	}
+
+	loader := NewPresetLoader(nil)
+	middleware, err := NewWebhook(config, loader)
+	require.NoError(t, err)
+	webhook := middleware.(*Webhook)
+
+	job := &TestJob{}
+	job.Name = "test-job"
+	job.Command = "echo hello"
+	sh := core.NewScheduler(newDiscardLogger())
+	e, err := core.NewExecution()
+	require.NoError(t, err)
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	ctx := core.NewContextWithContext(cancelCtx, sh, job, e)
+	ctx.Start()
+	ctx.Stop(nil)
+
+	// Cancel a hair after the first failed attempt — long enough for the
+	// loop to enter time.After, short enough that without the fix we'd
+	// block for the full retryDelay.
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err = webhook.sendWithRetry(ctx)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled,
+		"sendWithRetry should return an error chain containing context.Canceled")
+	// Tolerate CI slowness but stay well under RetryDelay. If the fix
+	// regresses to time.Sleep, elapsed will balloon to ~retryDelay.
+	assert.Less(t, elapsed, 5*time.Second,
+		"sendWithRetry should drain promptly on ctx cancel (elapsed=%v, retryDelay=%v)",
+		elapsed, retryDelay)
 }
