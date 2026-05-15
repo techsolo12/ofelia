@@ -49,9 +49,12 @@ func TestSchemeHandlers_ApplyDirect(t *testing.T) {
 			wantDialerSet: false,
 		},
 		schemeHTTP: {
+			// applyHTTPTransport installs an explicit TCP DialContext so the
+			// SDK's hijack-path dialer routes via dialerFromTransport instead
+			// of the broken net.Dial("http", addr) fallback. See #682.
 			host:          "http://127.0.0.1:2375",
 			wantHTTP2:     false,
-			wantDialerSet: false,
+			wantDialerSet: true,
 		},
 		schemeHTTPS: {
 			host:          "https://127.0.0.1:2376",

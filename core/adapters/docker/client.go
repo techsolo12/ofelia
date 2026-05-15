@@ -109,7 +109,10 @@ type schemeHandler struct {
 //     TLSVerify). Re-enabled on the public allow-list in #616 now that the
 //     TLS plumbing from #613 wires the cert material into the custom
 //     transport via applyDockerTLS.
-//   - http:    Plain HTTP/1.1; no TLS handling.
+//   - http:    Plain HTTP/1.1; no TLS handling. Installs an explicit TCP
+//     DialContext so the SDK's hijack-path dialer routes ContainerExecAttach
+//     etc. via dialerFromTransport rather than falling to the broken
+//     net.Dial("http", addr) default (#682).
 //   - https:   HTTPS with HTTP/2 via ALPN; TLS material is wired in.
 //   - npipe:   Windows named pipe; the actual dialer lives in the SDK and
 //     is build-tagged. The handler is a no-op so non-Windows builds still
@@ -117,7 +120,7 @@ type schemeHandler struct {
 var schemeHandlers = map[string]schemeHandler{
 	schemeUnix:   {allowed: true, apply: applyUnixTransport},
 	schemeTCP:    {allowed: true, apply: applyTCPTransport},
-	schemeHTTP:   {allowed: true, apply: applyPlainTransport},
+	schemeHTTP:   {allowed: true, apply: applyHTTPTransport},
 	schemeHTTPS:  {allowed: true, apply: applyTLSTransport},
 	schemeNpipe:  {allowed: true, apply: applyPlainTransport},
 	schemeTCPTLS: {allowed: true, apply: applyTLSTransport},
@@ -584,9 +587,38 @@ func applyTCPTransport(transport *http.Transport, _ *ClientConfig, _ string) {
 	disableHTTP2AutoConfig(transport)
 }
 
-// applyPlainTransport is the no-frills HTTP/1.1 path used for http:// and
-// npipe:// (npipe relies on the SDK's build-tagged dialer; on non-Windows
+// applyHTTPTransport handles plain http:// Docker hosts. Identical to
+// applyTCPTransport in TLS / HTTP/2 posture, plus an explicit TCP
+// DialContext.
+//
+// Why the explicit DialContext: the Docker SDK's hijack-path dialer
+// (used by ContainerExecAttach / ContainerAttach / ContainerLogs follow)
+// consults baseTransport.DialContext first; when it's nil the SDK falls
+// to a switch keyed on cli.proto and ultimately net.Dial(cli.proto, addr).
+// For proto == "http" that becomes net.Dial("http", addr), which Go's net
+// package rejects with "unknown network http" — the bug tracked in
+// https://github.com/netresearch/ofelia/issues/682. Installing a TCP
+// dialer here lets the SDK pick up our DialContext via dialerFromTransport
+// and never hits the broken fallback.
+//
+// The dial network is hard-coded to "tcp" regardless of cli.proto; the
+// SDK passes its proto through but our DialContext signature ignores it
+// and always dials TCP, which is what http:// means.
+func applyHTTPTransport(transport *http.Transport, cfg *ClientConfig, host string) {
+	addr := strings.TrimPrefix(host, schemeHTTP+"://")
+	transport.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: cfg.DialTimeout}
+		return dialer.DialContext(ctx, schemeTCP, addr)
+	}
+	transport.ForceAttemptHTTP2 = false
+	disableHTTP2AutoConfig(transport)
+}
+
+// applyPlainTransport is the no-frills HTTP/1.1 path used for npipe://
+// (the actual dialer lives in the SDK and is build-tagged; on non-Windows
 // the connection will fail at dial time — see docs/TROUBLESHOOTING.md).
+// http:// has its own handler (applyHTTPTransport, #682) so it can
+// install a TCP DialContext that fixes hijack-path APIs.
 func applyPlainTransport(transport *http.Transport, _ *ClientConfig, _ string) {
 	transport.ForceAttemptHTTP2 = false
 	disableHTTP2AutoConfig(transport)

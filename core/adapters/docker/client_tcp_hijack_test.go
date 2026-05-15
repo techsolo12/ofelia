@@ -77,17 +77,44 @@ func TestPlainTCPHijack_ContainerExecAttachWorks(t *testing.T) {
 	_, _ = io.Copy(io.Discard, resp.Reader)
 }
 
-// TestPlainHTTPHijack_ContainerExecAttach_FollowUp documents that http://
-// hijack is broken for a SEPARATE reason than #668 and is tracked in
-// https://github.com/netresearch/ofelia/issues/682. The SDK's default-case
-// dialer falls to net.Dial(cli.proto, cli.addr); for proto == "http" that
-// is net.Dial("http", addr), which Go's net package rejects with "unknown
-// network http". Fixing that requires installing a TCP DialContext for the
-// http:// transport.
+// TestPlainHTTPHijack_ContainerExecAttachWorks pins the fix for
+// https://github.com/netresearch/ofelia/issues/682. Sibling bug to #668.
 //
-// Skipped on purpose so `go test -v` surfaces the gap.
-func TestPlainHTTPHijack_ContainerExecAttach_FollowUp(t *testing.T) {
-	t.Skip("http:// hijack requires a TCP DialContext on the http transport — tracked in #682")
+// Pre-fix, http:// hijack failed with "dial http: unknown network http"
+// because the SDK's default-case dialer fell to net.Dial("http", addr),
+// which Go's net package rejects ("http" is not a valid network name).
+// The fix installs an explicit TCP DialContext on the http:// transport
+// (applyHTTPTransport) so the SDK picks our dialer via dialerFromTransport
+// and never reaches the broken fallback.
+//
+// Same plain-HTTP TCP listener as the tcp:// test — only the host scheme
+// changes — so we exercise exactly the path #682 reported.
+func TestPlainHTTPHijack_ContainerExecAttachWorks(t *testing.T) {
+	srv, addr := newFakePlainDockerProxy(t)
+	t.Cleanup(func() { _ = srv.Shutdown(context.Background()) })
+
+	cfg := DefaultConfig()
+	cfg.Host = "http://" + addr
+	cfg.NegotiateTimeout = 500 * time.Millisecond
+
+	c, err := NewClientWithConfig(cfg)
+	if err != nil {
+		t.Fatalf("NewClientWithConfig: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if _, pingErr := c.SDK().Ping(ctx); pingErr != nil {
+		t.Fatalf("Ping: %v", pingErr)
+	}
+
+	resp, err := c.SDK().ContainerExecAttach(ctx, "deadbeef", containertypes.ExecAttachOptions{})
+	if err != nil {
+		t.Fatalf("ContainerExecAttach over plain http://: %v", err)
+	}
+	defer resp.Close()
+	_, _ = io.Copy(io.Discard, resp.Reader)
 }
 
 // TestDisableHTTP2AutoConfig_KeepsTLSClientConfigNil is a focused unit test
@@ -148,7 +175,8 @@ func TestApplyTransport_NonTLSDisableHTTP2AutoConfig(t *testing.T) {
 	}{
 		{"unix", applyUnixTransport, "unix:///var/run/docker.sock"},
 		{"tcp", applyTCPTransport, "tcp://127.0.0.1:2375"},
-		{"plain", applyPlainTransport, "http://127.0.0.1:2375"},
+		{"http", applyHTTPTransport, "http://127.0.0.1:2375"},
+		{"plain", applyPlainTransport, "npipe://./pipe/docker_engine"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

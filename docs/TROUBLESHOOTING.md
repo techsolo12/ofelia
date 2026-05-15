@@ -273,7 +273,39 @@ The regular HTTP path doesn't consult `cli.tlsConfig()` and is unaffected — wh
 **References**:
 - Issue: [#668](https://github.com/netresearch/ofelia/issues/668)
 - Fix: [#681](https://github.com/netresearch/ofelia/pull/681)
-- Related (separate `http://` hijack failure): [#682](https://github.com/netresearch/ofelia/issues/682)
+- Related sibling fix (`http://` hijack): [#682](https://github.com/netresearch/ofelia/issues/682)
+
+### `DOCKER_HOST=http://...` exec attach fails with `dial http: unknown network http`
+
+**Symptoms**:
+
+```
+[Job "..." (...)] Finished in "...", failed: true, error: job run: exec run:
+run_exec container "...": cannot connect to the Docker daemon. Is 'docker daemon'
+running on this host?: dial http: unknown network http
+```
+
+Container discovery succeeds; only the hijack-using APIs fail (`run_exec` / `ContainerAttach` / `ContainerLogs --follow`).
+
+**Affected Versions**: pre-v0.25.1 (sibling to the v0.25.0 `tcp://` regression above; the `http://` variant is older and existed before v0.25.0).
+
+**Affected Configurations**:
+
+- `DOCKER_HOST=http://...` (plain HTTP over TCP, not the canonical `tcp://...` form).
+- Not affected: `unix://`, `tcp://`, `tcp+tls://`, `https://`.
+
+**Root Cause**:
+
+The Docker SDK's hijack-path dialer falls through to `net.Dial(cli.proto, cli.addr)`. For `proto == "http"` that becomes `net.Dial("http", addr)`, which Go's `net` package rejects — `"http"` is not a valid network name (only `"tcp"`, `"tcp4"`, `"tcp6"`, `"udp"`, `"unix"`, etc.). Distinct root cause from [#668](https://github.com/netresearch/ofelia/issues/668): that one was a runtime mutation triggering `tls.Dial`; this is a static "wrong network constant" failure.
+
+**Solutions**:
+
+1. **Upgrade to v0.25.1+** (recommended). The fix installs an explicit TCP `DialContext` on the `http://` transport so the SDK picks our dialer via `dialerFromTransport` instead of reaching the broken default.
+2. **Workaround**: use `tcp://host:port` instead of `http://host:port`. Functionally identical for the Docker API; `tcp://` is the documented Docker CLI form.
+
+**References**:
+- Issue: [#682](https://github.com/netresearch/ofelia/issues/682)
+- Fix: this PR
 
 ### Unsupported `DOCKER_HOST` Scheme
 
