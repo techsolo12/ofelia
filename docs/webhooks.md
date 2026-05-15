@@ -2,6 +2,78 @@
 
 Ofelia supports sending webhook notifications when jobs complete. You can configure multiple named webhooks and assign them to specific jobs, allowing flexible notification routing.
 
+## Lifecycle at a glance
+
+Three asymmetries are easy to miss when reading the sections below in
+isolation: (1) webhook *definitions* are operator-controlled and only
+processed from a service container or from INI, while *references* can
+come from any container; (2) INI definitions override label definitions on
+name collision; (3) at dispatch time the per-webhook `url` field
+short-circuits the preset's `url_scheme`. The diagram below traces the
+full flow from "where do definitions come from" to "what hits the wire".
+
+```mermaid
+flowchart TD
+    subgraph Sources["📝 Define webhooks (operator-controlled)"]
+        direction LR
+        INI["<b>INI</b><br/><code>[webhook &quot;NAME&quot;]</code><br/>preset = …<br/>url = …<br/>id / secret / trigger / …"]
+        Labels["<b>Docker labels</b><br/><code>ofelia.webhook.NAME.preset</code><br/><code>ofelia.webhook.NAME.url</code><br/>… on a container with<br/><code>ofelia.service: &quot;true&quot;</code> only"]
+    end
+
+    INI ==>|"INI wins on<br/>name collision<br/>(warn-logged)"| Registry
+    Labels ==> Registry
+
+    Registry[("<b>Webhook registry</b><br/>keyed by name<br/>(WebhookConfigs.Webhooks)")]
+
+    subgraph Refs["🔗 Reference webhooks by name (any container)"]
+        direction LR
+        JobRef["<b>Per job</b><br/><code>ofelia.job-exec.JOB.webhooks: a, b</code><br/>or <code>webhooks = a, b</code> in INI"]
+        GlobalRef["<b>Global selector</b><br/><code>[global] webhook-webhooks = c</code><br/>or <code>ofelia.webhook-webhooks</code> label"]
+    end
+
+    JobRef --> Union
+    GlobalRef --> Union
+    Union{{"Per-job union<br/>(deduped by name)"}}
+    Registry -.->|"name lookup<br/>(unknown → attach error)"| Union
+
+    Union --> Fallback{"<code>preset</code> on<br/>this webhook empty?"}
+    Fallback -->|no| Attach
+    Fallback -->|yes| DefaultPreset{"<code>webhook-default-preset</code><br/>set?"}
+    DefaultPreset -->|"<b>nil</b> = unset<br/>(default)"| FillJSONPost["fill with bundled<br/><code>json-post</code>"]
+    DefaultPreset -->|"<b>non-empty</b><br/>operator's choice"| FillCustom["fill with operator's<br/>chosen preset name"]
+    DefaultPreset -->|"<b>empty string</b><br/>(explicit opt-out)"| AttachError["<b>Attach error</b><br/>names <code>webhook-default-preset</code><br/>for grep-ability"]
+    FillJSONPost --> Attach
+    FillCustom --> Attach
+
+    Attach["<b>Composite middleware</b><br/>attached once per job"]
+
+    Attach --> Dispatch["<b>On job run, per inner webhook:</b><br/>1. <code>ShouldNotify(trigger)</code><br/>2. <code>BuildURL</code> — <code>url</code> overrides <code>url_scheme</code><br/>3. <code>ValidateWebhookURL</code> (allow-list)<br/>4. HTTP send + retry"]
+
+    classDef src fill:#fef3c7,stroke:#d97706
+    classDef ref fill:#dbeafe,stroke:#2563eb
+    classDef reg fill:#dcfce7,stroke:#16a34a
+    classDef err fill:#fee2e2,stroke:#dc2626
+    class Sources src
+    class Refs ref
+    class Registry reg
+    class AttachError err
+```
+
+Where to read next:
+
+- **Source authoring** — INI `[webhook "name"]` or service-container
+  labels: see [Quick Start](#quick-start) and
+  [Docker Label Reference](#docker-label-reference).
+- **Security boundary** — why labels are service-container-only and what
+  the operator-tunable globals are: see
+  [INI vs Docker labels](#docker-label-reference) and
+  [`webhook-allowed-hosts`](#global-settings).
+- **The `json-post` fallback** —
+  [Custom Webhooks (URL-only, no custom preset)](#custom-webhooks-url-only-no-custom-preset)
+  and [Opting out of the default](#opting-out-of-the-default).
+- **`url` overriding `url_scheme`** — the column annotation in
+  [Webhook Settings](#webhook-settings).
+
 ## Quick Start
 
 ### Simplest case: just POST to a URL
