@@ -596,12 +596,6 @@ func TestWebhookMiddleware_Run_DispatchesToAllInnerWebhooks(t *testing.T) {
 //     (well under the RetryDelay budget) instead of blocking through it.
 //  2. The returned error wraps context.Canceled so callers can branch on it.
 func TestSendWithRetry_HonorsContextCancellation(t *testing.T) {
-	// Not parallel — modifies global security config.
-	SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
-	defer SetValidateWebhookURLForTest(ValidateWebhookURLImpl)
-	SetTransportFactoryForTest(func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() })
-	defer SetTransportFactoryForTest(NewSafeTransport)
-
 	// Server always fails so we enter the retry loop.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -611,50 +605,13 @@ func TestSendWithRetry_HonorsContextCancellation(t *testing.T) {
 	// Big retry budget so a naive time.Sleep impl would block the test
 	// well past its deadline.
 	const retryDelay = 30 * time.Second
-	config := &WebhookConfig{
+	elapsed := runCtxCancelScenario(t, &WebhookConfig{
 		Name:       "test-ctx-cancel",
-		Preset:     "slack",
-		ID:         "T12345/B67890",
-		Secret:     "xoxb-test-secret",
 		URL:        server.URL,
-		Trigger:    TriggerAlways,
 		Timeout:    2 * time.Second,
 		RetryCount: 5,
 		RetryDelay: retryDelay,
-	}
-
-	loader := NewPresetLoader(nil)
-	middleware, err := NewWebhook(config, loader)
-	require.NoError(t, err)
-	webhook := middleware.(*Webhook)
-
-	job := &TestJob{}
-	job.Name = "test-job"
-	job.Command = "echo hello"
-	sh := core.NewScheduler(newDiscardLogger())
-	e, err := core.NewExecution()
-	require.NoError(t, err)
-
-	cancelCtx, cancel := context.WithCancel(context.Background())
-	ctx := core.NewContextWithContext(cancelCtx, sh, job, e)
-	ctx.Start()
-	ctx.Stop(nil)
-
-	// Cancel a hair after the first failed attempt — long enough for the
-	// loop to enter time.After, short enough that without the fix we'd
-	// block for the full retryDelay.
-	go func() {
-		time.Sleep(100 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
-	err = webhook.sendWithRetry(ctx)
-	elapsed := time.Since(start)
-
-	require.Error(t, err)
-	require.ErrorIs(t, err, context.Canceled,
-		"sendWithRetry should return an error chain containing context.Canceled")
+	})
 	// Tolerate CI slowness but stay well under RetryDelay. If the fix
 	// regresses to time.Sleep, elapsed will balloon to ~retryDelay.
 	assert.Less(t, elapsed, 5*time.Second,
@@ -671,20 +628,11 @@ func TestSendWithRetry_HonorsContextCancellation(t *testing.T) {
 // respond" scenario then blocked daemon shutdown for up to the full
 // per-request Timeout, defeating the SIGTERM-drains-promptly contract.
 //
-// We assert the first-attempt cancel path here. The handler blocks until
-// signaled so the only way out is ctx cancellation; we assert the
-// returned error wraps context.Canceled and the call returns well under
-// the Timeout (would otherwise block for ~ Timeout).
+// RetryCount=0 takes the inter-attempt backoff out of play — the cancel
+// must propagate through send()'s own request context, not through the
+// retry loop. Handler blocks until the test exits so the only way out is
+// ctx cancellation.
 func TestSend_HonorsContextCancellationDuringInFlightRequest(t *testing.T) {
-	// Not parallel — modifies global security config.
-	SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
-	defer SetValidateWebhookURLForTest(ValidateWebhookURLImpl)
-	SetTransportFactoryForTest(func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() })
-	defer SetTransportFactoryForTest(NewSafeTransport)
-
-	// Server blocks on the request's own context — never writes a response
-	// unless the test cancels. Lets us isolate the in-flight-request cancel
-	// path from the retry-backoff cancel path.
 	release := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
@@ -700,20 +648,47 @@ func TestSend_HonorsContextCancellationDuringInFlightRequest(t *testing.T) {
 	defer close(release)
 
 	const requestTimeout = 30 * time.Second
-	config := &WebhookConfig{
+	elapsed := runCtxCancelScenario(t, &WebhookConfig{
 		Name:       "test-ctx-cancel-inflight",
-		Preset:     "slack",
-		ID:         "T12345/B67890",
-		Secret:     "xoxb-test-secret",
 		URL:        server.URL,
-		Trigger:    TriggerAlways,
 		Timeout:    requestTimeout, // big enough that without the fix we'd block
 		RetryCount: 0,              // exactly one attempt — cancel hits send(), not the backoff
 		RetryDelay: time.Millisecond,
-	}
+	})
+	assert.Less(t, elapsed, 5*time.Second,
+		"send() should drain promptly on ctx cancel (elapsed=%v, requestTimeout=%v); "+
+			"if reqCtx regresses to context.Background(), elapsed approaches requestTimeout",
+		elapsed, requestTimeout)
+}
+
+// runCtxCancelScenario is the shared scaffolding for the #673 ctx-cancellation
+// tests. It assigns the standard slack preset fixture fields onto cfg, builds
+// the webhook + Context with a cancellable parent, kicks off a goroutine that
+// cancels at 100ms (long enough to enter the relevant blocking region in the
+// fix; short enough that pre-fix tests time out loudly), runs sendWithRetry,
+// and asserts the returned error wraps context.Canceled. Returns the elapsed
+// duration so individual callers can apply their own ceiling assertion.
+//
+// Each caller still owns its httptest server (different blocking semantics)
+// and its own "elapsed < X" budget, so the contract per test is explicit at
+// the call site even though the scaffolding is shared.
+func runCtxCancelScenario(t *testing.T, cfg *WebhookConfig) time.Duration {
+	t.Helper()
+	// Not parallel — modifies global security config.
+	SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
+	t.Cleanup(func() { SetValidateWebhookURLForTest(ValidateWebhookURLImpl) })
+	SetTransportFactoryForTest(func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() })
+	t.Cleanup(func() { SetTransportFactoryForTest(NewSafeTransport) })
+
+	// Standard slack preset fixture fields — callers only customize the
+	// retry / timeout knobs and the target URL.
+	cfg.Preset = "slack"
+	cfg.ID = "T12345/B67890"
+	cfg.Secret = "xoxb-test-secret"
+	cfg.Trigger = TriggerAlways
 
 	loader := NewPresetLoader(nil)
-	middleware, err := NewWebhook(config, loader)
+	middleware, err := NewWebhook(cfg, loader)
 	require.NoError(t, err)
 	webhook := middleware.(*Webhook)
 
@@ -729,8 +704,6 @@ func TestSend_HonorsContextCancellationDuringInFlightRequest(t *testing.T) {
 	ctx.Start()
 	ctx.Stop(nil)
 
-	// Cancel mid-flight: long enough for the request to be in-flight,
-	// short enough that without the fix we'd block for the full timeout.
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
@@ -742,9 +715,6 @@ func TestSend_HonorsContextCancellationDuringInFlightRequest(t *testing.T) {
 
 	require.Error(t, err)
 	require.ErrorIs(t, err, context.Canceled,
-		"sendWithRetry should propagate context.Canceled when send() is canceled mid-flight")
-	assert.Less(t, elapsed, 5*time.Second,
-		"send() should drain promptly on ctx cancel (elapsed=%v, requestTimeout=%v); "+
-			"if reqCtx regresses to context.Background(), elapsed approaches requestTimeout",
-		elapsed, requestTimeout)
+		"sendWithRetry should return an error chain containing context.Canceled")
+	return elapsed
 }
