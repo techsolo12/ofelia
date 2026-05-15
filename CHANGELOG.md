@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Jobs that reference more than one webhook (e.g. `ofelia.job-exec.<name>.webhooks: "wh-success, wh-error"`) now actually fire every listed webhook. `core.middlewareContainer.Use()` deduplicates by reflect type, so handing it two `*middlewares.Webhook` instances kept only the first one and silently dropped the rest — leaving the second webhook (typically the error-trigger one) attached to nothing and never invoked. All five per-job `buildMiddlewares` paths (`ExecJobConfig`, `RunJobConfig`, `LocalJobConfig`, `ComposeJobConfig`, `RunServiceConfig`) and the global `buildSchedulerMiddlewares` path now wrap the resolved webhook middlewares in `middlewares.NewWebhookMiddleware`, which exposes a single composite to `Use()` and dispatches to every inner webhook at run time. The previously-silent `wm.GetMiddlewares` error path (unknown webhook name, preset-load failure, missing required variable) now emits a `slog.Error` instead of swallowing the failure, so misconfigured webhooks are visible in the log. ([#670](https://github.com/netresearch/ofelia/issues/670))
+
 ## [0.25.0] - 2026-05-14
 
 ### Added

@@ -674,13 +674,46 @@ func (c *Config) buildSchedulerMiddlewares(sh *core.Scheduler) {
 	sh.Use(middlewares.NewSave(&c.Global.SaveConfig))
 	sh.Use(middlewares.NewMail(&c.Global.MailConfig))
 
-	// Add global webhook middlewares
+	// Add global webhook middlewares wrapped in a composite. Individual
+	// *middlewares.Webhook entries cannot be added to the same container
+	// directly: core.middlewareContainer.Use() deduplicates by reflect type,
+	// so the second and any subsequent webhook would be silently dropped.
+	// See https://github.com/netresearch/ofelia/issues/670.
 	if wm := c.getWebhookManager(); wm != nil {
-		if mws, err := wm.GetGlobalMiddlewares(); err == nil {
-			for _, mw := range mws {
-				sh.Use(mw)
-			}
+		attachWebhookMiddlewares(c.logger, "<global>", wm.GetGlobalMiddlewares, sh.Use)
+	}
+}
+
+// attachWebhookMiddlewares fetches webhook middlewares via getMiddlewares and
+// attaches them through use, wrapping them in middlewares.NewWebhookMiddleware
+// so that multiple webhook instances survive the type-based deduplication in
+// core.middlewareContainer.Use(). Errors are logged so misconfigurations
+// (unknown webhook name, preset load failure, required-variable missing) are
+// visible instead of silently disabling notifications.
+//
+// scope is a short label used only in the error log (job name, or "<global>"
+// for scheduler-level webhooks).
+//
+// See https://github.com/netresearch/ofelia/issues/670.
+func attachWebhookMiddlewares(
+	logger *slog.Logger,
+	scope string,
+	getMiddlewares func() ([]core.Middleware, error),
+	use func(...core.Middleware),
+) {
+	mws, err := getMiddlewares()
+	if err != nil {
+		if logger == nil {
+			logger = slog.Default()
 		}
+		const msg = "webhook middleware attach failed; webhook notifications " +
+			"disabled for this scope until config changes trigger a rebuild " +
+			"(or daemon restart)"
+		logger.Error(msg, "scope", scope, "error", err)
+		return
+	}
+	if composite := middlewares.NewWebhookMiddleware(mws); composite != nil {
+		use(composite)
 	}
 }
 
@@ -1036,11 +1069,10 @@ func (c *ExecJobConfig) buildMiddlewares(wm *middlewares.WebhookManager) {
 	c.ExecJob.Use(middlewares.NewSave(&c.SaveConfig))
 	c.ExecJob.Use(middlewares.NewMail(&c.MailConfig))
 	if wm != nil {
-		if mws, err := wm.GetMiddlewares(c.GetWebhookNames()); err == nil {
-			for _, mw := range mws {
-				c.ExecJob.Use(mw)
-			}
-		}
+		names := c.GetWebhookNames()
+		attachWebhookMiddlewares(nil, c.ExecJob.GetName(),
+			func() ([]core.Middleware, error) { return wm.GetMiddlewares(names) },
+			c.ExecJob.Use)
 	}
 }
 
@@ -1077,11 +1109,10 @@ func (c *RunJobConfig) buildMiddlewares(wm *middlewares.WebhookManager) {
 	c.RunJob.Use(middlewares.NewSave(&c.SaveConfig))
 	c.RunJob.Use(middlewares.NewMail(&c.MailConfig))
 	if wm != nil {
-		if mws, err := wm.GetMiddlewares(c.GetWebhookNames()); err == nil {
-			for _, mw := range mws {
-				c.RunJob.Use(mw)
-			}
-		}
+		names := c.GetWebhookNames()
+		attachWebhookMiddlewares(nil, c.RunJob.GetName(),
+			func() ([]core.Middleware, error) { return wm.GetMiddlewares(names) },
+			c.RunJob.Use)
 	}
 }
 
@@ -1130,11 +1161,10 @@ func (c *LocalJobConfig) buildMiddlewares(wm *middlewares.WebhookManager) {
 	c.LocalJob.Use(middlewares.NewSave(&c.SaveConfig))
 	c.LocalJob.Use(middlewares.NewMail(&c.MailConfig))
 	if wm != nil {
-		if mws, err := wm.GetMiddlewares(c.GetWebhookNames()); err == nil {
-			for _, mw := range mws {
-				c.LocalJob.Use(mw)
-			}
-		}
+		names := c.GetWebhookNames()
+		attachWebhookMiddlewares(nil, c.LocalJob.GetName(),
+			func() ([]core.Middleware, error) { return wm.GetMiddlewares(names) },
+			c.LocalJob.Use)
 	}
 }
 
@@ -1144,11 +1174,10 @@ func (c *ComposeJobConfig) buildMiddlewares(wm *middlewares.WebhookManager) {
 	c.ComposeJob.Use(middlewares.NewSave(&c.SaveConfig))
 	c.ComposeJob.Use(middlewares.NewMail(&c.MailConfig))
 	if wm != nil {
-		if mws, err := wm.GetMiddlewares(c.GetWebhookNames()); err == nil {
-			for _, mw := range mws {
-				c.ComposeJob.Use(mw)
-			}
-		}
+		names := c.GetWebhookNames()
+		attachWebhookMiddlewares(nil, c.ComposeJob.GetName(),
+			func() ([]core.Middleware, error) { return wm.GetMiddlewares(names) },
+			c.ComposeJob.Use)
 	}
 }
 
@@ -1158,11 +1187,10 @@ func (c *RunServiceConfig) buildMiddlewares(wm *middlewares.WebhookManager) {
 	c.RunServiceJob.Use(middlewares.NewSave(&c.SaveConfig))
 	c.RunServiceJob.Use(middlewares.NewMail(&c.MailConfig))
 	if wm != nil {
-		if mws, err := wm.GetMiddlewares(c.GetWebhookNames()); err == nil {
-			for _, mw := range mws {
-				c.RunServiceJob.Use(mw)
-			}
-		}
+		names := c.GetWebhookNames()
+		attachWebhookMiddlewares(nil, c.RunServiceJob.GetName(),
+			func() ([]core.Middleware, error) { return wm.GetMiddlewares(names) },
+			c.RunServiceJob.Use)
 	}
 }
 

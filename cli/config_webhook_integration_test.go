@@ -4,6 +4,9 @@
 package cli
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/netresearch/ofelia/middlewares"
@@ -231,6 +234,131 @@ func TestBuildMiddlewares_IncludesWebhooks(t *testing.T) {
 	middlewareCount := len(jobConfig.ExecJob.Middlewares())
 	if middlewareCount < 1 {
 		t.Errorf("Expected at least 1 middleware, got %d", middlewareCount)
+	}
+}
+
+// TestBuildMiddlewares_MultipleWebhooks_AllAttached verifies that multiple
+// webhooks attached to a single job are ALL retained — regression test for
+// https://github.com/netresearch/ofelia/issues/670 where
+// core.middlewareContainer.Use() deduplicated by reflect type, silently
+// dropping every webhook after the first when a job referenced more than one.
+func TestBuildMiddlewares_MultipleWebhooks_AllAttached(t *testing.T) {
+	t.Parallel()
+	globalConfig := middlewares.DefaultWebhookGlobalConfig()
+	manager := middlewares.NewWebhookManager(globalConfig)
+
+	successHook := &middlewares.WebhookConfig{
+		Name:    "wh-success",
+		Preset:  "slack",
+		ID:      "T123/B456",
+		Secret:  "xoxb-secret",
+		Trigger: middlewares.TriggerSuccess,
+	}
+	errorHook := &middlewares.WebhookConfig{
+		Name:    "wh-error",
+		Preset:  "slack",
+		ID:      "T123/B456",
+		Secret:  "xoxb-secret",
+		Trigger: middlewares.TriggerError,
+	}
+	if err := manager.Register(successHook); err != nil {
+		t.Fatalf("register success hook: %v", err)
+	}
+	if err := manager.Register(errorHook); err != nil {
+		t.Fatalf("register error hook: %v", err)
+	}
+
+	jobConfig := &ExecJobConfig{}
+	jobConfig.Name = "test-job"
+	jobConfig.Schedule = "@daily"
+	jobConfig.Webhooks = "wh-success, wh-error"
+
+	jobConfig.buildMiddlewares(manager)
+
+	var (
+		individual []string
+		composite  *middlewares.WebhookMiddleware
+	)
+	for _, mw := range jobConfig.ExecJob.Middlewares() {
+		switch w := mw.(type) {
+		case *middlewares.Webhook:
+			individual = append(individual, w.Config.Name)
+		case *middlewares.WebhookMiddleware:
+			composite = w
+		}
+	}
+
+	if composite == nil {
+		t.Fatalf("expected a *middlewares.WebhookMiddleware composite attached; only got individual %v", individual)
+	}
+	if len(individual) > 0 {
+		t.Errorf("expected webhooks to be wrapped in composite, but found loose *middlewares.Webhook entries: %v", individual)
+	}
+
+	names := make([]string, 0, len(composite.Webhooks()))
+	for _, mw := range composite.Webhooks() {
+		w, ok := mw.(*middlewares.Webhook)
+		if !ok {
+			t.Errorf("composite contains non-Webhook middleware: %T", mw)
+			continue
+		}
+		names = append(names, w.Config.Name)
+	}
+	if len(names) != 2 {
+		t.Fatalf("expected composite to contain 2 webhooks, got %d: %v", len(names), names)
+	}
+	wantNames := map[string]bool{"wh-success": true, "wh-error": true}
+	for _, n := range names {
+		if !wantNames[n] {
+			t.Errorf("unexpected webhook in composite: %q", n)
+		}
+		delete(wantNames, n)
+	}
+	for n := range wantNames {
+		t.Errorf("composite missing webhook %q", n)
+	}
+}
+
+// TestBuildMiddlewares_WebhookAttachFailureLogged verifies that an error from
+// WebhookManager.GetMiddlewares (e.g., unknown webhook name) is logged and the
+// job is left without webhook middleware, instead of the previous silent
+// swallow that hid misconfigurations from operators.
+//
+// See https://github.com/netresearch/ofelia/issues/670.
+func TestBuildMiddlewares_WebhookAttachFailureLogged(t *testing.T) {
+	// Not parallel: mutates slog.Default(). Other tests that call
+	// middlewares.NewWebhookManager hit warnIfWideOpenEgress, which writes to
+	// the same logger and would otherwise contaminate this buffer.
+	globalConfig := middlewares.DefaultWebhookGlobalConfig()
+	manager := middlewares.NewWebhookManager(globalConfig)
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	jobConfig := &ExecJobConfig{}
+	jobConfig.Name = "test-job"
+	jobConfig.Schedule = "@daily"
+	jobConfig.Webhooks = "missing-webhook"
+
+	jobConfig.buildMiddlewares(manager)
+
+	for _, mw := range jobConfig.ExecJob.Middlewares() {
+		if _, ok := mw.(*middlewares.Webhook); ok {
+			t.Errorf("expected no *middlewares.Webhook attached when lookup fails")
+		}
+		if _, ok := mw.(*middlewares.WebhookMiddleware); ok {
+			t.Errorf("expected no *middlewares.WebhookMiddleware attached when lookup fails")
+		}
+	}
+
+	logged := buf.String()
+	if !strings.Contains(logged, "webhook middleware attach failed") {
+		t.Errorf("expected attach-failure error log, got: %q", logged)
+	}
+	if !strings.Contains(logged, "missing-webhook") {
+		t.Errorf("expected log to mention the missing webhook name, got: %q", logged)
 	}
 }
 

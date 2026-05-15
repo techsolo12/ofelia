@@ -380,7 +380,11 @@ func ParseWebhookNames(s string) []string {
 	return names
 }
 
-// WebhookMiddleware is a composite middleware that dispatches to multiple webhooks
+// WebhookMiddleware is a composite middleware that dispatches to multiple webhooks.
+//
+// A composite wrapper is required because core.middlewareContainer.Use()
+// deduplicates middlewares by their reflect type — adding two *Webhook
+// instances directly would silently drop the second one. See #670.
 type WebhookMiddleware struct {
 	webhooks []core.Middleware
 }
@@ -391,6 +395,14 @@ func NewWebhookMiddleware(webhooks []core.Middleware) core.Middleware {
 		return nil
 	}
 	return &WebhookMiddleware{webhooks: webhooks}
+}
+
+// Webhooks returns the inner webhook middlewares.
+//
+// Exposed for tests that need to verify multi-webhook attachment without
+// reaching into unexported fields. Callers must not mutate the returned slice.
+func (w *WebhookMiddleware) Webhooks() []core.Middleware {
+	return w.webhooks
 }
 
 // ContinueOnStop returns true because we want to report final status

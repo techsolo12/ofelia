@@ -508,3 +508,75 @@ func TestWebhookRun_TriggerFiltering(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&called),
 		"webhook with TriggerError should fire on failure")
 }
+
+// TestWebhookMiddleware_Run_DispatchesToAllInnerWebhooks is the behavioral
+// counterpart to cli/TestBuildMiddlewares_MultipleWebhooks_AllAttached: it
+// verifies that the WebhookMiddleware composite (the production wrapper used
+// to bypass core.middlewareContainer.Use() type-based dedup) actually fans
+// out to each inner webhook at runtime and that each inner webhook's
+// ShouldNotify gate is honored independently.
+//
+// Regression for https://github.com/netresearch/ofelia/issues/670: before
+// the fix, two webhooks attached to the same job were silently deduped to
+// one. The composite is now the production code path that exposes a single
+// type to Use() while still dispatching to N webhooks.
+func TestWebhookMiddleware_Run_DispatchesToAllInnerWebhooks(t *testing.T) {
+	// Not parallel - modifies global security config
+	SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
+	defer SetValidateWebhookURLForTest(ValidateWebhookURLImpl)
+	SetTransportFactoryForTest(func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() })
+	defer SetTransportFactoryForTest(NewSafeTransport)
+
+	var successCalled, errorCalled int32
+	successSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&successCalled, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer successSrv.Close()
+	errorSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&errorCalled, 1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer errorSrv.Close()
+
+	loader := NewPresetLoader(nil)
+
+	successCfg := &WebhookConfig{
+		Name: "wh-success", Preset: "slack",
+		ID: "T12345/B67890", Secret: "xoxb-test-secret",
+		URL: successSrv.URL, Trigger: TriggerSuccess,
+		Timeout: 5 * time.Second, RetryDelay: time.Millisecond,
+	}
+	successMW, err := NewWebhook(successCfg, loader)
+	require.NoError(t, err)
+
+	errorCfg := &WebhookConfig{
+		Name: "wh-error", Preset: "slack",
+		ID: "T12345/B67890", Secret: "xoxb-test-secret",
+		URL: errorSrv.URL, Trigger: TriggerError,
+		Timeout: 5 * time.Second, RetryDelay: time.Millisecond,
+	}
+	errorMW, err := NewWebhook(errorCfg, loader)
+	require.NoError(t, err)
+
+	composite := NewWebhookMiddleware([]core.Middleware{successMW, errorMW})
+	require.NotNil(t, composite, "composite should be non-nil with 2 webhooks")
+
+	job := &TestJob{}
+	job.Name = "failing-job"
+	job.Command = "false"
+	sh := core.NewScheduler(newDiscardLogger())
+
+	e, err := core.NewExecution()
+	require.NoError(t, err)
+	ctx := core.NewContext(sh, job, e)
+	ctx.Start()
+	ctx.Stop(errors.New("job run: non-zero exit code: 1"))
+
+	_ = composite.Run(ctx)
+
+	assert.Equal(t, int32(0), atomic.LoadInt32(&successCalled),
+		"TriggerSuccess webhook must NOT fire on failed execution")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&errorCalled),
+		"TriggerError webhook MUST fire on failed execution (the #670 regression)")
+}
