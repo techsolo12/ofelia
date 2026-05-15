@@ -4,6 +4,7 @@
 package middlewares
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -404,6 +405,12 @@ func TestWebhookTemplateFuncs_Truncate(t *testing.T) {
 		{"short string unchanged", 10, "hello", "hello"},
 		{"exact length unchanged", 5, "hello", "hello"},
 		{"long string truncated", 3, "hello", "hel..."},
+		// Rune-aware: each emoji is one rune (4 UTF-8 bytes). A byte-slice
+		// truncate at n=4 would cut the second emoji mid-rune and corrupt
+		// the JSON downstream. Rune-aware truncate keeps it whole.
+		{"multi-byte runes treated as one", 2, "🔴🟡🟢", "🔴🟡..."},
+		{"multi-byte under limit unchanged", 5, "🔴🟡🟢", "🔴🟡🟢"},
+		{"ascii after emoji boundary", 3, "🔴hello", "🔴he..."},
 	}
 
 	fn := webhookTemplateFuncs["truncate"].(func(int, string) string)
@@ -413,6 +420,51 @@ func TestWebhookTemplateFuncs_Truncate(t *testing.T) {
 			result := fn(tt.n, tt.input)
 			assert.Equal(t, tt.expected, result)
 		})
+	}
+}
+
+// TestWebhookTemplateFuncs_JSON_RFC8259EscapeCoverage pins the escape
+// table on the `json` template helper: every byte U+0000-U+001F must
+// produce a valid JSON escape sequence so the receiver's parser doesn't
+// reject the body when stdout contains terminal escapes (`\x1b`), bell
+// (`\x07`), NUL, form feed, etc. The bundled `json-post` preset added
+// for #676 is the first consumer that routes untrusted command output
+// (Execution.Output / Execution.Stderr) through this helper, which is
+// what surfaced the latent escape gap.
+func TestWebhookTemplateFuncs_JSON_RFC8259EscapeCoverage(t *testing.T) {
+	t.Parallel()
+	fn := webhookTemplateFuncs["json"].(func(string) string)
+
+	// Short-escape forms — keep their conventional names.
+	assert.Equal(t, `\"`, fn(`"`))
+	assert.Equal(t, `\\`, fn(`\`))
+	assert.Equal(t, `\b`, fn("\b"))
+	assert.Equal(t, `\f`, fn("\f"))
+	assert.Equal(t, `\n`, fn("\n"))
+	assert.Equal(t, `\r`, fn("\r"))
+	assert.Equal(t, `\t`, fn("\t"))
+
+	// Other control chars must use \u00XX. NUL and ESC are the most
+	// common real-world offenders (binary tools, ANSI color output).
+	assert.Equal(t, "\\u0000", fn("\x00"))
+	assert.Equal(t, "\\u0007", fn("\x07")) // BEL
+	assert.Equal(t, "\\u001b", fn("\x1b")) // ESC — start of every ANSI sequence
+	assert.Equal(t, "\\u001f", fn("\x1f"))
+
+	// >= 0x20 passes through unchanged, incl. multi-byte UTF-8.
+	assert.Equal(t, " ", fn(" "))
+	assert.Equal(t, "hello", fn("hello"))
+	assert.Equal(t, "🔴", fn("🔴"))
+
+	// Round-trip: helper output wrapped in quotes must parse as JSON
+	// and yield the original string for every control byte 0x00-0x1F.
+	for c := byte(0); c < 0x20; c++ {
+		in := string([]byte{c})
+		quoted := `"` + fn(in) + `"`
+		var out string
+		require.NoError(t, json.Unmarshal([]byte(quoted), &out),
+			"escape of byte 0x%02x must round-trip through JSON; got %q", c, quoted)
+		assert.Equal(t, in, out, "byte 0x%02x must survive escape+parse round-trip", c)
 	}
 }
 

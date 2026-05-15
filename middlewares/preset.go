@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"text/template"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -141,6 +143,29 @@ func (l *PresetLoader) loadBundledPresets() error {
 // AddLocalPresetDir adds a directory to search for local preset files
 func (l *PresetLoader) AddLocalPresetDir(dir string) {
 	l.localPresetDirs = append(l.localPresetDirs, dir)
+}
+
+// DefaultPreset returns the effective global default preset name —
+// (*WebhookGlobalConfig).EffectiveDefaultPreset() unwrapped, with a nil
+// globalConfig also resolving to the bundled DefaultPresetName so tests
+// that construct a loader without a global config still get the fallback.
+// Callers fill this into WebhookConfig.Preset when the per-webhook value
+// is empty, so url-only webhooks work without each one redeclaring `preset`.
+//
+// Operators can opt out of the fallback by setting `webhook-default-preset`
+// to an empty string in INI or via Docker label; that path returns "" here,
+// and NewWebhook then fails attachment for any webhook that omits `preset`
+// — regardless of whether `url` is set — with an error naming
+// webhook-default-preset so operators can grep their way to the docs.
+// (Setting `url` alone is not enough once the fallback is disabled: `url`
+// only overrides the preset's url_scheme, not the preset itself.)
+//
+// See https://github.com/netresearch/ofelia/issues/676.
+func (l *PresetLoader) DefaultPreset() string {
+	if l.globalConfig == nil {
+		return DefaultPresetName
+	}
+	return l.globalConfig.EffectiveDefaultPreset()
 }
 
 // Load loads a preset by name or path
@@ -413,20 +438,49 @@ func (p *Preset) RenderBody(data *WebhookData) (string, error) {
 
 // webhookTemplateFuncs provides helper functions for webhook templates
 var webhookTemplateFuncs = template.FuncMap{
-	"json": func(s string) string {
-		// Escape string for JSON embedding
-		s = strings.ReplaceAll(s, "\\", "\\\\")
-		s = strings.ReplaceAll(s, "\"", "\\\"")
-		s = strings.ReplaceAll(s, "\n", "\\n")
-		s = strings.ReplaceAll(s, "\r", "\\r")
-		s = strings.ReplaceAll(s, "\t", "\\t")
-		return s
-	},
+	// json escapes the *interior* of a JSON string literal. Callers
+	// typically wrap the result in `"..."` themselves, e.g.
+	//   "text": "{{json .Job.Command}}"
+	//
+	// The escape table follows RFC 8259 section 7 — `"`, `\`, every byte
+	// in U+0000-U+001F. The earlier hand-rolled version escaped only
+	// `\`, `"`, `\n`, `\r`, `\t`, leaving NUL, BEL, FF, terminal-escape
+	// `\x1b`, and the other control codes to slip through unescaped.
+	// Command output legitimately contains these (progress bars, ANSI
+	// color, binary tools), and a strict JSON parser on the receiving
+	// webhook endpoint would reject the body. No injection vector
+	// existed — `"` and `\` were always escaped — but availability
+	// (notifications lost) was at risk. See #676 review.
+	"json": jsonStringEscape,
+
+	// jsonRaw marshals an arbitrary template value into a self-contained
+	// JSON literal (including surrounding quotes for strings, or `true`/
+	// `false`/`null`/numbers/arrays/objects as appropriate). Use when a
+	// template wants to emit a fully-formed JSON value rather than
+	// inserting the inner of a string literal — i.e. opposite contract
+	// from `json`. Errors collapse to `"<jsonRaw error: ...>"` so a
+	// template failure is visible at the receiver instead of silently
+	// producing invalid JSON.
+	"jsonRaw": jsonRawMarshal,
+	// truncate cuts s to at most n runes, appending "..." when truncation
+	// happened. Rune-aware (not byte-aware) so multi-byte UTF-8 sequences
+	// (terminal escapes, emoji, non-ASCII command output) are never split
+	// mid-rune. A byte slice that ends inside a UTF-8 sequence would
+	// produce a replacement rune downstream and almost certainly break
+	// the receiver's JSON parser when paired with the `json` escape.
 	"truncate": func(n int, s string) string {
-		if len(s) <= n {
+		if utf8.RuneCountInString(s) <= n {
 			return s
 		}
-		return s[:n] + "..."
+		// Walk n runes, return the byte slice up to that boundary.
+		count := 0
+		for i := range s {
+			if count == n {
+				return s[:i] + "..."
+			}
+			count++
+		}
+		return s + "..." // unreachable: rune count > n above
 	},
 	"default": func(def, val string) string {
 		if val == "" {
@@ -449,6 +503,81 @@ var webhookTemplateFuncs = template.FuncMap{
 	"formatDuration": func(d time.Duration) string {
 		return d.String()
 	},
+}
+
+// jsonStringEscape returns s escaped for embedding inside a JSON string
+// literal (without the surrounding quotes). Covers RFC 8259 section 7:
+//
+//   - U+0022 `"` and U+005C `\` use their short escape forms.
+//   - U+0008 / U+000C / U+000A / U+000D / U+0009 use `\b` / `\f` / `\n` /
+//     `\r` / `\t`.
+//   - All other U+0000-U+001F use `\u00XX`.
+//
+// Bytes ≥ U+0020 (including valid multi-byte UTF-8) pass through. JSON
+// allows U+007F-U+FFFF unescaped in strings; receivers handle them.
+//
+// Implementation note: text/template is not stdlib JSON encoder, so we
+// can't lean on encoding/json.Marshal here without rewriting every
+// bundled preset to drop its outer `"..."` wrappers. Keeping the
+// "interior of a string literal" contract preserves consistency with
+// slack.yaml / discord.yaml / etc.
+func jsonStringEscape(s string) string {
+	// Fast path: pure ASCII-printable input needs no escaping. Hot for
+	// short Job.Name / Schedule strings.
+	if !needsJSONEscape(s) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for i := range len(s) {
+		c := s[i]
+		switch c {
+		case '"':
+			b.WriteString(`\"`)
+		case '\\':
+			b.WriteString(`\\`)
+		case '\b':
+			b.WriteString(`\b`)
+		case '\f':
+			b.WriteString(`\f`)
+		case '\n':
+			b.WriteString(`\n`)
+		case '\r':
+			b.WriteString(`\r`)
+		case '\t':
+			b.WriteString(`\t`)
+		default:
+			if c < 0x20 {
+				fmt.Fprintf(&b, `\u%04x`, c)
+				continue
+			}
+			b.WriteByte(c)
+		}
+	}
+	return b.String()
+}
+
+func needsJSONEscape(s string) bool {
+	for i := range len(s) {
+		c := s[i]
+		if c == '"' || c == '\\' || c < 0x20 {
+			return true
+		}
+	}
+	return false
+}
+
+// jsonRawMarshal marshals v through encoding/json so a template can emit
+// a fully-formed JSON value (string-with-quotes, number, bool, etc.)
+// rather than just the interior of a string literal. Marshal errors are
+// surfaced as a visible string in the body so a receiver-side JSON parse
+// fails loudly instead of silently producing malformed output.
+func jsonRawMarshal(v any) string {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Sprintf("%q", "<jsonRaw error: "+err.Error()+">")
+	}
+	return string(raw)
 }
 
 // ListBundledPresets returns the names of all bundled presets

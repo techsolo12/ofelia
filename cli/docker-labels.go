@@ -67,6 +67,7 @@ var globalLabelAllowList = map[string]bool{
 	// TestGlobalLabelAllowList_OmitsSSRFSensitiveWebhookKeys.
 	webhookGlobalKeyWebhooks:       true,
 	webhookGlobalKeyPresetCacheTTL: true,
+	webhookGlobalKeyDefaultPreset:  true,
 
 	// Legacy unprefixed form left behind by #618 on the label side. Kept in
 	// the allow-list so values still reach applyGlobalWebhookLabels, which
