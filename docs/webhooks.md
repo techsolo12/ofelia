@@ -234,6 +234,8 @@ Ofelia includes presets for popular notification services:
 | `retry-count` | int | Number of retries on failure (default: `3`) |
 | `retry-delay` | duration | Delay between retries (default: `5s`) |
 
+> **Shutdown behavior:** Retries and in-flight HTTP requests both observe scheduler cancellation, so `SIGTERM` drains the webhook stack promptly rather than blocking for `retry-delay × retry-count` (plus one `timeout` for the in-flight request). Since v0.25.1 ([#673](https://github.com/netresearch/ofelia/issues/673)).
+
 ### Job Webhook Assignment
 
 Assign webhooks to jobs using the `webhooks` option:

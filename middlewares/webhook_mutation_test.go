@@ -4,6 +4,7 @@
 package middlewares
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -579,4 +580,141 @@ func TestWebhookMiddleware_Run_DispatchesToAllInnerWebhooks(t *testing.T) {
 		"TriggerSuccess webhook must NOT fire on failed execution")
 	assert.Equal(t, int32(1), atomic.LoadInt32(&errorCalled),
 		"TriggerError webhook MUST fire on failed execution (the #670 regression)")
+}
+
+// TestSendWithRetry_HonorsContextCancellation pins the fix for
+// https://github.com/netresearch/ofelia/issues/673.
+//
+// Before the fix the inter-attempt backoff used a bare time.Sleep that
+// did not observe ctx cancellation, so SIGTERM on a daemon mid-retry kept
+// a goroutine pinned for up to RetryDelay × RetryCount waiting for the
+// sleep to return. The fix replaces the sleep with a select over
+// (time.After, ctx.Done) so retries drain promptly on shutdown.
+//
+// We assert two things:
+//  1. After cancellation, sendWithRetry returns within a small window
+//     (well under the RetryDelay budget) instead of blocking through it.
+//  2. The returned error wraps context.Canceled so callers can branch on it.
+func TestSendWithRetry_HonorsContextCancellation(t *testing.T) {
+	// Server always fails so we enter the retry loop.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	// Big retry budget so a naive time.Sleep impl would block the test
+	// well past its deadline.
+	const retryDelay = 30 * time.Second
+	elapsed := runCtxCancelScenario(t, &WebhookConfig{
+		Name:       "test-ctx-cancel",
+		URL:        server.URL,
+		Timeout:    2 * time.Second,
+		RetryCount: 5,
+		RetryDelay: retryDelay,
+	})
+	// Tolerate CI slowness but stay well under RetryDelay. If the fix
+	// regresses to time.Sleep, elapsed will balloon to ~retryDelay.
+	assert.Less(t, elapsed, 5*time.Second,
+		"sendWithRetry should drain promptly on ctx cancel (elapsed=%v, retryDelay=%v)",
+		elapsed, retryDelay)
+}
+
+// TestSend_HonorsContextCancellationDuringInFlightRequest pins the second
+// half of the #673 fix: even an in-flight HTTP request (not just the
+// inter-attempt backoff) must drain on ctx cancellation.
+//
+// Pre-fix, (*Webhook).send built its request ctx from context.Background()
+// and ignored the scheduler / job ctx. The "first attempt is slow to
+// respond" scenario then blocked daemon shutdown for up to the full
+// per-request Timeout, defeating the SIGTERM-drains-promptly contract.
+//
+// RetryCount=0 takes the inter-attempt backoff out of play — the cancel
+// must propagate through send()'s own request context, not through the
+// retry loop. Handler blocks until the test exits so the only way out is
+// ctx cancellation.
+func TestSend_HonorsContextCancellationDuringInFlightRequest(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-release:
+			w.WriteHeader(http.StatusOK)
+		case <-time.After(30 * time.Second):
+			t.Errorf("test ran longer than 30s — cancel did not reach handler")
+		}
+	}))
+	defer server.Close()
+	defer close(release)
+
+	const requestTimeout = 30 * time.Second
+	elapsed := runCtxCancelScenario(t, &WebhookConfig{
+		Name:       "test-ctx-cancel-inflight",
+		URL:        server.URL,
+		Timeout:    requestTimeout, // big enough that without the fix we'd block
+		RetryCount: 0,              // exactly one attempt — cancel hits send(), not the backoff
+		RetryDelay: time.Millisecond,
+	})
+	assert.Less(t, elapsed, 5*time.Second,
+		"send() should drain promptly on ctx cancel (elapsed=%v, requestTimeout=%v); "+
+			"if reqCtx regresses to context.Background(), elapsed approaches requestTimeout",
+		elapsed, requestTimeout)
+}
+
+// runCtxCancelScenario is the shared scaffolding for the #673 ctx-cancellation
+// tests. It assigns the standard slack preset fixture fields onto cfg, builds
+// the webhook + Context with a cancellable parent, kicks off a goroutine that
+// cancels at 100ms (long enough to enter the relevant blocking region in the
+// fix; short enough that pre-fix tests time out loudly), runs sendWithRetry,
+// and asserts the returned error wraps context.Canceled. Returns the elapsed
+// duration so individual callers can apply their own ceiling assertion.
+//
+// Each caller still owns its httptest server (different blocking semantics)
+// and its own "elapsed < X" budget, so the contract per test is explicit at
+// the call site even though the scaffolding is shared.
+func runCtxCancelScenario(t *testing.T, cfg *WebhookConfig) time.Duration {
+	t.Helper()
+	// Not parallel — modifies global security config.
+	SetValidateWebhookURLForTest(func(rawURL string) error { return nil })
+	t.Cleanup(func() { SetValidateWebhookURLForTest(ValidateWebhookURLImpl) })
+	SetTransportFactoryForTest(func() *http.Transport { return http.DefaultTransport.(*http.Transport).Clone() })
+	t.Cleanup(func() { SetTransportFactoryForTest(NewSafeTransport) })
+
+	// Standard slack preset fixture fields — callers only customize the
+	// retry / timeout knobs and the target URL.
+	cfg.Preset = "slack"
+	cfg.ID = "T12345/B67890"
+	cfg.Secret = "xoxb-test-secret"
+	cfg.Trigger = TriggerAlways
+
+	loader := NewPresetLoader(nil)
+	middleware, err := NewWebhook(cfg, loader)
+	require.NoError(t, err)
+	webhook := middleware.(*Webhook)
+
+	job := &TestJob{}
+	job.Name = "test-job"
+	job.Command = "echo hello"
+	sh := core.NewScheduler(newDiscardLogger())
+	e, err := core.NewExecution()
+	require.NoError(t, err)
+
+	cancelCtx, cancel := context.WithCancel(context.Background())
+	ctx := core.NewContextWithContext(cancelCtx, sh, job, e)
+	ctx.Start()
+	ctx.Stop(nil)
+
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	err = webhook.sendWithRetry(ctx)
+	elapsed := time.Since(start)
+
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled,
+		"sendWithRetry should return an error chain containing context.Canceled")
+	return elapsed
 }

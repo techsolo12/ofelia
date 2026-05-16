@@ -153,7 +153,14 @@ func (w *Webhook) Run(ctx *core.Context) error {
 	return err
 }
 
-// sendWithRetry sends the webhook with configurable retry logic
+// sendWithRetry sends the webhook with configurable retry logic.
+//
+// The inter-attempt backoff observes ctx cancellation so that scheduler
+// shutdown or per-job deadline drains promptly even when a wedged endpoint
+// has pushed the retry budget to its limit. Without this, SIGTERM on a
+// daemon mid-retry blocked for up to RetryDelay × RetryCount waiting for
+// time.Sleep to return — keeping a goroutine pinned past Scheduler.Stop.
+// See https://github.com/netresearch/ofelia/issues/673.
 func (w *Webhook) sendWithRetry(ctx *core.Context) error {
 	var lastErr error
 
@@ -161,7 +168,12 @@ func (w *Webhook) sendWithRetry(ctx *core.Context) error {
 		if attempt > 0 {
 			ctx.Logger.Debug(fmt.Sprintf("Webhook %q: retry attempt %d/%d after %v",
 				w.Config.Name, attempt, w.Config.RetryCount, w.Config.RetryDelay))
-			time.Sleep(w.Config.RetryDelay)
+			runCtx := ctx.RunContext()
+			select {
+			case <-time.After(w.Config.RetryDelay):
+			case <-runCtx.Done():
+				return fmt.Errorf("webhook %q retry interrupted: %w", w.Config.Name, runCtx.Err())
+			}
 		}
 
 		if err := w.send(ctx); err != nil {
@@ -199,8 +211,14 @@ func (w *Webhook) send(ctx *core.Context) error {
 		return fmt.Errorf("render body: %w", err)
 	}
 
-	// Create request with context
-	reqCtx, cancel := context.WithTimeout(context.Background(), w.Config.Timeout)
+	// Create request with a context that observes BOTH the per-request
+	// timeout AND scheduler / job cancellation. Deriving from
+	// ctx.RunContext() (not context.Background()) means an in-flight HTTP
+	// write is also drained on SIGTERM / job-level deadline expiry — not
+	// just the inter-attempt backoff in sendWithRetry. Without this,
+	// shutdown still blocked for up to w.Config.Timeout per in-flight
+	// request. See https://github.com/netresearch/ofelia/issues/673.
+	reqCtx, cancel := context.WithTimeout(ctx.RunContext(), w.Config.Timeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(reqCtx, w.Preset.Method, targetURL, strings.NewReader(body))
