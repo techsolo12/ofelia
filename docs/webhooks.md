@@ -101,7 +101,7 @@ exact payload shape and how to opt out of the fallback.
 ### With a bundled preset (Slack, Discord, Teams, Matrix, etc.)
 
 Use `preset = slack` (or `discord` / `teams` / `matrix` / `ntfy` /
-`gotify` / `pushover` / `pagerduty`) when the receiver expects a
+`gotify` / `pushover` / `pagerduty` / `healthchecks`) when the receiver expects a
 service-specific payload format:
 
 ```ini
@@ -216,6 +216,8 @@ Ofelia includes presets for popular notification services:
 | `pushover` | Pushover | `id` (user key), `secret` (API token) |
 | `pagerduty` | PagerDuty Events API v2 | `secret` (routing key) |
 | `gotify` | Gotify | `url`, `secret` (app token) |
+| `healtchecks` | Healthchecks | `ìd` (uuid or pingkey/slug) |
+| `healtchecks-selfhosted` | Healthchecks (selfhosted) | `url` (ping url) |
 
 ## Configuration Reference
 
@@ -438,6 +440,27 @@ url = https://gotify.example.com
 secret = app-token-here
 trigger = always
 ```
+
+### Healthchecks
+
+For official Healtchecks instance
+```ini
+[webhook "healthchecks-ping"]
+preset = healthchecks
+id = 735c8c4e-32dd-49fd-a00b-3a8bcf6233f9
+trigger = always
+```
+
+For selfhosted instances with custom url
+```ini
+[webhook "healthchecks-ping"]
+preset = healthchecks-selfhosted
+url = https://health.domain.com/ping/731c8c4e-32dd-49fd-a20b-3a8bcf6233f9
+trigger = always
+```
+
+> **Note**: You can use `uuid` or `pingkey/slug`. If you want to signal a specific state use the optional suffix `/fail` oder `/exit-codes`.
+> For more to suffixes please take a look to [Healthchecks.io/signaling_failures](https://healthchecks.io/docs/signaling_failures/)
 
 ## Custom Webhooks (URL-only, no custom preset)
 
