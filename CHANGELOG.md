@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.1] - 2026-05-16
+
 ### Added
 
 - **Upgrade impact:** webhooks configured with `url = ...` but no `preset` were previously rejected at startup (the documented "Custom Webhooks" section promised they would work but the code returned `preset specification cannot be empty`). They now attach and fire using the new bundled `json-post` JSON-POST preset. Audit existing `[webhook "..."]` sections and `webhooks:` job references before upgrading — a stale URL-only config that previously sat inert will now actually send a JSON POST to whatever's in `url`. Pin `webhook-allowed-hosts` to a specific list if you want to restrict egress; set `webhook-default-preset =` (empty) to preserve pre-upgrade behavior and require every webhook to declare `preset` explicitly.
