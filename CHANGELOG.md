@@ -7,13 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.25.1] - 2026-05-16
-
 ### Added
 
 - **Upgrade impact:** webhooks configured with `url = ...` but no `preset` were previously rejected at startup (the documented "Custom Webhooks" section promised they would work but the code returned `preset specification cannot be empty`). They now attach and fire using the new bundled `json-post` JSON-POST preset. Audit existing `[webhook "..."]` sections and `webhooks:` job references before upgrading — a stale URL-only config that previously sat inert will now actually send a JSON POST to whatever's in `url`. Pin `webhook-allowed-hosts` to a specific list if you want to restrict egress; set `webhook-default-preset =` (empty) to preserve pre-upgrade behavior and require every webhook to declare `preset` explicitly.
 
   New bundled `json-post` webhook preset and a `[global] webhook-default-preset` selector that ships with `json-post` as the default fallback. A webhook configured with just a `url = ...` (or Docker label `ofelia.webhook.<name>.url: ...`) now works out of the box — Ofelia POSTs a JSON payload describing the job and execution to that URL, no custom preset YAML required. The fallback preset is selected via `EffectiveDefaultPreset()` at attach time, so live INI / label changes to `webhook-default-preset` take effect on the next attach without restart. Three-state semantics are unambiguous: the field is `*string`, so nil = "operator did not set" (use bundled fallback), non-nil empty = "explicit opt-out", non-nil non-empty = "operator's chosen fallback name". When opt-out is in effect, the attachment-failed error message names `webhook-default-preset` explicitly so operators can grep their way from logs to the docs. Fixes [#676](https://github.com/netresearch/ofelia/issues/676).
+
+## [0.25.1] - 2026-05-16
 
 ### Fixed
 
